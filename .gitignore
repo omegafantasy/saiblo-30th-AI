@@ -1,0 +1,38 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Build artifacts
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+ai_cpp_v1/ai_v1
+
+# Runtime outputs
+replays/
+*.jsonl
+*.log
+result.txt
+
+# Secrets / local credentials
+past_AIs/zdata.py
+.env
+
+# Nested upstream repository (managed independently)
+Ant-Game/
+past_AIs/ANTWar-AI/
+past_AIs/Generals-AI/
