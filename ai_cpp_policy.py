@@ -10,8 +10,10 @@ import threading
 from pathlib import Path
 from typing import Dict, List
 
+from config_runtime import get_cfg
+
 ROOT_DIR = Path(__file__).resolve().parent
-ANT_GAME_DIR = ROOT_DIR / "Ant-Game"
+ANT_GAME_DIR = Path(str(get_cfg("paths.ant_game_dir", str(ROOT_DIR / "Ant-Game"))))
 if str(ANT_GAME_DIR) not in sys.path:
     sys.path.insert(0, str(ANT_GAME_DIR))
 
@@ -19,7 +21,7 @@ from logic.gamestate import GameState
 
 
 def _default_exe() -> str:
-    return str(ROOT_DIR / "ai_cpp_v1" / "ai_v1")
+    return str(get_cfg("cpp_ai.exe", str(ROOT_DIR / "ai_cpp/v1" / "ai_v1")))
 
 
 def _parse_ops(text: str) -> list[list[int]]:
@@ -127,7 +129,7 @@ def _worker_for(seat: int) -> _CppWorker:
     with _lock:
         if seat in _workers:
             return _workers[seat]
-        seed = int(os.environ.get("CPP_AI_SEED", "0"))
+        seed = int(os.environ.get("CPP_AI_SEED", str(get_cfg("cpp_ai.seed", 0))))
         w = _CppWorker(seat=seat, seed=seed)
         _workers[seat] = w
         return w

@@ -5,11 +5,11 @@
 ## 编译
 
 ```bash
-cd /www/ai_cpp_v1
+cd /www/ai_cpp/v1
 make
 ```
 
-生成可执行文件：`/www/ai_cpp_v1/ai_v1`
+生成可执行文件：`/www/ai_cpp/v1/ai_v1`
 
 ## 协议
 

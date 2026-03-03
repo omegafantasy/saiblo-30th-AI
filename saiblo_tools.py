@@ -13,8 +13,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-API_BASE = "https://api.saiblo.net"
 ROOT_DIR = Path(__file__).resolve().parent
+
+from config_runtime import get_cfg
+
+API_BASE = str(get_cfg("saiblo.api_base", "https://api.saiblo.net"))
 
 
 def _headers(token: str | None) -> Dict[str, str]:
@@ -37,12 +40,19 @@ def load_token_from_zdata() -> str:
     return m.group(1).strip() if m else ""
 
 
+def load_token_from_config() -> str:
+    return str(get_cfg("saiblo.bearer", "")).strip()
+
+
 def resolve_token(cli_token: str) -> Tuple[str, str]:
     if cli_token:
         return cli_token, "--token"
     env_token = os.environ.get("SAIBLO_BEARER", "").strip()
     if env_token:
         return env_token, "env:SAIBLO_BEARER"
+    cfg_token = load_token_from_config()
+    if cfg_token:
+        return cfg_token, "config.local.json"
     zdata_token = load_token_from_zdata()
     if zdata_token:
         return zdata_token, "past_AIs/zdata.py"
@@ -71,7 +81,10 @@ def api_request(method: str, path: str, token: str | None = None, payload: dict 
 def require_token(cli_token: str, action: str) -> str:
     token, source = resolve_token(cli_token)
     if not token:
-        print(f"Bearer token required for {action}. Use --token, SAIBLO_BEARER, or past_AIs/zdata.py", file=sys.stderr)
+        print(
+            f"Bearer token required for {action}. Use --token, SAIBLO_BEARER, config.local.json, or past_AIs/zdata.py",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
     print(f"[token-source] {source}", file=sys.stderr)
     return token
@@ -176,7 +189,11 @@ def cmd_room_match(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Root-level Saiblo helper tools")
-    p.add_argument("--token", default="", help="Bearer token (priority: --token > env > past_AIs/zdata.py)")
+    p.add_argument(
+        "--token",
+        default="",
+        help="Bearer token (priority: --token > env > config.local.json > past_AIs/zdata.py)",
+    )
 
     sub = p.add_subparsers(dest="cmd", required=True)
 

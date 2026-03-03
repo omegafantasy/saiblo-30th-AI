@@ -4,6 +4,7 @@ import json
 import os
 import multiprocessing as mp
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,7 @@ from .elo import compute_elo
 from .policy_adapters import close_policy, make_policy
 from .registry import get_version, load_registry, set_champion
 
-MAX_PARALLEL_JOBS = 14
+MAX_PARALLEL_JOBS = 16
 
 
 def _build_pairs(version_ids: List[str], mode: str, reg: Dict[str, Any], challengers: List[str], opponents: List[str]) -> List[tuple[str, str]]:
@@ -294,7 +295,9 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
 
     requested_jobs = max(1, int(cfg.jobs))
     workers = max(1, min(requested_jobs, len(selected_cores), MAX_PARALLEL_JOBS))
+    backend = "serial"
     if workers == 1:
+        backend = "serial"
         if cfg.pin_cpu and selected_cores:
             try:
                 os.sched_setaffinity(0, {selected_cores[0]})
@@ -302,12 +305,19 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
                 pass
         rows = [_single_match(t) for t in tasks]
     else:
-        with mp.Pool(
-            processes=workers,
-            initializer=_pool_init_affinity,
-            initargs=(selected_cores[:workers], bool(cfg.pin_cpu)),
-        ) as pool:
-            rows = pool.map(_single_match, tasks)
+        try:
+            with mp.Pool(
+                processes=workers,
+                initializer=_pool_init_affinity,
+                initargs=(selected_cores[:workers], bool(cfg.pin_cpu)),
+            ) as pool:
+                rows = pool.map(_single_match, tasks)
+            backend = "multiprocessing"
+        except (PermissionError, OSError):
+            # Some sandboxes block SemLock for multiprocessing; preserve concurrency via threads.
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                rows = list(ex.map(_single_match, tasks))
+            backend = "thread_fallback"
 
     ratings = compute_elo(rows, base_rating=cfg.base_rating, k_factor=cfg.k_factor)
     ranking = sorted(ratings.items(), key=lambda kv: kv[1], reverse=True)
@@ -358,6 +368,7 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
             "cpu_policy": cfg.cpu_policy,
             "pin_cpu": bool(cfg.pin_cpu),
             "selected_cores": selected_cores[:workers],
+            "backend": backend,
             "seed": cfg.seed,
             "k_factor": cfg.k_factor,
             "base_rating": cfg.base_rating,

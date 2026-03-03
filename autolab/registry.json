@@ -97,6 +97,15 @@
       "enabled": true,
       "anchor": false,
       "notes": "mode hysteresis + offense safety gate"
+    },
+    {
+      "id": "cpp_v9_emergency_antibeam",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v9/ai_v9",
+      "src": "/www/ai_cpp/v9/ai_v9.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "emergency defense switch + anti-beam ring-chain evaluation"
     }
   ]
 }

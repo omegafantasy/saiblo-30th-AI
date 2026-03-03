@@ -7,7 +7,7 @@
 ## 迁移对象
 
 - 旧项目：`/www/past_AIs/Generals-AI/main.cpp`
-- 新实现：`/www/ai_cpp_v1/ai_v1.cpp`
+- 新实现：`/www/ai_cpp/v1/ai_v1.cpp`
 
 ## 已迁移的核心策略思想
 
@@ -36,7 +36,7 @@
 ### 编译
 
 ```bash
-make -C /www/ai_cpp_v1 clean all
+make -C /www/ai_cpp/v1 clean all
 ```
 
 结果：成功。
@@ -65,5 +65,5 @@ python /www/eval_cpp_local.py --games 10 --rounds 140 --opponent random_safe --s
 
 ## 结论
 
-- 新版 `ai_cpp_v1.cpp` 已从“单步邻域贪心”升级为“接近旧 Generals-AI 的多因素启发式”。
+- 新版 `ai_cpp/v1/ai_v1.cpp` 已从“单步邻域贪心”升级为“接近旧 Generals-AI 的多因素启发式”。
 - 在当前本地基线对手上，表现显著提升并稳定可运行。

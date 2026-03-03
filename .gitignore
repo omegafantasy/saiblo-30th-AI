@@ -20,17 +20,21 @@ venv/
 *.dylib
 *.dll
 *.exe
-ai_cpp_v1/ai_v1
+ai_cpp/v*/ai_v*
 
 # Runtime outputs
 replays/
 *.jsonl
 *.log
 result.txt
+autolab/runtime/
+autolab/versions/
 
 # Secrets / local credentials
 past_AIs/zdata.py
 .env
+config.local.json
+config.json
 
 # Nested upstream repository (managed independently)
 Ant-Game/

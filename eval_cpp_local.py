@@ -12,6 +12,8 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Callable, Tuple
 
+from config_runtime import get_cfg
+
 ROOT_DIR = Path(__file__).resolve().parent
 ANT_GAME_DIR = ROOT_DIR / "Ant-Game"
 if str(ANT_GAME_DIR) not in sys.path:
@@ -31,9 +33,9 @@ def load_ai(name: str) -> AI:
 
 
 def ensure_cpp_binary(force_build: bool = False) -> str:
-    exe = os.environ.get("CPP_AI_EXE", str(ROOT_DIR / "ai_cpp_v1" / "ai_v1"))
+    exe = os.environ.get("CPP_AI_EXE", str(get_cfg("cpp_ai.exe", str(ROOT_DIR / "ai_cpp/v1" / "ai_v1"))))
     if force_build or not os.path.isfile(exe):
-        subprocess.run(["make", "-C", str(ROOT_DIR / "ai_cpp_v1")], check=True)
+        subprocess.run(["make", "-C", str(ROOT_DIR / "ai_cpp/v1")], check=True)
     if not os.path.isfile(exe):
         raise FileNotFoundError(f"cpp ai executable not found: {exe}")
     return exe
