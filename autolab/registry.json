@@ -81,15 +81,6 @@
       "notes": "adaptive 2-ply width + main-ring breach evaluation"
     },
     {
-      "id": "cpp_v7_mode_switch",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v7/ai_v7",
-      "src": "/www/ai_cpp/v7/ai_v7.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "mode-aware robust scoring and planner arbitration"
-    },
-    {
       "id": "cpp_v8_mode_hysteresis",
       "kind": "cpp_exe",
       "exe": "/www/ai_cpp/v8/ai_v8",
@@ -99,13 +90,76 @@
       "notes": "mode hysteresis + offense safety gate"
     },
     {
-      "id": "cpp_v9_emergency_antibeam",
+      "id": "cpp_v17_family_state_exchange_guard",
       "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v9/ai_v9",
-      "src": "/www/ai_cpp/v9/ai_v9.cpp",
+      "exe": "/www/ai_cpp/v17/ai_v17",
+      "src": "/www/ai_cpp/v17/ai_v17.cpp",
       "enabled": true,
       "anchor": false,
-      "notes": "emergency defense switch + anti-beam ring-chain evaluation"
+      "notes": "family-state hysteresis + first-step safety exchange guard"
+    },
+    {
+      "id": "cpp_v19_rebound_shellfloor_guard",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v19/ai_v19",
+      "src": "/www/ai_cpp/v19/ai_v19.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "rebound suppression gate + shell safety floor hard reject"
+    },
+    {
+      "id": "cpp_v29_layered_counterline_rebound",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v29/ai_v29",
+      "src": "/www/ai_cpp/v29/ai_v29.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "layered counterline guard + v19 rebound lane"
+    },
+    {
+      "id": "cpp_v33_v32_hardline_recovery_lane",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v33/ai_v33",
+      "src": "/www/ai_cpp/v33/ai_v33.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "v32 + hardline recovery lane outside narrow v2 burst"
+    },
+    {
+      "id": "cpp_v47_v46_v27_safeguard_mutex",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v47/ai_v47",
+      "src": "/www/ai_cpp/v47/ai_v47.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "v46 + v27 safeguard floors + v10 counter mutex whitelist"
+    },
+    {
+      "id": "cpp_v53_overlay_countercheck",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v53/ai_v53",
+      "src": "/www/ai_cpp/v53/ai_v53.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "v1 core + overlay counter-check (candidate pool with enemy one-step penalty)"
+    },
+    {
+      "id": "cpp_v64_generals_rebuild",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v64/ai_v64",
+      "src": "/www/ai_cpp/v64/ai_v64.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "Generals-style rebuild: kill-sequence beam, skills (rout/command/defence/weaken), main-general reposition + 200ms CPU hard cutoff"
+    },
+    {
+      "id": "cpp_v66_generals_weapon_econ",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v66/ai_v66",
+      "src": "/www/ai_cpp/v66/ai_v66.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "v64 + Generals-style weapon policy (nuclear boom) + safe sub-general production upgrades"
     }
   ]
 }

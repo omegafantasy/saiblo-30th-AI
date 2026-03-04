@@ -16,6 +16,7 @@
 - 数据写入：
   - 生产最新结果：`/www/autolab/runtime/latest.json`
   - 生产报告：`/www/docs/idle_eval_latest.md`
+  - Elo 口径：生产 `latest.json` 是唯一权威排名来源
 
 关键命令：
 
@@ -44,6 +45,7 @@ tail -n 120 /www/autolab/runtime/idle_eval_loop.log
 - 迭代评测隔离目录：`/www/autolab/runtime/scopes/iter/`
 - 迭代评测脚本：`/www/scripts/autolab_eval_experiment_once.sh`
 - 迭代评测默认并发：`jobs=14`、`cpu-policy=all`（迭代优先）
+- Elo 口径：iter `latest.json` 仅用于候选筛选，不能直接与生产 Elo 横向比绝对值
 
 关键命令：
 

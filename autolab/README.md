@@ -76,6 +76,15 @@ python /www/autolab_schedule.py \
   - 默认不晋升 champion（`--no-auto-promote`）
   - 入口脚本：`/www/scripts/autolab_eval_experiment_once.sh`
   - 默认高并发：`jobs=14`，`cpu-policy=all`（迭代优先）
+  - 强度比较口径：
+    - 两 AI 对比至少 `100` 局才可下结论；
+    - 声明“新版优于 k 个旧版”时，建议每个对手 `>=200` 局且胜率 `>55%`，或在 `>=1000` 局 Elo 评测中稳定榜首。
+
+Elo 治理规则（必须遵守）：
+
+- 生产 Elo（`/www/autolab/runtime/latest.json`）是唯一权威排名，用于 champion 与版本优劣最终判定。
+- 迭代 Elo（`/www/autolab/runtime/scopes/iter/latest.json`）仅用于候选筛选与方向探索。
+- 不同 scope、不同对阵池的 Elo 绝对值不可直接横向比较。
 
 新增参数：
 

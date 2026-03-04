@@ -9,11 +9,17 @@ LOG_FILE="$LOG_DIR/codex_iterate.log"
 LAST_FILE="$LOG_DIR/codex_last_message.txt"
 SESSION_FILE="$LOG_DIR/codex_session_id.txt"
 EVENTS_FILE="$LOG_DIR/codex_events.jsonl"
+PAUSE_FILE="${CODEX_ITER_PAUSE_FILE:-$LOG_DIR/codex_iterate.paused}"
 CODEX_BIN="${CODEX_BIN:-/usr/local/bin/codex}"
 TIMEOUT_SEC="${CODEX_ITER_TIMEOUT_SEC:-540}"
 TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"
 
 mkdir -p "$LOG_DIR"
+
+if [[ -f "$PAUSE_FILE" ]]; then
+  echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | PAUSED by $PAUSE_FILE" >> "$LOG_FILE"
+  exit 0
+fi
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
   echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | missing prompt: $PROMPT_FILE" >> "$LOG_FILE"

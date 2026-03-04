@@ -20,7 +20,11 @@ venv/
 *.dylib
 *.dll
 *.exe
-ai_cpp/v*/ai_v*
+# C++ AI binaries (source should be tracked)
+ai_cpp/v*/ai_v[0-9]*
+!ai_cpp/v*/ai_v*.cpp
+!ai_cpp/v*/ai_v*.hpp
+!ai_cpp/v*/ai_v*.h
 
 # Runtime outputs
 replays/

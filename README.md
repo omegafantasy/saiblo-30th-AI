@@ -26,6 +26,7 @@
     - `agent_b_saiblo_status_audit.md`
     - `agent_c_ai_migration_report.md`
     - `round2_autolab_and_iterations.md`
+    - `version_strategy_deep_dive_v1_v53.md`
   - 自动解析产物：
     - `mhtml_parsed/`（3 个 mhtml 的正文 markdown）
     - `mhtml_assets/`（mhtml 中提取出的图片资源）
@@ -77,6 +78,7 @@
   - `autolab-idle-eval.service` 常驻空闲核评测（默认最多 14 CPU）
   - cron 每 10 分钟触发 `scripts/codex_iterate_once.sh`（含防重入锁 + session 续跑）
   - 迭代实验评测与生产评测已隔离：实验产物写入 `autolab/runtime/scopes/iter/`
+  - Elo 治理：`autolab/runtime/latest.json`（生产）是唯一权威；`scopes/iter/latest.json`（实验）仅用于筛选
 - 详细说明：`/www/autolab/README.md`
 - 运维检查清单：`/www/docs/scheduling_and_daemons.md`
 
