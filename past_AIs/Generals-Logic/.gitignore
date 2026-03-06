@@ -1,0 +1,11 @@
+__pycache__/
+.vscode/
+replay.json
+testaaa.py
+tempCodeRunnerFile.py
+covhtml
+.coverage
+coverage-reports/
+replay/
+default_replay.json
+res.txt

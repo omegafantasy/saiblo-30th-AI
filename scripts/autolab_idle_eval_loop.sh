@@ -8,8 +8,15 @@ LOG_FILE="$LOG_DIR/idle_eval_loop.log"
 PY_BIN="${PY_BIN:-$(command -v python3 || command -v python || true)}"
 ITER_LOCK_FILE="${ITER_LOCK_FILE:-/tmp/codex-iterate.lock}"
 
+EVAL_MODE="${AUTO_EVAL_MODE:-adaptive}"
 MAX_JOBS="${AUTO_EVAL_MAX_JOBS:-14}"
 GAMES_PER_PAIR="${AUTO_EVAL_GAMES_PER_PAIR:-6}"
+ANCHOR_GAMES_PER_PAIR="${AUTO_EVAL_ANCHOR_GAMES_PER_PAIR:-1}"
+ADAPTIVE_PAIR_COUNT="${AUTO_EVAL_ADAPTIVE_PAIR_COUNT:-45}"
+ADAPTIVE_TOP_K="${AUTO_EVAL_ADAPTIVE_TOP_K:-6}"
+ADAPTIVE_TOP_BOOST="${AUTO_EVAL_ADAPTIVE_TOP_BOOST:-1.5}"
+ADAPTIVE_NEW_TARGET_GAMES="${AUTO_EVAL_ADAPTIVE_NEW_TARGET_GAMES:-600}"
+ADAPTIVE_NEW_BOOST="${AUTO_EVAL_ADAPTIVE_NEW_BOOST:-2.0}"
 MAX_ROUNDS="${AUTO_EVAL_MAX_ROUNDS:-180}"
 IDLE_THRESHOLD="${AUTO_EVAL_IDLE_THRESHOLD:-0.03}"
 IDLE_SAMPLE_SEC="${AUTO_EVAL_IDLE_SAMPLE_SEC:-0.8}"
@@ -36,7 +43,7 @@ if [[ ! -x "$PY_BIN" ]]; then
   exit 1
 fi
 
-log "START autolab idle loop python=$PY_BIN max_jobs=$MAX_JOBS games_per_pair=$GAMES_PER_PAIR max_rounds=$MAX_ROUNDS"
+log "START autolab idle loop python=$PY_BIN mode=$EVAL_MODE max_jobs=$MAX_JOBS games_per_pair=$GAMES_PER_PAIR anchor_games_per_pair=$ANCHOR_GAMES_PER_PAIR adaptive_pair_count=$ADAPTIVE_PAIR_COUNT max_rounds=$MAX_ROUNDS"
 
 while true; do
   # Priority policy: when codex iterate holds its lock, pause production eval.
@@ -52,8 +59,14 @@ while true; do
 
   set +e
   "$PY_BIN" "$EVAL_SCRIPT" \
-    --mode gauntlet \
+    --mode "$EVAL_MODE" \
     --games-per-pair "$GAMES_PER_PAIR" \
+    --anchor-games-per-pair "$ANCHOR_GAMES_PER_PAIR" \
+    --adaptive-pair-count "$ADAPTIVE_PAIR_COUNT" \
+    --adaptive-top-k "$ADAPTIVE_TOP_K" \
+    --adaptive-top-boost "$ADAPTIVE_TOP_BOOST" \
+    --adaptive-new-target-games "$ADAPTIVE_NEW_TARGET_GAMES" \
+    --adaptive-new-boost "$ADAPTIVE_NEW_BOOST" \
     --max-rounds "$MAX_ROUNDS" \
     --jobs "$MAX_JOBS" \
     --cpu-policy idle_only \

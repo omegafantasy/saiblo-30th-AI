@@ -1,0 +1,10 @@
+output/
+lib/
+.DS_Store
+*.o
+
+**/__pycache__
+**/.idea
+
+*.txt
+replay.json

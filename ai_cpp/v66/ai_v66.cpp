@@ -16,8 +16,10 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr int kRow = 15;
-constexpr int kCol = 15;
+constexpr int kRow = 19;
+constexpr int kCol = 19;
+int gActiveRows = kRow;
+int gActiveCols = kCol;
 
 constexpr int kDirs = 4;
 const int kDx[kDirs] = {-1, 1, 0, 0};   // up, down, left, right
@@ -27,6 +29,10 @@ constexpr int kSearchStepBudgetMs = 200;
 constexpr int kOverlayMinPool = 6;
 constexpr int kOverlayMaxPool = 14;
 constexpr int kOverlayStableMaxPool = 8;
+constexpr int kThreatSourceProbeCap = 4;
+constexpr int kThreatSourceAlertCap = 2;
+constexpr double kDuelCloseSourceProbeDanger = 0.28;
+constexpr double kDuelCloseSourceProbeDangerCritical = 0.48;
 
 struct General {
     int id = -1;
@@ -64,6 +70,8 @@ struct Cell {
 struct State {
     int seat = 0;
     int round = 1;
+    int board_rows = kRow;
+    int board_cols = kCol;
     std::array<int, 2> coins{0, 0};
     std::array<int, 2> weapon_cd{-1, -1};
     std::array<std::array<int, 4>, 2> tech{{{1, 0, 0, 0}, {1, 0, 0, 0}}};
@@ -105,10 +113,6 @@ struct OverlayTuning {
     double switch_penalty = 0.0;
     double base_anchor_penalty = 0.0;
     double max_raw_drop = 1e9;
-    double tactical_drop_relax = 0.0;
-    double tactical_anchor_scale = 1.0;
-    double tactical_reply_bonus = 0.0;
-    double tactical_enemy_reply_ratio = 0.45;
     double dominance_veto_ratio = 1e9;
     double dominance_veto_margin = 1e9;
     double dominance_threat_gain_min = 0.0;
@@ -117,11 +121,6 @@ struct OverlayTuning {
     double base_reply_drop_scale = 0.0;
     double base_reply_threat_credit = 0.0;
     double base_reply_penalty = 0.0;
-    bool pressure_anchor_enabled = true;
-    double base_pressure_loss_slack = 1e9;
-    double base_pressure_loss_drop_scale = 0.0;
-    double base_pressure_loss_threat_credit = 0.0;
-    double base_pressure_loss_penalty = 0.0;
 };
 
 struct Deadline {
@@ -181,6 +180,39 @@ bool parse_km(const std::string& line, int& seat, int& seed) {
     return true;
 }
 
+bool extract_turn_fast(const std::string& line, int& turn) {
+    const std::string key = "\"Turn\"";
+    size_t pos = line.find(key);
+    if (pos == std::string::npos) return false;
+    pos += key.size();
+    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t' || line[pos] == '\n' || line[pos] == '\r')) {
+        ++pos;
+    }
+    if (pos >= line.size() || line[pos] != ':') return false;
+    ++pos;
+    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t' || line[pos] == '\n' || line[pos] == '\r')) {
+        ++pos;
+    }
+    if (pos >= line.size()) return false;
+    int sign = 1;
+    if (line[pos] == '-') {
+        sign = -1;
+        ++pos;
+    }
+    if (pos >= line.size() || line[pos] < '0' || line[pos] > '9') return false;
+    int64_t value = 0;
+    while (pos < line.size() && line[pos] >= '0' && line[pos] <= '9') {
+        value = value * 10 + static_cast<int64_t>(line[pos] - '0');
+        if (value > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+            value = static_cast<int64_t>(std::numeric_limits<int>::max());
+            break;
+        }
+        ++pos;
+    }
+    turn = sign * static_cast<int>(value);
+    return true;
+}
+
 void send_payload(const std::string& payload) {
     const uint32_t len = static_cast<uint32_t>(payload.size());
     const unsigned char hdr[4] = {
@@ -214,7 +246,7 @@ std::string format_ops(const std::vector<std::vector<int>>& ops) {
 }
 
 bool in_bounds(int x, int y) {
-    return x >= 0 && x < kRow && y >= 0 && y < kCol;
+    return x >= 0 && x < gActiveRows && y >= 0 && y < gActiveCols;
 }
 
 int manhattan(int x1, int y1, int x2, int y2) {
@@ -348,8 +380,9 @@ Grid compute_threat(const State& st, int enemy, int enemy_moves) {
     return threat;
 }
 
-int count_threat_sources_to_cell(const State& st, int enemy, int enemy_moves, int tx, int ty) {
+int count_threat_sources_to_cell(const State& st, int enemy, int enemy_moves, int tx, int ty, int cap = kThreatSourceProbeCap) {
     if (!in_bounds(tx, ty)) return 0;
+    if (cap <= 0) return 0;
     const int target_owner = st.board[tx][ty].owner;
     const double target_def = defence_multiplier(st, tx, ty, target_owner);
     int sources = 0;
@@ -361,7 +394,10 @@ int count_threat_sources_to_cell(const State& st, int enemy, int enemy_moves, in
             if (d > enemy_moves) continue;
             const double atk = attack_multiplier(st, ex, ey, enemy);
             const double projected = static_cast<double>(src.army - 1) * atk;
-            if (projected >= target_def * 0.60) ++sources;
+            if (projected >= target_def * 0.60) {
+                ++sources;
+                if (sources >= cap) return cap;
+            }
         }
     }
     return sources;
@@ -377,20 +413,64 @@ int apply_reserved_main_floor(
     const int main_army = std::max(1, st.board[st.my_main_x][st.my_main_y].army);
     const double danger_ratio = main_threat / static_cast<double>(main_army);
     int bonus = 0;
-    if (main_threat_sources >= 2) bonus += 1;
     if (main_threat_sources >= 4) bonus += 1;
-    if (danger_ratio >= 0.70) bonus += 1;
-    if (danger_ratio >= 1.00) bonus += 2;
+    if (danger_ratio >= 0.85) bonus += 1;
+    if (danger_ratio >= 1.05) bonus += 1;
     const int capped = std::max(3, main_army - 1);
     return std::min(capped, current_floor + bonus);
 }
 
-int choose_reserved_move_cap(int move_budget, double main_threat, int main_army, int main_threat_sources) {
-    if (move_budget <= 1 || main_army <= 0) return std::max(1, move_budget);
+bool should_enable_reserved_gate(double main_threat, int main_army) {
+    if (main_army <= 0) return false;
+    return main_threat / static_cast<double>(main_army) >= 0.62;
+}
+
+int apply_reserved_release_floor(const State& st, int current_floor, double main_threat) {
+    if (st.my_main_x < 0 || st.my_main_y < 0) return current_floor;
+    const int main_army = std::max(1, st.board[st.my_main_x][st.my_main_y].army);
     const double danger_ratio = main_threat / static_cast<double>(main_army);
-    if (main_threat_sources >= 5 && danger_ratio >= 0.75) return std::max(1, move_budget - 2);
-    if (main_threat_sources >= 3 && danger_ratio >= 0.55) return std::max(1, move_budget - 1);
-    return move_budget;
+    // ANTWAR mapping: reserved is for danger states; in safe states release one step conservatism.
+    if (danger_ratio < 0.42) return std::max(3, current_floor - 1);
+    return current_floor;
+}
+
+int apply_skill_window_reserve_floor(const State& st, int current_floor, bool enemy_skill_window, double main_danger) {
+    if (!enemy_skill_window) return current_floor;
+    if (st.my_main_x < 0 || st.my_main_y < 0) return current_floor;
+    const int main_army = std::max(1, st.board[st.my_main_x][st.my_main_y].army);
+    int bonus = 1;
+    if (main_danger >= 0.78) bonus = 2;
+    if (main_danger >= 1.05) bonus = 3;
+    const int capped = std::max(3, main_army - 1);
+    return std::min(capped, current_floor + bonus);
+}
+
+int choose_threat_source_probe_cap(double main_danger, bool reserve_gate, bool duel_close) {
+    // ANTWar global_state mapping: danger enters a stronger branch directly, without extra latch state.
+    if (reserve_gate) return kThreatSourceProbeCap;
+    if (!duel_close) return 0;
+    if (main_danger >= kDuelCloseSourceProbeDangerCritical) return kThreatSourceProbeCap;
+    if (main_danger >= kDuelCloseSourceProbeDanger) return kThreatSourceAlertCap;
+    return 0;
+}
+
+bool detect_enemy_skill_window_near_main(const State& st, int enemy) {
+    if (st.my_main_x < 0 || st.my_main_y < 0) return false;
+    for (const auto& g : st.generals) {
+        if (!g.alive || g.player != enemy) continue;
+        if (g.type != 1 && g.type != 2) continue;
+        if (!in_bounds(g.x, g.y)) continue;
+
+        const int dx = std::abs(g.x - st.my_main_x);
+        const int dy = std::abs(g.y - st.my_main_y);
+        const int dist = dx + dy;
+
+        const bool rout_ready = g.skill_cd[1] <= 0 && dx <= 2 && dy <= 2;
+        const bool command_ready = g.skill_cd[2] <= 0 && dist <= 3;
+        const bool weaken_ready = g.skill_cd[4] <= 0 && dist <= 2;
+        if (rout_ready || command_ready || weaken_ready) return true;
+    }
+    return false;
 }
 
 int count_owned_cells(const State& st, int player) {
@@ -401,6 +481,17 @@ int count_owned_cells(const State& st, int player) {
         }
     }
     return cnt;
+}
+
+int sum_owned_army(const State& st, int player) {
+    int total = 0;
+    for (int x = 0; x < kRow; ++x) {
+        for (int y = 0; y < kCol; ++y) {
+            if (st.board[x][y].owner != player) continue;
+            total += std::max(0, st.board[x][y].army);
+        }
+    }
+    return total;
 }
 
 int count_adj_mountains(const State& st, int player) {
@@ -429,7 +520,98 @@ bool adjacent_non_owned(const State& st, int x, int y, int player) {
     return false;
 }
 
-std::pair<int, int> choose_recruit_cell(const State& st, int player, const Grid& threat) {
+int count_sub_generals_alive(const State& st, int player) {
+    int cnt = 0;
+    for (const auto& g : st.generals) {
+        if (!g.alive) continue;
+        if (g.player != player) continue;
+        if (g.type == 2) ++cnt;
+    }
+    return cnt;
+}
+
+int compute_recruit_coin_buffer(
+    bool reserve_state,
+    bool duel_close,
+    int sub_gap
+) {
+    // Generals mapping: keep a small stable reserve before expansion spending.
+    // ANTWar mapping: reserved danger state raises the reserve floor.
+    int buffer = reserve_state ? 30 : 10;
+    if (duel_close && sub_gap <= 0) buffer += 10;
+    if (sub_gap > 0) buffer -= std::min(10, sub_gap * 5);
+    if (buffer < 0) buffer = 0;
+    if (buffer > 40) buffer = 40;
+    return buffer;
+}
+
+struct RecruitPlan {
+    double aggression = 0.0;
+    int coin_buffer = 10;
+    int main_dist_cap = 10;
+    int owned_need = 10;
+    double accept_threshold = 20.0;
+};
+
+RecruitPlan choose_recruit_plan(
+    bool reserve_state,
+    bool duel_close,
+    int sub_gap,
+    int main_threat_sources,
+    bool enemy_skill_window,
+    int territory_lead,
+    int army_lead
+) {
+    RecruitPlan plan;
+    plan.coin_buffer = compute_recruit_coin_buffer(reserve_state, duel_close, sub_gap);
+
+    // Merge threat-origin and reserved-state control into one aggression score:
+    // fewer branch combinations than source_alert + attack_window split logic.
+    double aggression = duel_close ? 0.30 : 0.14;
+    aggression += std::min(0.27, static_cast<double>(std::max(0, sub_gap)) * 0.09);
+    aggression -= std::min(0.28, static_cast<double>(std::max(0, -sub_gap)) * 0.07);
+    // Merge threat-origin and enemy-skill pressure into one continuous penalty.
+    const double source_signal =
+        std::clamp(static_cast<double>(std::max(0, main_threat_sources)) / static_cast<double>(kThreatSourceProbeCap), 0.0, 1.0);
+    const double skill_signal = enemy_skill_window ? 1.0 : 0.0;
+    const double pressure_signal = std::clamp(0.65 * source_signal + 0.35 * skill_signal, 0.0, 1.0);
+    aggression -= 0.32 * pressure_signal;
+    // Generals impact mapping: if board impact is already favorable, recruit less aggressively.
+    // ANTWar mapping: behind-state allows controlled catch-up aggression.
+    const double terr_signal = std::clamp(static_cast<double>(territory_lead) / 28.0, -1.0, 1.0);
+    const double army_signal = std::clamp(static_cast<double>(army_lead) / 220.0, -1.0, 1.0);
+    const double lead_signal = 0.55 * terr_signal + 0.45 * army_signal;
+    aggression -= 0.20 * std::max(0.0, lead_signal);
+    aggression += 0.10 * std::max(0.0, -lead_signal);
+    if (reserve_state) aggression -= 0.38;
+    plan.aggression = std::clamp(aggression, 0.0, 1.0);
+
+    plan.coin_buffer += static_cast<int>(std::lround((1.0 - plan.aggression) * 10.0));
+    plan.coin_buffer += static_cast<int>(std::lround(pressure_signal * 6.0));
+    plan.coin_buffer = std::clamp(plan.coin_buffer, 0, 50);
+
+    plan.main_dist_cap = 9 + static_cast<int>(std::lround(plan.aggression * 3.0));  // [9, 12]
+    plan.main_dist_cap -= static_cast<int>(std::lround(pressure_signal));
+    if (reserve_state) plan.main_dist_cap = std::min(plan.main_dist_cap, 9);
+    plan.main_dist_cap = std::clamp(plan.main_dist_cap, 8, 12);
+
+    plan.owned_need = std::clamp(10 - static_cast<int>(std::lround(plan.aggression * 2.0)), 8, 10);
+    plan.accept_threshold = std::clamp(20.0 - plan.aggression * 4.5, 15.5, 20.0);
+    return plan;
+}
+
+std::pair<int, int> choose_recruit_cell(
+    const State& st,
+    int player,
+    const Grid& threat,
+    double accept_threshold = 20.0,
+    double aggression = 0.0,
+    int main_dist_cap = -1
+) {
+    aggression = std::clamp(aggression, 0.0, 1.0);
+    const double front_weight = 20.0 + 2.0 * aggression;
+    const double main_support_weight = 0.75 - 0.30 * aggression;
+    const double enemy_main_weight = 1.0 + 0.8 * aggression;
     double best = -1e100;
     int bx = -1;
     int by = -1;
@@ -440,6 +622,12 @@ std::pair<int, int> choose_recruit_cell(const State& st, int player, const Grid&
             if (c.has_general) continue;
             if (blocked_by_super_weapon(st, player, x, y)) continue;
 
+            int d_my_main = -1;
+            if (st.my_main_x >= 0 && st.my_main_y >= 0) {
+                d_my_main = manhattan(x, y, st.my_main_x, st.my_main_y);
+                if (main_dist_cap >= 0 && d_my_main > main_dist_cap) continue;
+            }
+
             int front = 0;
             for (int d = 0; d < kDirs; ++d) {
                 const int nx = x + kDx[d];
@@ -449,9 +637,13 @@ std::pair<int, int> choose_recruit_cell(const State& st, int player, const Grid&
             }
             if (front == 0) continue;
 
-            double score = front * 20.0 + static_cast<double>(c.army) * 0.4 - threat[x][y] * 0.3;
+            double score = front * front_weight + static_cast<double>(c.army) * 0.4 - threat[x][y] * 0.3;
+            if (d_my_main >= 0) {
+                score += std::max(0, 16 - d_my_main) * main_support_weight;
+            }
             if (st.enemy_main_x >= 0) {
-                score += std::max(0, 24 - manhattan(x, y, st.enemy_main_x, st.enemy_main_y));
+                const int d_enemy_main = manhattan(x, y, st.enemy_main_x, st.enemy_main_y);
+                score += std::max(0, 24 - d_enemy_main) * enemy_main_weight;
             }
             if (score > best) {
                 best = score;
@@ -460,7 +652,7 @@ std::pair<int, int> choose_recruit_cell(const State& st, int player, const Grid&
             }
         }
     }
-    if (best < 20.0) return {-1, -1};
+    if (best < accept_threshold) return {-1, -1};
     return {bx, by};
 }
 
@@ -488,36 +680,6 @@ int choose_overlay_pool_limit(const State& st, const Grid& enemy_threat, int my_
 
 bool same_move(const Candidate& a, const Candidate& b) {
     return a.ok == b.ok && a.sx == b.sx && a.sy == b.sy && a.dir == b.dir && a.num == b.num;
-}
-
-bool is_tactical_escape_candidate(
-    const State& st,
-    const Candidate& cand,
-    int player,
-    int enemy,
-    const Candidate& base
-) {
-    if (!cand.ok) return false;
-    const int nx = cand.sx + kDx[cand.dir];
-    const int ny = cand.sy + kDy[cand.dir];
-    if (!in_bounds(nx, ny)) return false;
-    if (cand.score >= 520.0) return true;
-
-    const Cell& dst = st.board[nx][ny];
-    if (dst.has_general && dst.general_player == enemy) return true;
-
-    if (dst.owner == enemy) {
-        if (dst.army >= 8) return true;
-        if (st.enemy_main_x >= 0 && manhattan(nx, ny, st.enemy_main_x, st.enemy_main_y) <= 3) return true;
-    }
-
-    if (st.my_main_x >= 0 && st.my_main_y >= 0 && dst.owner != player &&
-        manhattan(nx, ny, st.my_main_x, st.my_main_y) <= 2) {
-        return true;
-    }
-
-    if (cand.score >= base.score - 8.0 && cand.score >= 120.0) return true;
-    return false;
 }
 
 double estimate_overlay_priority(
@@ -573,20 +735,16 @@ double estimate_overlay_priority(
 OverlayTuning choose_overlay_tuning(
     const State& st,
     const Grid& enemy_threat,
+    double main_danger,
+    int main_threat_sources,
     int my_moves,
     const Candidate& base
 ) {
     OverlayTuning tuning;
     tuning.pool_limit = choose_overlay_pool_limit(st, enemy_threat, my_moves);
 
-    double main_danger = 0.0;
-    if (st.my_main_x >= 0 && st.my_main_y >= 0) {
-        const int main_army = std::max(1, st.board[st.my_main_x][st.my_main_y].army);
-        main_danger = enemy_threat[st.my_main_x][st.my_main_y] / static_cast<double>(main_army);
-    }
     const bool duel_close = st.my_main_x >= 0 && st.enemy_main_x >= 0 &&
                             manhattan(st.my_main_x, st.my_main_y, st.enemy_main_x, st.enemy_main_y) <= 9;
-    const bool high_risk = (main_danger >= 0.55) || duel_close;
 
     // Base already has decisive tactical value; avoid unnecessary overlay churn.
     if (base.score >= 540.0) {
@@ -600,66 +758,47 @@ OverlayTuning choose_overlay_tuning(
         return tuning;
     }
 
-    if (high_risk) {
-        tuning.pressure_anchor_enabled = true;
-        tuning.base_reply_veto_enabled = true;
-        tuning.conservative = false;
-        tuning.my_follow_weight = 0.34;
-        tuning.enemy_weight = 0.62;
-        tuning.switch_margin = 0.7;
-        tuning.switch_penalty = 0.0;
-        tuning.base_anchor_penalty = 0.18;
-        tuning.max_raw_drop = 26.0;
-        tuning.tactical_drop_relax = 14.0;
-        tuning.tactical_anchor_scale = 0.38;
-        tuning.tactical_reply_bonus = 1.0;
-        tuning.tactical_enemy_reply_ratio = 0.52;
-        tuning.dominance_veto_ratio = 1.55;
-        tuning.dominance_veto_margin = 18.0;
-        tuning.dominance_threat_gain_min = 4.0;
-        tuning.base_reply_veto_slack = 16.0;
-        tuning.base_reply_drop_scale = 0.40;
-        tuning.base_reply_threat_credit = 1.60;
-        tuning.base_reply_penalty = 0.06;
-        tuning.base_pressure_loss_slack = 4.2;
-        tuning.base_pressure_loss_drop_scale = 0.12;
-        tuning.base_pressure_loss_threat_credit = 1.35;
-        tuning.base_pressure_loss_penalty = 0.12;
-        tuning.early_stop_gap = 20;
-        tuning.early_stop_min_evals = 6;
+    // Simplified risk model:
+    // - Generals mapping: threat-origin count contributes continuously (no extra branch state).
+    // - ANTWar mapping: danger-state caution is controlled by one scalar score.
+    double source_pressure = 0.0;
+    if (main_threat_sources > 0) {
+        source_pressure = std::min(0.22, 0.05 * static_cast<double>(main_threat_sources));
+    }
+    if (duel_close && main_threat_sources > 0) {
+        source_pressure = std::min(0.22, source_pressure + 0.03);
+    }
+    const double duel_pressure = duel_close ? 0.08 : 0.0;
+    const double risk_score = main_danger + source_pressure + duel_pressure;
+    if (risk_score < 0.42) {
+        tuning.enabled = false;
         return tuning;
     }
 
-    tuning.conservative = true;
-    tuning.pressure_anchor_enabled = false;
-    tuning.base_reply_veto_enabled = false;
-    tuning.pool_limit = std::min(tuning.pool_limit, kOverlayStableMaxPool);
-    tuning.my_follow_weight = 0.24;
-    tuning.enemy_weight = 0.50;
-    tuning.switch_margin = 1.6;
-    tuning.switch_penalty = 3.5;
-    tuning.base_anchor_penalty = 0.35;
-    tuning.max_raw_drop = 14.0;
-    tuning.tactical_drop_relax = 8.0;
-    tuning.tactical_anchor_scale = 0.70;
-    tuning.tactical_reply_bonus = 0.0;
-    tuning.tactical_enemy_reply_ratio = 0.36;
-    tuning.dominance_veto_ratio = 0.95;
-    tuning.dominance_veto_margin = 10.0;
-    tuning.dominance_threat_gain_min = 2.5;
-    tuning.base_reply_veto_slack = 8.0;
-    tuning.base_reply_drop_scale = 0.35;
-    tuning.base_reply_threat_credit = 1.10;
-    tuning.base_reply_penalty = 0.10;
-    tuning.base_pressure_loss_slack = 1.6;
-    tuning.base_pressure_loss_drop_scale = 0.06;
-    tuning.base_pressure_loss_threat_credit = 0.95;
-    tuning.base_pressure_loss_penalty = 0.24;
-    tuning.early_stop_gap = 28;
-    tuning.early_stop_min_evals = 5;
-    if (base.score >= 180.0 && st.round < 160) {
-        tuning.enabled = false;
+    const double risk_alpha = std::max(0.0, std::min(1.0, (risk_score - 0.42) / 0.60));
+    if (risk_score < 0.70) {
+        tuning.pool_limit = std::min(tuning.pool_limit, kOverlayStableMaxPool + 1);
+    } else if (risk_score >= 0.95) {
+        tuning.pool_limit = std::min(kOverlayMaxPool, tuning.pool_limit + 1);
     }
+
+    tuning.base_reply_veto_enabled = true;
+    tuning.conservative = false;
+    tuning.my_follow_weight = 0.34;
+    tuning.enemy_weight = 0.58 + 0.10 * risk_alpha;
+    tuning.switch_margin = 0.7;
+    tuning.switch_penalty = 0.0;
+    tuning.base_anchor_penalty = 0.14 + 0.10 * risk_alpha;
+    tuning.max_raw_drop = 30.0 - 10.0 * risk_alpha;
+    tuning.dominance_veto_ratio = 1.55;
+    tuning.dominance_veto_margin = 18.0;
+    tuning.dominance_threat_gain_min = 3.0 + 2.0 * risk_alpha;
+    tuning.base_reply_veto_slack = 18.0 - 4.0 * risk_alpha;
+    tuning.base_reply_drop_scale = 0.32 + 0.12 * risk_alpha;
+    tuning.base_reply_threat_credit = 1.60;
+    tuning.base_reply_penalty = 0.04 + 0.04 * risk_alpha;
+    tuning.early_stop_gap = 20;
+    tuning.early_stop_min_evals = 6;
     return tuning;
 }
 
@@ -801,12 +940,38 @@ Candidate select_best_move_base(
     return best;
 }
 
+bool candidate_key_less(const Candidate& a, const Candidate& b) {
+    if (a.sx != b.sx) return a.sx < b.sx;
+    if (a.sy != b.sy) return a.sy < b.sy;
+    if (a.dir != b.dir) return a.dir < b.dir;
+    if (a.num != b.num) return a.num < b.num;
+    return false;
+}
+
 bool candidate_better(const Candidate& a, const Candidate& b) {
-    return a.score > b.score;
+    constexpr double kScoreTieEps = 1e-9;
+    if (a.score > b.score + kScoreTieEps) return true;
+    if (b.score > a.score + kScoreTieEps) return false;
+    return candidate_key_less(a, b);
+}
+
+bool candidate_seq_less(const std::vector<Candidate>& a, const std::vector<Candidate>& b) {
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (candidate_key_less(a[i], b[i])) return true;
+        if (candidate_key_less(b[i], a[i])) return false;
+    }
+    return a.size() < b.size();
 }
 
 void push_candidate(std::vector<Candidate>& out, const Candidate& cand, int limit) {
     if (!cand.ok) return;
+    constexpr double kDedupScoreEps = 1e-9;
+    for (auto& keep : out) {
+        if (!same_move(keep, cand)) continue;
+        if (cand.score > keep.score + kDedupScoreEps) keep.score = cand.score;
+        return;
+    }
     out.push_back(cand);
     if (static_cast<int>(out.size()) > limit * 3) {
         std::nth_element(out.begin(), out.begin() + limit, out.end(), candidate_better);
@@ -937,6 +1102,17 @@ std::vector<Candidate> collect_move_candidates_base(
     }
 
     std::sort(pool.begin(), pool.end(), candidate_better);
+    // Generals/ANTWar-style budget control: keep one best send plan per attack arc in kill-only branching.
+    std::array<std::array<std::array<unsigned char, kDirs>, kCol>, kRow> seen_arc{};
+    std::vector<Candidate> compact;
+    compact.reserve(pool.size());
+    for (const auto& cand : pool) {
+        if (!in_bounds(cand.sx, cand.sy) || cand.dir < 0 || cand.dir >= kDirs) continue;
+        if (seen_arc[cand.sx][cand.sy][cand.dir]) continue;
+        seen_arc[cand.sx][cand.sy][cand.dir] = 1;
+        compact.push_back(cand);
+    }
+    pool.swap(compact);
     if (static_cast<int>(pool.size()) > limit) pool.resize(static_cast<size_t>(limit));
     return pool;
 }
@@ -1010,6 +1186,23 @@ std::vector<Candidate> collect_kill_branch_candidates(
     return pool;
 }
 
+bool may_force_main_kill_in_budget(const State& st, int player, int enemy, int move_budget) {
+    if (move_budget <= 0) return false;
+    const auto enemy_main = locate_main_general(st, enemy);
+    if (enemy_main.first < 0 || enemy_main.second < 0) return false;
+
+    int min_dist = std::numeric_limits<int>::max();
+    for (int x = 0; x < st.board_rows; ++x) {
+        for (int y = 0; y < st.board_cols; ++y) {
+            const Cell& c = st.board[x][y];
+            if (c.owner != player || c.army <= 1) continue;
+            min_dist = std::min(min_dist, manhattan(x, y, enemy_main.first, enemy_main.second));
+        }
+    }
+    if (min_dist == std::numeric_limits<int>::max()) return false;
+    return min_dist <= move_budget;
+}
+
 std::vector<Candidate> search_forced_main_kill_sequence(
     const State& root,
     int player,
@@ -1019,11 +1212,19 @@ std::vector<Candidate> search_forced_main_kill_sequence(
     const Deadline& deadline
 ) {
     if (!has_main_general(root, enemy)) return {};
+    // Generals-like `steps < dist` infeasibility pruning before expensive beam search.
+    if (!may_force_main_kill_in_budget(root, player, enemy, move_budget)) return {};
 
     struct Node {
         State st;
         std::vector<Candidate> seq;
         double heuristic = -1e100;
+    };
+    auto node_better = [](const Node& a, const Node& b) {
+        constexpr double kHeuristicTieEps = 1e-9;
+        if (a.heuristic > b.heuristic + kHeuristicTieEps) return true;
+        if (b.heuristic > a.heuristic + kHeuristicTieEps) return false;
+        return candidate_seq_less(a.seq, b.seq);
     };
 
     std::vector<Node> frontier;
@@ -1062,7 +1263,7 @@ std::vector<Candidate> search_forced_main_kill_sequence(
                         next.begin(),
                         next.begin() + beam_width * 3,
                         next.end(),
-                        [](const Node& a, const Node& b) { return a.heuristic > b.heuristic; }
+                        node_better
                     );
                     next.resize(static_cast<size_t>(beam_width * 3));
                 }
@@ -1070,7 +1271,7 @@ std::vector<Candidate> search_forced_main_kill_sequence(
         }
 
         if (next.empty()) break;
-        std::sort(next.begin(), next.end(), [](const Node& a, const Node& b) { return a.heuristic > b.heuristic; });
+        std::sort(next.begin(), next.end(), node_better);
         if (static_cast<int>(next.size()) > beam_width) next.resize(static_cast<size_t>(beam_width));
         frontier = std::move(next);
     }
@@ -1526,6 +1727,8 @@ Candidate select_best_move_overlay(
     int my_moves,
     int enemy_moves,
     const Grid& enemy_threat,
+    double main_danger,
+    int main_threat_sources,
     int main_safe_reserve,
     const Deadline& deadline,
     bool* hard_cutoff_hit
@@ -1540,7 +1743,9 @@ Candidate select_best_move_overlay(
         return base;
     }
 
-    const OverlayTuning tuning = choose_overlay_tuning(st, enemy_threat, my_moves, base);
+    const OverlayTuning tuning = choose_overlay_tuning(
+        st, enemy_threat, main_danger, main_threat_sources, my_moves, base
+    );
     if (!tuning.enabled) return base;
 
     auto pool = collect_move_candidates_base(st, player, enemy_threat, main_safe_reserve, tuning.pool_limit, &deadline);
@@ -1554,7 +1759,6 @@ Candidate select_best_move_overlay(
 
     double base_enemy_reply_score = 0.0;
     double base_main_threat_gain = 0.0;
-    double base_enemy_main_pressure = 0.0;
     {
         State base_after = st;
         apply_move(base_after, player, base);
@@ -1584,7 +1788,6 @@ Candidate select_best_move_overlay(
             enemy_reserve_base = std::min(
                 enemy_reserve_base, std::max(3, base_after.board[enemy_main_base.first][enemy_main_base.second].army - 1)
             );
-            base_enemy_main_pressure = my_threat_base[enemy_main_base.first][enemy_main_base.second];
         }
 
         const Candidate base_enemy_best =
@@ -1610,10 +1813,8 @@ Candidate select_best_move_overlay(
             break;
         }
         const bool cand_is_base = same_move(cand, base);
-        const bool tactical_escape = !cand_is_base && is_tactical_escape_candidate(st, cand, player, enemy, base);
         const double raw_drop = std::max(0.0, base.score - cand.score);
-        const double raw_drop_cap = tuning.max_raw_drop + (tactical_escape ? tuning.tactical_drop_relax : 0.0);
-        if (!cand_is_base && raw_drop > raw_drop_cap) continue;
+        if (!cand_is_base && raw_drop > tuning.max_raw_drop) continue;
         State after = st;
         apply_move(after, player, cand);
 
@@ -1643,35 +1844,17 @@ Candidate select_best_move_overlay(
             if (hard_cutoff_hit) *hard_cutoff_hit = true;
             break;
         }
-        const Candidate my_follow = select_best_move_base(after, player, enemy_threat_after, my_reserve_after, &deadline);
-        if (deadline_reached(deadline)) {
-            if (hard_cutoff_hit) *hard_cutoff_hit = true;
-            break;
-        }
-
         double main_threat_gain = 0.0;
         if (st.my_main_x >= 0 && st.my_main_y >= 0) {
             main_threat_gain = enemy_threat[st.my_main_x][st.my_main_y] - enemy_threat_after[st.my_main_x][st.my_main_y];
         }
-        const double enemy_main_pressure =
-            in_bounds(enemy_main.first, enemy_main.second) ? my_threat_after[enemy_main.first][enemy_main.second] : 0.0;
-
         const double enemy_reply = std::max(0.0, enemy_best.score);
         double allowed_enemy_reply = 1e100;
-        double pressure_loss = 0.0;
-        double allowed_pressure_loss = 1e100;
         if (!cand_is_base) {
             allowed_enemy_reply = base_enemy_reply_score + tuning.base_reply_veto_slack;
             allowed_enemy_reply += raw_drop * tuning.base_reply_drop_scale;
             allowed_enemy_reply +=
                 std::max(0.0, main_threat_gain - base_main_threat_gain) * tuning.base_reply_threat_credit;
-
-            if (tuning.pressure_anchor_enabled) {
-                pressure_loss = std::max(0.0, base_enemy_main_pressure - enemy_main_pressure);
-                allowed_pressure_loss = tuning.base_pressure_loss_slack + raw_drop * tuning.base_pressure_loss_drop_scale;
-                allowed_pressure_loss +=
-                    std::max(0.0, main_threat_gain - base_main_threat_gain) * tuning.base_pressure_loss_threat_credit;
-            }
         }
 
         if (!cand_is_base) {
@@ -1684,10 +1867,13 @@ Candidate select_best_move_overlay(
                 main_threat_gain < tuning.dominance_threat_gain_min) {
                 continue;
             }
-            if (tuning.pressure_anchor_enabled && pressure_loss > allowed_pressure_loss &&
-                main_threat_gain < tuning.dominance_threat_gain_min) {
-                continue;
-            }
+        }
+
+        // Delay my-follow search until the candidate survives enemy-reply/pressure vetoes.
+        const Candidate my_follow = select_best_move_base(after, player, enemy_threat_after, my_reserve_after, &deadline);
+        if (deadline_reached(deadline)) {
+            if (hard_cutoff_hit) *hard_cutoff_hit = true;
+            break;
         }
 
         double overlay_score = cand.score;
@@ -1695,23 +1881,11 @@ Candidate select_best_move_overlay(
         overlay_score -= tuning.enemy_weight * std::max(0.0, enemy_best.score);
         overlay_score += main_threat_gain * 0.42;
         if (!cand_is_base) {
-            const double anchor_scale = tactical_escape ? tuning.tactical_anchor_scale : 1.0;
-            overlay_score -= tuning.base_anchor_penalty * raw_drop * anchor_scale;
+            overlay_score -= tuning.base_anchor_penalty * raw_drop;
         }
         if (!cand_is_base) overlay_score -= tuning.switch_penalty;
-        if (tactical_escape) {
-            const double enemy_reply = std::max(0.0, enemy_best.score);
-            const double tactical_ref = std::max(1.0, std::max(0.0, cand.score));
-            if (enemy_reply <= tactical_ref * tuning.tactical_enemy_reply_ratio) {
-                overlay_score += tuning.tactical_reply_bonus;
-            }
-        }
         if (!cand_is_base) {
             overlay_score -= tuning.base_reply_penalty * std::max(0.0, enemy_reply - allowed_enemy_reply);
-            if (tuning.pressure_anchor_enabled) {
-                overlay_score -=
-                    tuning.base_pressure_loss_penalty * std::max(0.0, pressure_loss - allowed_pressure_loss);
-            }
         }
         if (cand.score >= 550.0) overlay_score += 500.0;  // keep instant main-kill bias dominant
 
@@ -1779,12 +1953,86 @@ void apply_move(State& st, int player, const Candidate& mv) {
 bool parse_state_from_rep(const json& rep, int seat, State& st) {
     st = State{};
     st.seat = seat;
+    st.board_rows = kRow;
+    st.board_cols = kCol;
 
     for (int i = 0; i < kRow; ++i) {
         for (int j = 0; j < kCol; ++j) {
             st.board[i][j] = Cell{};
+            st.board[i][j].owner = -2;
+            st.board[i][j].type = 2;
         }
     }
+
+    int inferred_rows = 0;
+    int inferred_cols = 0;
+    bool has_shape_from_cell_type = false;
+    if (rep.contains("Cell_type") && rep["Cell_type"].is_string()) {
+        const std::string ct = rep["Cell_type"].get<std::string>();
+        const int n = static_cast<int>(ct.size());
+        const int root = static_cast<int>(std::llround(std::sqrt(static_cast<double>(n))));
+        if (root > 0 && root * root == n && root <= kRow && root <= kCol) {
+            inferred_rows = root;
+            inferred_cols = root;
+            has_shape_from_cell_type = true;
+        }
+    }
+
+    int max_seen_x = -1;
+    int max_seen_y = -1;
+    auto scan_pos = [&](const json& arr) {
+        if (!arr.is_array() || arr.size() < 2) return;
+        const int x = as_int(arr[0], -1);
+        const int y = as_int(arr[1], -1);
+        if (x >= 0) max_seen_x = std::max(max_seen_x, x);
+        if (y >= 0) max_seen_y = std::max(max_seen_y, y);
+    };
+    if (rep.contains("Cells") && rep["Cells"].is_array()) {
+        for (const auto& item : rep["Cells"]) {
+            if (!item.is_array() || item.size() < 1) continue;
+            scan_pos(item[0]);
+        }
+    }
+    if (rep.contains("Generals") && rep["Generals"].is_array()) {
+        for (const auto& g : rep["Generals"]) {
+            if (!g.is_object() || !g.contains("Position")) continue;
+            scan_pos(g["Position"]);
+        }
+    }
+    if (rep.contains("Weapons") && rep["Weapons"].is_array()) {
+        for (const auto& w : rep["Weapons"]) {
+            if (!w.is_object() || !w.contains("Position")) continue;
+            scan_pos(w["Position"]);
+        }
+    }
+
+    if (!has_shape_from_cell_type) {
+        if (max_seen_x >= 0 && max_seen_y >= 0) {
+            inferred_rows = max_seen_x + 1;
+            inferred_cols = max_seen_y + 1;
+        } else {
+            inferred_rows = kRow;
+            inferred_cols = kCol;
+        }
+    } else {
+        if (max_seen_x >= 0) inferred_rows = std::max(inferred_rows, max_seen_x + 1);
+        if (max_seen_y >= 0) inferred_cols = std::max(inferred_cols, max_seen_y + 1);
+    }
+
+    inferred_rows = std::max(1, std::min(kRow, inferred_rows));
+    inferred_cols = std::max(1, std::min(kCol, inferred_cols));
+    st.board_rows = inferred_rows;
+    st.board_cols = inferred_cols;
+
+    for (int i = 0; i < st.board_rows; ++i) {
+        for (int j = 0; j < st.board_cols; ++j) {
+            st.board[i][j].owner = -1;
+            st.board[i][j].type = 0;
+        }
+    }
+    const auto in_active_bounds = [&](int x, int y) {
+        return x >= 0 && x < st.board_rows && y >= 0 && y < st.board_cols;
+    };
 
     st.round = as_int(rep.value("Round", 1), 1);
 
@@ -1809,10 +2057,11 @@ bool parse_state_from_rep(const json& rep, int seat, State& st) {
 
     if (rep.contains("Cell_type") && rep["Cell_type"].is_string()) {
         std::string cell_type = rep["Cell_type"].get<std::string>();
-        if (cell_type.size() >= static_cast<size_t>(kRow * kCol)) {
-            for (int i = 0; i < kRow; ++i) {
-                for (int j = 0; j < kCol; ++j) {
-                    const char c = cell_type[static_cast<size_t>(i * kCol + j)];
+        const size_t need = static_cast<size_t>(st.board_rows * st.board_cols);
+        if (cell_type.size() >= need) {
+            for (int i = 0; i < st.board_rows; ++i) {
+                for (int j = 0; j < st.board_cols; ++j) {
+                    const char c = cell_type[static_cast<size_t>(i * st.board_cols + j)];
                     if (c >= '0' && c <= '9') st.board[i][j].type = c - '0';
                 }
             }
@@ -1825,7 +2074,7 @@ bool parse_state_from_rep(const json& rep, int seat, State& st) {
             if (!item[0].is_array() || item[0].size() < 2) continue;
             const int x = as_int(item[0][0], -1);
             const int y = as_int(item[0][1], -1);
-            if (!in_bounds(x, y)) continue;
+            if (!in_active_bounds(x, y)) continue;
             st.board[x][y].owner = as_int(item[1], -1);
             st.board[x][y].army = as_int(item[2], 0);
         }
@@ -1842,7 +2091,7 @@ bool parse_state_from_rep(const json& rep, int seat, State& st) {
                 rec.x = as_int(w["Position"][0], -1);
                 rec.y = as_int(w["Position"][1], -1);
             }
-            if (in_bounds(rec.x, rec.y)) st.weapons.push_back(rec);
+            if (in_active_bounds(rec.x, rec.y)) st.weapons.push_back(rec);
         }
     }
 
@@ -1859,7 +2108,7 @@ bool parse_state_from_rep(const json& rep, int seat, State& st) {
             if (!g.contains("Position") || !g["Position"].is_array() || g["Position"].size() < 2) continue;
             rec.x = as_int(g["Position"][0], -1);
             rec.y = as_int(g["Position"][1], -1);
-            if (!in_bounds(rec.x, rec.y)) continue;
+            if (!in_active_bounds(rec.x, rec.y)) continue;
 
             if (g.contains("Level") && g["Level"].is_array()) {
                 if (g["Level"].size() >= 1) rec.level_prod = as_int(g["Level"][0], 1);
@@ -1902,8 +2151,8 @@ bool parse_state_from_rep(const json& rep, int seat, State& st) {
 
     if (st.my_main_x == -1) {
         int best_army = -1;
-        for (int i = 0; i < kRow; ++i) {
-            for (int j = 0; j < kCol; ++j) {
+        for (int i = 0; i < st.board_rows; ++i) {
+            for (int j = 0; j < st.board_cols; ++j) {
                 if (st.board[i][j].owner != seat) continue;
                 if (st.board[i][j].army > best_army) {
                     best_army = st.board[i][j].army;
@@ -1939,6 +2188,8 @@ int main() {
         }
 
         if (line.front() != '{' || line.back() != '}') continue;
+        int fast_turn = seat;
+        if (extract_turn_fast(line, fast_turn) && fast_turn != seat) continue;
 
         json rep;
         try {
@@ -1948,7 +2199,8 @@ int main() {
         }
         if (!rep.is_object()) continue;
 
-        if (rep.contains("Player")) seat = as_int(rep["Player"], seat);
+        // Keep seat pinned to km handshake.
+        // Saiblo streams may set Player to frame owner (can differ from our side).
         int turn = seat;
         if (rep.contains("Turn")) turn = as_int(rep["Turn"], seat);
         if (turn != seat) continue;
@@ -1958,6 +2210,8 @@ int main() {
             send_payload("8\n");
             continue;
         }
+        gActiveRows = st.board_rows;
+        gActiveCols = st.board_cols;
 
         const int enemy = 1 - seat;
         int my_coin = st.coins[seat];
@@ -1989,11 +2243,17 @@ int main() {
         int main_safe_reserve = 3;
         int main_threat_sources = 0;
         if (st.my_main_x >= 0) {
+            const int main_army = std::max(1, st.board[st.my_main_x][st.my_main_y].army);
             main_safe_reserve = std::max(3, static_cast<int>(std::ceil(main_threat * 0.55)));
-            main_safe_reserve = std::min(main_safe_reserve, std::max(3, st.board[st.my_main_x][st.my_main_y].army - 1));
-            // Generals threat-origin count + ANTWAR reserved mapping.
-            main_threat_sources = count_threat_sources_to_cell(st, enemy, enemy_moves, st.my_main_x, st.my_main_y);
-            main_safe_reserve = apply_reserved_main_floor(st, main_safe_reserve, main_threat, main_threat_sources);
+            main_safe_reserve = std::min(main_safe_reserve, std::max(3, main_army - 1));
+            // Generals threat-origin count + ANTWAR reserved mapping (only in high-pressure state).
+            if (should_enable_reserved_gate(main_threat, main_army)) {
+                main_threat_sources = count_threat_sources_to_cell(
+                    st, enemy, enemy_moves, st.my_main_x, st.my_main_y, kThreatSourceProbeCap
+                );
+                main_safe_reserve = apply_reserved_main_floor(st, main_safe_reserve, main_threat, main_threat_sources);
+            }
+            main_safe_reserve = apply_reserved_release_floor(st, main_safe_reserve, main_threat);
         }
 
         // 1) Super-weapon usage (Generals old `use_weapon` style).
@@ -2096,11 +2356,49 @@ int main() {
         }
 
         // 9) Recruit sub generals on active frontier.
-        if (my_coin >= 50 && owned_cells >= 10) {
-            const auto recruit = choose_recruit_cell(st, seat, threat);
-            if (recruit.first != -1) {
-                push_op({7, recruit.first, recruit.second});
-                my_coin -= 50;
+        // ANTWar mapping: only enter aggressive recruiting window when not in reserved danger state.
+        if (my_coin >= 50) {
+            bool reserve_state = false;
+            if (st.my_main_x >= 0 && st.my_main_y >= 0) {
+                const int main_army = std::max(1, st.board[st.my_main_x][st.my_main_y].army);
+                const double main_threat_now = threat[st.my_main_x][st.my_main_y];
+                reserve_state = should_enable_reserved_gate(main_threat_now, main_army);
+            }
+
+            const bool duel_close_recruit = st.my_main_x >= 0 && st.my_main_y >= 0 && st.enemy_main_x >= 0 &&
+                                            st.enemy_main_y >= 0 &&
+                                            manhattan(st.my_main_x, st.my_main_y, st.enemy_main_x, st.enemy_main_y) <= 10;
+            const int my_sub_count = count_sub_generals_alive(st, seat);
+            const int enemy_sub_count = count_sub_generals_alive(st, enemy);
+            const int sub_gap = enemy_sub_count - my_sub_count;
+            const bool enemy_skill_window = detect_enemy_skill_window_near_main(st, enemy);
+            const int enemy_owned_cells = count_owned_cells(st, enemy);
+            const int territory_lead = owned_cells - enemy_owned_cells;
+            const int army_lead = sum_owned_army(st, seat) - sum_owned_army(st, enemy);
+            int recruit_main_threat_sources = 0;
+            if (duel_close_recruit && st.my_main_x >= 0 && st.my_main_y >= 0) {
+                // Generals threat-origin mapping: cheap source probe for recruit safety gate.
+                recruit_main_threat_sources =
+                    count_threat_sources_to_cell(st, enemy, enemy_moves, st.my_main_x, st.my_main_y, 2);
+            }
+            const RecruitPlan recruit_plan =
+                choose_recruit_plan(
+                    reserve_state,
+                    duel_close_recruit,
+                    sub_gap,
+                    recruit_main_threat_sources,
+                    enemy_skill_window,
+                    territory_lead,
+                    army_lead
+                );
+            if (owned_cells >= recruit_plan.owned_need && my_coin >= 50 + recruit_plan.coin_buffer) {
+                const auto recruit = choose_recruit_cell(
+                    st, seat, threat, recruit_plan.accept_threshold, recruit_plan.aggression, recruit_plan.main_dist_cap
+                );
+                if (recruit.first != -1) {
+                    push_op({7, recruit.first, recruit.second});
+                    my_coin -= 50;
+                }
             }
         }
 
@@ -2110,24 +2408,49 @@ int main() {
         for (int step = 0; step < move_budget; ++step) {
             threat = compute_threat(st, enemy, enemy_moves);
             double step_main_threat = 0.0;
+            double step_main_danger = 0.0;
             int step_main_army = 1;
             int step_main_threat_sources = 0;
+            const bool step_enemy_skill_window = detect_enemy_skill_window_near_main(st, enemy);
             if (st.my_main_x >= 0) {
                 step_main_threat = threat[st.my_main_x][st.my_main_y];
                 step_main_army = std::max(1, st.board[st.my_main_x][st.my_main_y].army);
+                step_main_danger = step_main_threat / static_cast<double>(step_main_army);
                 main_safe_reserve = std::max(3, static_cast<int>(std::ceil(step_main_threat * 0.55)));
                 main_safe_reserve = std::min(main_safe_reserve, std::max(3, st.board[st.my_main_x][st.my_main_y].army - 1));
-                step_main_threat_sources =
-                    count_threat_sources_to_cell(st, enemy, enemy_moves, st.my_main_x, st.my_main_y);
+
+                const bool reserve_gate = should_enable_reserved_gate(step_main_threat, step_main_army);
+                const bool duel_close_step = st.enemy_main_x >= 0 && st.enemy_main_y >= 0 &&
+                                             manhattan(st.my_main_x, st.my_main_y, st.enemy_main_x, st.enemy_main_y) <= 9;
+                const int source_probe_cap = choose_threat_source_probe_cap(step_main_danger, reserve_gate, duel_close_step);
+                // Generals+ANTWar mapping: saturating threat-origin probe with danger-state branching.
+                if (source_probe_cap > 0) {
+                    step_main_threat_sources = count_threat_sources_to_cell(
+                        st, enemy, enemy_moves, st.my_main_x, st.my_main_y, source_probe_cap
+                    );
+                }
+
+                if (reserve_gate) {
+                    main_safe_reserve =
+                        apply_reserved_main_floor(st, main_safe_reserve, step_main_threat, step_main_threat_sources);
+                }
+                main_safe_reserve = apply_reserved_release_floor(st, main_safe_reserve, step_main_threat);
                 main_safe_reserve =
-                    apply_reserved_main_floor(st, main_safe_reserve, step_main_threat, step_main_threat_sources);
+                    apply_skill_window_reserve_floor(st, main_safe_reserve, step_enemy_skill_window, step_main_danger);
             }
-            const int step_move_cap =
-                choose_reserved_move_cap(move_budget, step_main_threat, step_main_army, step_main_threat_sources);
-            if (step >= step_move_cap) break;
             bool hard_cutoff_hit = false;
             Candidate cand = select_best_move_overlay(
-                st, seat, enemy, step_move_cap, enemy_moves, threat, main_safe_reserve, decision_deadline, &hard_cutoff_hit
+                st,
+                seat,
+                enemy,
+                move_budget,
+                enemy_moves,
+                threat,
+                step_main_danger,
+                step_main_threat_sources,
+                main_safe_reserve,
+                decision_deadline,
+                &hard_cutoff_hit
             );
             if (!cand.ok || cand.score < 1.0) break;
             push_op({1, cand.sx, cand.sy, kDirCode[cand.dir], cand.num});

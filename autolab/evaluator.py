@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 import multiprocessing as mp
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 from .common import ANT_GAME_DIR, RUNTIME_DIR, ROOT_DIR, ensure_dirs, now_ts, write_json
 from .elo import compute_elo
@@ -16,6 +17,116 @@ from .policy_adapters import close_policy, make_policy
 from .registry import get_version, load_registry, set_champion
 
 MAX_PARALLEL_JOBS = 16
+
+
+def _version_is_usable(v: Dict[str, Any]) -> bool:
+    if not isinstance(v, dict):
+        return False
+    if not bool(v.get("enabled", True)):
+        return False
+    kind = str(v.get("kind", "")).strip()
+    if kind == "cpp_exe":
+        exe = str(v.get("exe", "")).strip()
+        if not exe:
+            return False
+        p = Path(exe)
+        return p.is_file() and os.access(str(p), os.X_OK)
+    if kind == "antgame_py":
+        # Built-in Ant-Game python policies are resolved by name at runtime.
+        return bool(str(v.get("name", "")).strip())
+    return False
+
+
+def _iter_completed_match_files(runtime_dir: Path) -> List[Path]:
+    files: List[Path] = []
+    for summary in sorted(runtime_dir.glob("eval_*_summary.json")):
+        name = summary.name
+        if not name.startswith("eval_") or not name.endswith("_summary.json"):
+            continue
+        tag = name[len("eval_") : -len("_summary.json")]
+        m = runtime_dir / f"eval_{tag}_matches.jsonl"
+        if m.is_file():
+            files.append(m)
+    return files
+
+
+def _accumulate_elo_and_stats(
+    rows: Iterable[Dict[str, Any]],
+    base_rating: float,
+    k_factor: float,
+    allowed_ids: set[str] | None = None,
+) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], int]:
+    ratings: Dict[str, float] = {}
+    if allowed_ids:
+        for vid in allowed_ids:
+            ratings[vid] = float(base_rating)
+
+    stats: Dict[str, Dict[str, float]] = defaultdict(
+        lambda: {"games": 0.0, "wins": 0.0, "losses": 0.0, "draws": 0.0, "score": 0.0}
+    )
+
+    # Keep Elo update semantics exactly aligned with autolab.elo.compute_elo.
+    def expected_score(ra: float, rb: float) -> float:
+        return 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
+
+    count = 0
+    for r in rows:
+        a = str(r.get("a", ""))
+        b = str(r.get("b", ""))
+        if not a or not b:
+            continue
+        if allowed_ids is not None and (a not in allowed_ids or b not in allowed_ids):
+            continue
+        sa = float(r.get("score_a", 0.5))
+        if sa < 0.0:
+            sa = 0.0
+        elif sa > 1.0:
+            sa = 1.0
+        sb = 1.0 - sa
+
+        if a not in ratings:
+            ratings[a] = float(base_rating)
+        if b not in ratings:
+            ratings[b] = float(base_rating)
+        ra = ratings[a]
+        rb = ratings[b]
+        ea = expected_score(ra, rb)
+        delta = float(k_factor) * (sa - ea)
+        ratings[a] = ra + delta
+        ratings[b] = rb - delta
+
+        count += 1
+        for vid, sc in ((a, sa), (b, sb)):
+            s = stats[vid]
+            s["games"] += 1.0
+            s["score"] += float(sc)
+            if sc > 0.5:
+                s["wins"] += 1.0
+            elif sc < 0.5:
+                s["losses"] += 1.0
+            else:
+                s["draws"] += 1.0
+
+    # Ensure all allowed ids have a stats entry for stable downstream rendering.
+    if allowed_ids:
+        for vid in allowed_ids:
+            _ = stats[vid]
+    return ratings, stats, count
+
+
+def _iter_rows_from_match_files(files: List[Path]) -> Iterable[Dict[str, Any]]:
+    for f in files:
+        with f.open("r", encoding="utf-8", errors="ignore") as fp:
+            for line in fp:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(obj, dict):
+                    yield obj
 
 
 def _build_pairs(version_ids: List[str], mode: str, reg: Dict[str, Any], challengers: List[str], opponents: List[str]) -> List[tuple[str, str]]:
@@ -51,6 +162,91 @@ def _build_pairs(version_ids: List[str], mode: str, reg: Dict[str, Any], challen
     raise ValueError(f"unsupported mode: {mode}")
 
 
+def _build_adaptive_pairs(
+    version_ids: List[str],
+    runtime_dir: Path,
+    cfg: "EvalConfig",
+) -> tuple[List[tuple[str, str]], Dict[str, Any]]:
+    if len(version_ids) < 2:
+        return [], {}
+
+    latest_path = runtime_dir / "latest.json"
+    latest: Dict[str, Any] = {}
+    if latest_path.is_file():
+        try:
+            with latest_path.open("r", encoding="utf-8") as f:
+                obj = json.load(f)
+            if isinstance(obj, dict):
+                latest = obj
+        except Exception:
+            latest = {}
+
+    ratings = latest.get("ratings", [])
+    if not isinstance(ratings, list):
+        ratings = []
+    stats = latest.get("stats", {})
+    if not isinstance(stats, dict):
+        stats = {}
+
+    rank_map: Dict[str, int] = {}
+    for i, item in enumerate(ratings, start=1):
+        if isinstance(item, dict):
+            vid = str(item.get("id", ""))
+            if vid:
+                rank_map[vid] = i
+
+    games_map: Dict[str, float] = {}
+    for vid, st in stats.items():
+        if isinstance(st, dict):
+            games_map[str(vid)] = float(st.get("games", 0.0))
+
+    top_k = max(0, int(cfg.adaptive_top_k))
+    top_boost = max(0.0, float(cfg.adaptive_top_boost))
+    new_target = max(1.0, float(cfg.adaptive_new_target_games))
+    new_boost = max(0.0, float(cfg.adaptive_new_boost))
+
+    def version_weight(vid: str) -> float:
+        w = 1.0  # baseline uniform random
+        rank = rank_map.get(vid, 10**9)
+        if top_k > 0 and rank <= top_k:
+            # rank=1 gets full boost; rank=top_k gets small positive boost
+            frac = (top_k - rank + 1) / float(top_k)
+            w += top_boost * frac
+        g = float(games_map.get(vid, 0.0))
+        under = max(0.0, new_target - g) / new_target
+        w += new_boost * under
+        return max(1e-6, w)
+
+    all_pairs: List[tuple[str, str]] = []
+    pair_weights: List[float] = []
+    for i in range(len(version_ids)):
+        for j in range(i + 1, len(version_ids)):
+            a = version_ids[i]
+            b = version_ids[j]
+            all_pairs.append((a, b))
+            pair_weights.append(0.5 * (version_weight(a) + version_weight(b)))
+
+    if not all_pairs:
+        return [], {}
+
+    pair_count = max(1, int(cfg.adaptive_pair_count))
+    rng_seed = int(cfg.seed) if int(cfg.seed) != 0 else int(time.time_ns() & 0xFFFFFFFF)
+    rng = random.Random(rng_seed)
+    sampled = rng.choices(all_pairs, weights=pair_weights, k=pair_count)
+
+    hist: Dict[str, int] = defaultdict(int)
+    for a, b in sampled:
+        hist[f"{a}__vs__{b}"] += 1
+    hist_sorted = sorted(hist.items(), key=lambda kv: kv[1], reverse=True)
+    meta = {
+        "seed_used": rng_seed,
+        "pair_space_size": len(all_pairs),
+        "pair_count": pair_count,
+        "top_pair_freq": [{"pair": k, "count": v} for k, v in hist_sorted[:10]],
+    }
+    return sampled, meta
+
+
 def _single_match(task: Dict[str, Any]) -> Dict[str, Any]:
     import random
     import sys
@@ -70,6 +266,7 @@ def _single_match(task: Dict[str, Any]) -> Dict[str, Any]:
     max_rounds = int(task["max_rounds"])
     a_on_seat0 = bool(task["a_on_seat0"])
     replay_dir = str(task["replay_dir"])
+    keep_replay = bool(task.get("keep_replay", True))
 
     random.seed(seed)
 
@@ -102,12 +299,13 @@ def _single_match(task: Dict[str, Any]) -> Dict[str, Any]:
             score_a = 1.0 if winner == 1 else 0.0 if winner == 0 else 0.5
             a_seat = 1
 
-        replay_file = getattr(state, "replay_file", "")
-        if replay_file and os.path.isfile(replay_file):
+        replay_file = str(getattr(state, "replay_file", "") or "")
+        if replay_file and (not keep_replay) and os.path.isfile(replay_file):
             try:
                 os.remove(replay_file)
             except Exception:
                 pass
+            replay_file = ""
         return {
             "a": a,
             "b": b,
@@ -115,6 +313,7 @@ def _single_match(task: Dict[str, Any]) -> Dict[str, Any]:
             "a_seat": a_seat,
             "score_a": score_a,
             "winner_seat": winner,
+            "replay_file": replay_file,
         }
     finally:
         close_policy(pa)
@@ -192,7 +391,7 @@ def _pool_init_affinity(core_list: List[int], pin_cpu: bool) -> None:
 
 @dataclass
 class EvalConfig:
-    mode: str = "gauntlet"
+    mode: str = "gauntlet"  # gauntlet | round_robin | adaptive
     versions: List[str] | None = None
     challengers: List[str] | None = None
     opponents: List[str] | None = None
@@ -211,6 +410,13 @@ class EvalConfig:
     pin_cpu: bool = True
     runtime_scope: str = ""
     write_latest: bool = True
+    anchor_games_per_pair: int = 0  # for gauntlet anchors; 0 means use games_per_pair
+    adaptive_pair_count: int = 45
+    adaptive_top_k: int = 6
+    adaptive_top_boost: float = 1.5
+    adaptive_new_target_games: int = 600
+    adaptive_new_boost: float = 2.0
+    save_replays: bool = True
 
 
 def _split_csv(value: str) -> List[str]:
@@ -223,35 +429,60 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
     runtime_dir = RUNTIME_DIR if not scope else (RUNTIME_DIR / "scopes" / scope)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     reg = load_registry()
-    all_versions = [v for v in reg.get("versions", []) if isinstance(v, dict) and v.get("enabled", True)]
+    all_versions = [v for v in reg.get("versions", []) if _version_is_usable(v)]
     all_ids = [str(v.get("id")) for v in all_versions]
+    anchor_ids = {
+        str(v.get("id"))
+        for v in all_versions
+        if isinstance(v, dict) and bool(v.get("anchor", False))
+    }
 
     selected_ids = cfg.versions if cfg.versions else all_ids
     selected_ids = [vid for vid in selected_ids if vid in all_ids]
     if len(selected_ids) < 2:
         raise RuntimeError("need at least two enabled versions to evaluate")
 
-    pairs = _build_pairs(
-        selected_ids,
-        mode=cfg.mode,
-        reg=reg,
-        challengers=cfg.challengers or [],
-        opponents=cfg.opponents or [],
-    )
+    adaptive_meta: Dict[str, Any] = {}
+    if cfg.mode == "adaptive":
+        pairs, adaptive_meta = _build_adaptive_pairs(
+            version_ids=selected_ids,
+            runtime_dir=runtime_dir,
+            cfg=cfg,
+        )
+    else:
+        pairs = _build_pairs(
+            selected_ids,
+            mode=cfg.mode,
+            reg=reg,
+            challengers=cfg.challengers or [],
+            opponents=cfg.opponents or [],
+        )
     if not pairs:
         raise RuntimeError("empty pair list after applying mode/filters")
 
+    ts = now_ts()
+    tag = f"eval_{ts}"
     tasks: List[Dict[str, Any]] = []
     seed_base = int(cfg.seed)
-    replay_dir = str(runtime_dir / "tmp_replays")
-    Path(replay_dir).mkdir(parents=True, exist_ok=True)
+    if bool(cfg.save_replays):
+        replay_dir = runtime_dir / "replays" / tag
+    else:
+        replay_dir = runtime_dir / "tmp_replays" / tag
+    replay_dir.mkdir(parents=True, exist_ok=True)
     serial = 0
     for (a, b) in pairs:
         a_spec = get_version(a)
         b_spec = get_version(b)
-        if a_spec is None or b_spec is None:
+        if a_spec is None or b_spec is None or (not _version_is_usable(a_spec)) or (not _version_is_usable(b_spec)):
             continue
-        for g in range(cfg.games_per_pair):
+        pair_games = int(cfg.games_per_pair)
+        if (
+            cfg.mode == "gauntlet"
+            and int(cfg.anchor_games_per_pair) > 0
+            and (a in anchor_ids or b in anchor_ids)
+        ):
+            pair_games = int(cfg.anchor_games_per_pair)
+        for g in range(pair_games):
             s = seed_base + serial * 1009 + g
             tasks.append(
                 {
@@ -262,7 +493,8 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
                     "seed": s,
                     "max_rounds": cfg.max_rounds,
                     "a_on_seat0": True,
-                    "replay_dir": replay_dir,
+                    "replay_dir": str(replay_dir),
+                    "keep_replay": bool(cfg.save_replays),
                     "ant_game_dir": str(ANT_GAME_DIR),
                 }
             )
@@ -275,7 +507,8 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
                     "seed": s + 911,
                     "max_rounds": cfg.max_rounds,
                     "a_on_seat0": False,
-                    "replay_dir": replay_dir,
+                    "replay_dir": str(replay_dir),
+                    "keep_replay": bool(cfg.save_replays),
                     "ant_game_dir": str(ANT_GAME_DIR),
                 }
             )
@@ -319,45 +552,33 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
                 rows = list(ex.map(_single_match, tasks))
             backend = "thread_fallback"
 
-    ratings = compute_elo(rows, base_rating=cfg.base_rating, k_factor=cfg.k_factor)
-    ranking = sorted(ratings.items(), key=lambda kv: kv[1], reverse=True)
-
-    stats = defaultdict(lambda: {"games": 0, "wins": 0.0, "losses": 0.0, "draws": 0.0, "score": 0.0})
+    round_ratings = compute_elo(rows, base_rating=cfg.base_rating, k_factor=cfg.k_factor)
+    round_ranking = sorted(round_ratings.items(), key=lambda kv: kv[1], reverse=True)
+    round_stats: Dict[str, Dict[str, float]] = defaultdict(
+        lambda: {"games": 0.0, "wins": 0.0, "losses": 0.0, "draws": 0.0, "score": 0.0}
+    )
     for r in rows:
-        a = r["a"]
-        b = r["b"]
+        a = str(r["a"])
+        b = str(r["b"])
         sa = float(r["score_a"])
         sb = 1.0 - sa
         for vid, sc in ((a, sa), (b, sb)):
-            stats[vid]["games"] += 1
-            stats[vid]["score"] += sc
+            round_stats[vid]["games"] += 1.0
+            round_stats[vid]["score"] += float(sc)
             if sc > 0.5:
-                stats[vid]["wins"] += 1
+                round_stats[vid]["wins"] += 1.0
             elif sc < 0.5:
-                stats[vid]["losses"] += 1
+                round_stats[vid]["losses"] += 1.0
             else:
-                stats[vid]["draws"] += 1
+                round_stats[vid]["draws"] += 1.0
 
-    champ_old = str(reg.get("champion", ""))
-    champ_new = champ_old
-    promoted = False
-    if cfg.auto_promote and ranking:
-        top_id, top_elo = ranking[0]
-        old_elo = ratings.get(champ_old, cfg.base_rating)
-        if top_id != champ_old and (top_elo - old_elo) >= cfg.promote_min_delta:
-            set_champion(top_id)
-            champ_new = top_id
-            promoted = True
-
-    ts = now_ts()
-    tag = f"eval_{ts}"
     matches_path = runtime_dir / f"{tag}_matches.jsonl"
     summary_path = runtime_dir / f"{tag}_summary.json"
     for r in rows:
         with matches_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    out = {
+    round_out = {
         "tag": tag,
         "config": {
             "mode": cfg.mode,
@@ -373,16 +594,78 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
             "k_factor": cfg.k_factor,
             "base_rating": cfg.base_rating,
             "runtime_scope": scope,
+            "rating_mode": "round",
+            "anchor_games_per_pair": int(cfg.anchor_games_per_pair),
+            "adaptive_pair_count": int(cfg.adaptive_pair_count),
+            "adaptive_top_k": int(cfg.adaptive_top_k),
+            "adaptive_top_boost": float(cfg.adaptive_top_boost),
+            "adaptive_new_target_games": int(cfg.adaptive_new_target_games),
+            "adaptive_new_boost": float(cfg.adaptive_new_boost),
+            "save_replays": bool(cfg.save_replays),
             "versions": selected_ids,
             "pairs": pairs,
         },
-        "champion": {"old": champ_old, "new": champ_new, "promoted": promoted},
-        "ratings": [{"id": vid, "elo": elo} for vid, elo in ranking],
-        "stats": stats,
-        "paths": {"matches": str(matches_path), "summary": str(summary_path)},
+        "champion": {"old": str(reg.get("champion", "")), "new": str(reg.get("champion", "")), "promoted": False},
+        "ratings": [{"id": vid, "elo": elo} for vid, elo in round_ranking],
+        "stats": round_stats,
+        "paths": {
+            "matches": str(matches_path),
+            "summary": str(summary_path),
+            "replays_dir": str(replay_dir) if bool(cfg.save_replays) else "",
+        },
         "matches": len(rows),
     }
-    write_json(summary_path, out)
+    write_json(summary_path, round_out)
+
+    # Production scope uses cumulative Elo for latest/champion decisions.
+    out = round_out
+    if scope == "":
+        allowed_ids = set(all_ids)
+        completed_files = _iter_completed_match_files(runtime_dir)
+        cum_ratings, cum_stats, cum_matches = _accumulate_elo_and_stats(
+            rows=_iter_rows_from_match_files(completed_files),
+            base_rating=cfg.base_rating,
+            k_factor=cfg.k_factor,
+            allowed_ids=allowed_ids,
+        )
+        cum_ranking = sorted(cum_ratings.items(), key=lambda kv: kv[1], reverse=True)
+
+        champ_old = str(reg.get("champion", ""))
+        champ_new = champ_old
+        promoted = False
+        if cfg.auto_promote and cum_ranking:
+            top_id, top_elo = cum_ranking[0]
+            old_elo = float(cum_ratings.get(champ_old, cfg.base_rating))
+            if top_id != champ_old and (top_elo - old_elo) >= cfg.promote_min_delta:
+                set_champion(top_id)
+                champ_new = top_id
+                promoted = True
+
+        out = {
+            "tag": tag,
+            "config": {
+                **round_out["config"],
+                "rating_mode": "cumulative",
+                "active_version_ids": sorted(allowed_ids),
+            },
+            "champion": {"old": champ_old, "new": champ_new, "promoted": promoted},
+            "ratings": [{"id": vid, "elo": elo} for vid, elo in cum_ranking],
+            "stats": cum_stats,
+            "paths": {
+                "matches": str(matches_path),
+                "summary": str(summary_path),
+                "latest_round_summary": str(summary_path),
+            },
+            "matches": cum_matches,
+            "cumulative": {
+                "round_files": len(completed_files),
+                "latest_round_tag": tag,
+                "latest_round_matches": len(rows),
+            },
+        }
+        if adaptive_meta:
+            out["config"]["adaptive"] = adaptive_meta
+
     if cfg.write_latest:
         write_json(runtime_dir / "latest.json", out)
 
@@ -413,6 +696,9 @@ def _write_markdown_report(path: Path, result: Dict[str, Any]) -> None:
     lines.append("")
     lines.append(f"- matches: `{result['paths']['matches']}`")
     lines.append(f"- summary: `{result['paths']['summary']}`")
+    replays_dir = str(result.get("paths", {}).get("replays_dir", "") or "")
+    if replays_dir:
+        lines.append(f"- replays_dir: `{replays_dir}`")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -438,5 +724,12 @@ def run_from_args(args: Any) -> Dict[str, Any]:
         pin_cpu=args.pin_cpu,
         runtime_scope=args.runtime_scope,
         write_latest=args.write_latest,
+        anchor_games_per_pair=args.anchor_games_per_pair,
+        adaptive_pair_count=args.adaptive_pair_count,
+        adaptive_top_k=args.adaptive_top_k,
+        adaptive_top_boost=args.adaptive_top_boost,
+        adaptive_new_target_games=args.adaptive_new_target_games,
+        adaptive_new_boost=args.adaptive_new_boost,
+        save_replays=args.save_replays,
     )
     return run_evaluation(cfg)

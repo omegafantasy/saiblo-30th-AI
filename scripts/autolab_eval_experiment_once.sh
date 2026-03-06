@@ -4,11 +4,13 @@ set -euo pipefail
 ROOT_DIR="/www"
 PY_BIN="${PY_BIN:-$(command -v python3 || command -v python || true)}"
 EVAL_SCRIPT="$ROOT_DIR/autolab_eval.py"
+REPLAY_ANALYZE_SCRIPT="$ROOT_DIR/autolab_replay_analyze.py"
 DOC_OUT="${EXPERIMENT_DOC_OUT:-$ROOT_DIR/docs/iter_eval_latest.md}"
 RUNTIME_SCOPE="${EXPERIMENT_RUNTIME_SCOPE:-iter}"
 JOBS="${EXPERIMENT_JOBS:-14}"
 CPU_POLICY="${EXPERIMENT_CPU_POLICY:-all}"
 ALLOW_ARG_OVERRIDE="${EXPERIMENT_ALLOW_ARG_OVERRIDE:-0}"
+REPLAY_ANALYZE="${EXPERIMENT_REPLAY_ANALYZE:-1}"
 
 if [[ -z "$PY_BIN" || ! -x "$PY_BIN" ]]; then
   echo "missing python interpreter" >&2
@@ -16,6 +18,10 @@ if [[ -z "$PY_BIN" || ! -x "$PY_BIN" ]]; then
 fi
 if [[ ! -f "$EVAL_SCRIPT" ]]; then
   echo "missing eval script: $EVAL_SCRIPT" >&2
+  exit 1
+fi
+if [[ "$REPLAY_ANALYZE" == "1" && ! -f "$REPLAY_ANALYZE_SCRIPT" ]]; then
+  echo "missing replay analyzer script: $REPLAY_ANALYZE_SCRIPT" >&2
   exit 1
 fi
 
@@ -64,3 +70,26 @@ fi
   --write-latest \
   --doc-out "$DOC_OUT" \
   "${ARGS[@]}"
+
+if [[ "$REPLAY_ANALYZE" == "1" ]]; then
+  SCOPE_LABEL="${RUNTIME_SCOPE:-production}"
+  RUNTIME_DIR="$ROOT_DIR/autolab/runtime"
+  if [[ -n "$RUNTIME_SCOPE" ]]; then
+    RUNTIME_DIR="$RUNTIME_DIR/scopes/$RUNTIME_SCOPE"
+  fi
+  REPORT_DIR="$RUNTIME_DIR/replay_analysis"
+  DOC_REPLAY_DIR="$ROOT_DIR/docs/replay_analysis"
+  mkdir -p "$REPORT_DIR" "$DOC_REPLAY_DIR"
+  "$PY_BIN" "$REPLAY_ANALYZE_SCRIPT" \
+    --scope "$RUNTIME_SCOPE" \
+    --latest \
+    --top-matches "${EXPERIMENT_REPLAY_TOP_MATCHES:-12}" \
+    --max-matches "${EXPERIMENT_REPLAY_MAX_MATCHES:-0}" \
+    >/dev/null
+  if [[ -f "$REPORT_DIR/latest.md" ]]; then
+    cp "$REPORT_DIR/latest.md" "$DOC_REPLAY_DIR/${SCOPE_LABEL}_latest.md"
+  fi
+  if [[ -f "$REPORT_DIR/latest.json" ]]; then
+    cp "$REPORT_DIR/latest.json" "$DOC_REPLAY_DIR/${SCOPE_LABEL}_latest.json"
+  fi
+fi

@@ -1,5 +1,5 @@
 {
-  "champion": "cpp_v2_beam",
+  "champion": "cpp_v76_overlay_prefilter_prune",
   "versions": [
     {
       "id": "cpp_v1_current",
@@ -160,6 +160,141 @@
       "enabled": true,
       "anchor": false,
       "notes": "v64 + Generals-style weapon policy (nuclear boom) + safe sub-general production upgrades"
+    },
+    {
+      "id": "cpp_v68_overlay_smoothcap",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v68/ai_v68",
+      "src": "/www/ai_cpp/v68/ai_v68.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "smooth overlay pool cap + danger-weighted early-stop"
+    },
+    {
+      "id": "cpp_v69_overlay_followup_prune",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v69/ai_v69",
+      "src": "/www/ai_cpp/v69/ai_v69.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "overlay follow-up pruning by raw-drop risk"
+    },
+    {
+      "id": "cpp_v70_overlay_opening_subpressure",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v70/ai_v70",
+      "src": "/www/ai_cpp/v70/ai_v70.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "opening sub-gap pressure in overlay tuning"
+    },
+    {
+      "id": "cpp_v71_overlay_replyrisk_gate",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v71/ai_v71",
+      "src": "/www/ai_cpp/v71/ai_v71.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "unified reply-risk gate + ahead-state budget tightening"
+    },
+    {
+      "id": "cpp_v72_overlay_endgame_lock",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v72/ai_v72",
+      "src": "/www/ai_cpp/v72/ai_v72.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "endgame ahead-lock signal + reply-risk lock penalty"
+    },
+    {
+      "id": "cpp_v73_overlay_calm_endgame_lock",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v73/ai_v73",
+      "src": "/www/ai_cpp/v73/ai_v73.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "calm endgame lock signal with lighter reply-risk penalty"
+    },
+    {
+      "id": "cpp_v74_overlay_calm_margin_only",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v74/ai_v74",
+      "src": "/www/ai_cpp/v74/ai_v74.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "remove reply-risk lock-penalty branch; keep calm endgame margin-only"
+    },
+    {
+      "id": "cpp_v75_overlay_calm_micro_lock",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v75/ai_v75",
+      "src": "/www/ai_cpp/v75/ai_v75.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "micro lock-penalty rollback (0.15 weight, raw_drop-5) from v73"
+    },
+    {
+      "id": "cpp_v76_overlay_prefilter_prune",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v76/ai_v76",
+      "src": "/www/ai_cpp/v76/ai_v76.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "pre-reply raw_drop prune before enemy_best eval; calm-endgame tighter cap"
+    },
+    {
+      "id": "cpp_v77_overlay_source_tighten",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v77/ai_v77",
+      "src": "/www/ai_cpp/v77/ai_v77.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "from v75: tighten reply slack/scale by source_pressure; no extra prefilter branch"
+    },
+    {
+      "id": "cpp_v78_overlay_source_reserve_release",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v78/ai_v78",
+      "src": "/www/ai_cpp/v78/ai_v78.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "from v77: source reserve_signal tightens slack; behind-state releases reserve and removes source drop-scale tightening"
+    },
+    {
+      "id": "cpp_v79_overlay_risk_weighted_release",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v79/ai_v79",
+      "src": "/www/ai_cpp/v79/ai_v79.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "from v78: behind release is risk-weighted so high danger retains reserve budget"
+    },
+    {
+      "id": "cpp_v80_overlay_release_time_decay",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v80/ai_v80",
+      "src": "/www/ai_cpp/v80/ai_v80.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "from v79: behind reserve release decays by round to reduce late-game over-release swings"
+    },
+    {
+      "id": "cpp_v81_overlay_deficit_late_release",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v81/ai_v81",
+      "src": "/www/ai_cpp/v81/ai_v81.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "from v80: keep late release decay but add behind-state release floor for comeback stability"
+    },
+    {
+      "id": "cpp_v82_overlay_deficit_floor_taper",
+      "kind": "cpp_exe",
+      "exe": "/www/ai_cpp/v82/ai_v82",
+      "src": "/www/ai_cpp/v82/ai_v82.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "from v81: taper deficit release floor by endgame and risk to reduce late over-release"
     }
   ]
 }

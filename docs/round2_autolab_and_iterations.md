@@ -1,5 +1,19 @@
 # 第二轮：本地版本管理、自动评测与算法迭代
 
+## 0. Replay 持久化与复盘模块（2026-03-04）
+
+- 评测器已改为默认保存所有对局 replay（生产与 iter 都生效）：
+  - 生产：`/www/autolab/runtime/replays/<eval_tag>/`
+  - iter：`/www/autolab/runtime/scopes/iter/replays/<eval_tag>/`
+- `matches.jsonl` 每行新增 `replay_file` 字段，可直接追溯具体对局回放。
+- 新增 replay 分析入口：`python3 /www/autolab_replay_analyze.py --scope iter --latest`
+  - 输出 JSON：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+  - 输出 Markdown：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.md`
+  - iter 实验脚本会自动同步到 docs：
+    - `/www/docs/replay_analysis/iter_latest.json`
+    - `/www/docs/replay_analysis/iter_latest.md`
+- 迭代规范已升级为“必须结合 replay 复盘做结论”，不允许只看 Elo/胜率。
+
 ## 1. 目标
 
 - 建立可持续的本地版本管理与自动评测流水线。
@@ -5168,3 +5182,6382 @@ confirm 判读：
    - 将低信息增益门控做条件化启停，减少稳定态分支；
    - 先做候选重排再进入复杂评估，降低深评估候选数量；
    - 对可复用 threat/reserve 中间量做缓存，缩短单步 CPU 消耗。
+
+## 66. 本回合增量（2026-03-04，v66 in-place：threat-source reserve gate）
+
+### 66.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_121021`）
+  - `mode=gauntlet`，`games_per_pair=6`
+  - `champion.old/new = cpp_v1_current -> cpp_v2_beam`
+  - `config.pairs` 以“各 challenger vs `cpp_v1_current` + anchors”构建（即按旧 champion=`v1` 构建）
+- 迭代口径：`/www/autolab/runtime/scopes/iter/latest.json`
+  - 回合起始可见 `eval_20260304_120951`（`matches=0`，因 challenger 不在当期 registry 池内导致空跑）
+- 迭代日志：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`/www/past_AIs/Generals-AI/main.cpp` 的 `threat_origin_cnt`（多来源威胁计数）
+  - ANTWar：`/www/past_AIs/ANTWar-AI/main.cpp` 的 `danger/reserved`（危险态保留资源，抑制激进扩张）
+
+本轮强制判读结论：
+
+1. gauntlet 对手池受 champion 切换影响（高优先级风险）；当前轮次 Elo 绝对值不可跨 tag 外推。
+2. 生产 Elo 是最终权威；iter Elo 仅用于候选筛选。
+
+### 66.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place 小步改造）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 按最新固定目标“默认在现有版本上小步改造”，本次改动与 `v66` 结构兼容，无需新目录。
+2. 当前目标是验证“简化风险门控是否有收益”，先做 in-place gate，再决定是否固化快照。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt`（同一目标格的多来源威胁计数）。
+   - 映射：对我方主将计算“可在敌方机动半径内形成有效打击的来源数”，把单一 threat 强度扩展为“强度 + 来源数”。
+   - 代码落点：新增 `count_threat_sources_to_cell(...)`，并在主循环中对主将格调用。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved`（危险时减少扩张，保留资源）。
+   - 映射：当主将 threat 来源数高且 danger ratio 高时，提高 `main_safe_reserve` 并下调本回合可执行移动步数上限。
+   - 代码落点：新增 `apply_reserved_main_floor(...)`、`choose_reserved_move_cap(...)`，接入主决策循环。
+
+复杂度与硬截止约束：
+
+1. 保留原搜索硬截止：`CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200`。
+2. 保留超时回退：`hard_cutoff_hit` 命中后立即停止后续搜索并使用当前最优候选。
+3. 本轮新增逻辑为 O(board) 级 threat-source 计数，未引入无上限前瞻深度。
+
+### 66.3 可复现实验（已执行，隔离 scope）
+
+执行命令（脚本入口，14 并发）：
+
+- `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v53_overlay_countercheck,cpp_v1_current,cpp_v2_beam --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v53_overlay_countercheck,cpp_v64_generals_rebuild --seed 20260320`
+
+产物：
+
+- 轮次：`eval_20260304_122143`（`runtime_scope=iter`）
+- 汇总：`/www/autolab/runtime/scopes/iter/eval_20260304_122143_summary.json`
+- 明细：`/www/autolab/runtime/scopes/iter/eval_20260304_122143_matches.jsonl`
+- 总局数：`400`（每关键对手 `100` 局）
+
+`v66` 分对手结果（head-to-head）：
+
+- vs `v1_current`：`78/100`（78.0%）
+- vs `v2_beam`：`81/100`（81.0%）
+- vs `v53_overlay_countercheck`：`55/100`（55.0%）
+- vs `v64_generals_rebuild`：`48/100`（48.0%）
+
+判读：
+
+1. 本轮对比均达到 `>=100` 局门槛，可用于两两相对强度判断。
+2. 对 `v1/v2` 维持强正向；对 `v53` 到达 55% 边界值；对 `v64` 仍负向（48%）。
+3. 由于未满足“对每目标老版本 `>=200` 且 `>55%`”或大样本 Elo 稳定榜首，本轮不能宣称“明确优于多个老版本”。
+
+借鉴点生效证据：
+
+1. Generals 借鉴点（threat-source）有部分正向信号：对 `v53` 达到 `55/100`，较此前 overlay 分支常见的 40%~45% 区间明显改善。
+2. ANTWar 借鉴点（danger/reserved）呈混合效果：在高压对局可能止损，但对 `v64` 仍 `48/100`，存在过度保守风险。
+
+### 66.4 回到生产口径的结论
+
+生产最新（`eval_20260304_121021`）显示：
+
+- champion 发生 `v1 -> v2` 切换；
+- `config.pairs` 按旧 champion=`v1` 构建；
+- gauntlet 对手池口径已发生漂移风险。
+
+结论：
+
+1. 生产 Elo 仍是唯一权威；本轮结论以“生产口径风险提示 + iter 探索证据”组合给出。
+2. 由于本次是 `v66` in-place 改造，生产轮次尚未对该新二进制做独立复验，暂不做生产晋升结论。
+3. 当前状态标签：`neutral`（有正向信号但未通过关键替代门槛）。
+
+### 66.5 风险与下一步
+
+风险：
+
+1. threat-source 计数在每步决策都会触发，CPU 预算压力增加。
+2. reserved move-cap 可能在优势局面过早收缩行动，导致对 `v64` 这类进攻型对手失分。
+3. 当前仍缺少 `>=200` 局 confirm，无法稳健声明关键替代结论。
+
+下一步：
+
+1. 做 confirm：`v66 vs v64` 至少 `200` 局，验证 48% 是否稳定。
+2. 做单变量 ablation：
+   - 仅保留 threat-source 提升 `main_safe_reserve`；
+   - 关闭 `move_cap` 收缩；
+   判断是否由“步数收缩”主导退化。
+3. 若确认过保守，改为“仅当 main_threat_sources >= 5 且 danger_ratio >= 0.75”才触发 move-cap，其他场景只提高 reserve floor。
+
+### 66.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码路径保留 `hard_cutoff_hit` + `CLOCK_THREAD_CPUTIME_ID`；
+   - 评测产物无逐步命中计数，无法给出精确触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 搜索主路径仍受 `<=200ms` CPU 硬截止保护；
+   - 新增风险点为每步 threat-source 计数引入的额外遍历成本。
+3. 若有风险，下一轮降复杂度/剪枝计划：
+   - 将 threat-source 计数限制为“仅主将周边高压态触发”；
+   - 对 move-cap 使用更高触发阈值，减少正常局面分支干预；
+   - 复用当步 threat 中间量，减少重复扫描。
+
+## 67. 本回合增量（2026-03-04，v66 in-place：reserved gate 简化）
+
+### 67.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_123130`）
+  - `mode=gauntlet`，`games_per_pair=6`
+  - `champion.old/new = cpp_v1_current -> cpp_v2_beam`
+  - `config.pairs` 主要为“各 challenger vs `cpp_v1_current` + anchors”，按旧 champion=`v1` 构建。
+- 迭代口径：`/www/autolab/runtime/scopes/iter/latest.json`（回合起始为 `eval_20260304_122143`）
+- 迭代日志：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（多来源威胁计数）
+  - ANTWar：`danger/reserved`（危险态保留资源，避免过度扩张）
+
+本轮强制判读结论：
+
+1. gauntlet 对手池受 champion 切换影响（高优先级风险）；本轮生产 Elo 绝对值不可跨轮直接外推。
+2. 生产 Elo 仍是唯一权威；iter Elo 仅用于候选筛选。
+
+### 67.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place 小步改造）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 按固定目标“默认现有版本小步改造”，本次只做规则阈值与启停条件简化，和 `v66` 架构兼容。
+2. 目标是验证“简化是否止损并维持强度”，无需创建新目录快照。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt`（同目标格的威胁来源数量）。
+   - 映射：仅在主将高压态启用 threat-source 计数，作为 reserve floor 的附加依据。
+   - 代码落点：`count_threat_sources_to_cell(...)` + `should_enable_reserved_gate(...)`。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved`（危险时保留资源、减少扩张）。
+   - 映射：将 move-cap 简化为“仅极端危险触发一次减步”，不再中压频繁收缩。
+   - 代码落点：`choose_reserved_move_cap(...)`（仅 `sources>=6 && danger_ratio>=0.90` 生效）。
+
+本轮具体简化点：
+
+1. `apply_reserved_main_floor` 从多阈值叠加改为三段轻量加成，降低过保守偏置。
+2. `choose_reserved_move_cap` 从双阈值（`-2/-1`）改为单阈值（最多 `-1`）。
+3. `count_threat_sources_to_cell` 仅在 `should_enable_reserved_gate` 为真时触发，减少每步 CPU 开销。
+
+硬截止与回退约束：
+
+1. 保持 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200`。
+2. 保持 `hard_cutoff_hit` 回退路径。
+
+### 67.3 可复现实验（已执行，隔离 scope）
+
+执行命令（脚本入口，14 并发）：
+
+- `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v53_overlay_countercheck,cpp_v1_current,cpp_v2_beam --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v53_overlay_countercheck,cpp_v64_generals_rebuild --seed 20260321`
+
+产物：
+
+- 轮次：`eval_20260304_124223`（`runtime_scope=iter`）
+- 汇总：`/www/autolab/runtime/scopes/iter/eval_20260304_124223_summary.json`
+- 明细：`/www/autolab/runtime/scopes/iter/eval_20260304_124223_matches.jsonl`
+- 总局数：`400`（每关键对手 `100` 局）
+
+`v66` 分对手结果（head-to-head）：
+
+- vs `v1_current`：`76/100`（76.0%）
+- vs `v2_beam`：`80/100`（80.0%）
+- vs `v53_overlay_countercheck`：`58/100`（58.0%）
+- vs `v64_generals_rebuild`：`50/100`（50.0%）
+
+判读：
+
+1. 每个两两比较均达到 `>=100` 局，满足相对强度判断门槛。
+2. 相较上轮同池 gate（`seed=20260320`）：`v66 vs v53` 从 `55% -> 58%`，`v66 vs v64` 从 `48% -> 50%`，简化方向有止损信号。
+3. 但尚未满足“对每目标老版本 `>=200` 且 `>55%`”，不能宣称“明确优于多个老版本”。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source）生效信号：在保留该机制前提下，`v66 vs v53` 提升到 `58/100`。
+2. ANTWar 借鉴（danger/reserved）生效信号：简化为极端态触发后，`v66 vs v64` 从负向 `48/100` 回升至 `50/100`（止损但未转优）。
+
+### 67.4 回到生产口径的结论
+
+生产最新（`eval_20260304_123130`）显示：
+
+- champion 发生 `v1 -> v2` 切换；
+- `config.pairs` 按旧 champion=`v1` 构建；
+- gauntlet 口径存在 champion 依赖漂移风险。
+
+结论：
+
+1. 本轮最终结论仍以生产口径为权威前提，iter 仅作候选探索。
+2. 当前 `v66`（简化版）在 iter 对 `v1/v2/v53` 为正向、对 `v64` 持平，标签可上调为 `promising` 候选，但尚未达到生产晋升证据线。
+3. 若后续生产 gauntlet 排序与该趋势冲突，需补做 `v66 vs v64` `>=100`（建议 `200`）head-to-head 复验再定结论。
+
+### 67.5 风险与下一步
+
+风险：
+
+1. threat-source 计数虽已条件化，但在高压对局仍有额外开销。
+2. 对 `v64` 仅 `50/100`，说明“止损”不等于“建立优势”。
+
+下一步：
+
+1. 进入 confirm：`v66 vs v64` 至少 `200` 局（同脚本、隔离 scope）。
+2. 若 confirm 仍接近 50%，尝试进一步简化：只保留 reserve floor，暂时禁用 move-cap（完全去掉减步）。
+3. 若 confirm >55%，再扩大到固定池大样本（`>=1000`）验证 Elo 稳定性。
+
+### 67.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 保留 `hard_cutoff_hit` + `CLOCK_THREAD_CPUTIME_ID` 路径；
+   - 评测产物无逐步命中统计，无法精确计数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 搜索主路径仍受 `<=200ms` CPU 硬截止保护；
+   - 风险点主要在高压态触发的 threat-source 计数。
+3. 若有风险，下一轮降复杂度/剪枝计划：
+   - 仅在极端高压态计算 threat-source；
+   - move-cap 继续保持单阈值，必要时完全移除；
+   - 保持候选前置排序和早停，减少深评估候选数量。
+
+## 68. 本回合增量（2026-03-04，v66 in-place：移除 move-cap，仅保留 reserve floor）
+
+### 68.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_125156`）
+  - `mode=gauntlet`，`games_per_pair=6`
+  - `champion.old/new = cpp_v1_current -> cpp_v2_beam`
+  - `config.pairs` 仍按旧 champion=`v1` 构建（各 challenger 对 `v1` + anchors）。
+- 迭代口径：`/www/autolab/runtime/scopes/iter/latest.json`（回合起始为 `eval_20260304_124223`）
+- 迭代记录：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（多来源威胁）
+  - ANTWar：`danger/reserved`（危险态保留资源）
+
+本轮强制判读结论：
+
+1. gauntlet 对手池受 champion 切换影响（高优先级风险）；生产 Elo 绝对值不应跨轮直接比较。
+2. 生产 Elo 是最终口径；iter Elo 仅用于筛选候选。
+
+### 68.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 本轮是“复杂度回收”而非结构重建，直接在 `v66` 上做小步回滚更可控。
+2. 目标是先验证“去掉硬减步”是否修复 `v64` 对位，再决定是否固化快照。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt`。
+   - 映射：保留 threat-source 计数，仅作为主将 reserve floor 的增强依据。
+   - 代码落点：`count_threat_sources_to_cell(...)` + `apply_reserved_main_floor(...)`。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved` 的“危险时保留资源”而非强制截断动作。
+   - 映射：删除 `move_cap` 硬减步逻辑，改为仅通过 reserve floor 软约束来体现 reserved。
+   - 代码落点：删除 `choose_reserved_move_cap(...)` 与 `step >= step_move_cap` 分支；动作搜索恢复使用 `move_budget`。
+
+简化收益（结构层面）：
+
+1. 去除一条动作截断分支与相关状态变量，降低策略路径复杂度。
+2. 保留高压态条件触发（`should_enable_reserved_gate`），减少无效 threat-source 计算。
+
+硬截止约束：
+
+1. 仍使用 `CLOCK_THREAD_CPUTIME_ID`。
+2. 仍保持单步 `<=200ms`（`kSearchStepBudgetMs=200`）与 `hard_cutoff_hit` 回退。
+
+### 68.3 可复现实验（已执行，隔离 scope）
+
+执行命令（confirm，脚本入口，14 并发）：
+
+- `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=100 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260323`
+
+产物：
+
+- 轮次：`eval_20260304_125633`（`runtime_scope=iter`）
+- 汇总：`/www/autolab/runtime/scopes/iter/eval_20260304_125633_summary.json`
+- 明细：`/www/autolab/runtime/scopes/iter/eval_20260304_125633_matches.jsonl`
+- 总局数：`200`（关键对手 confirm 门槛达成）
+
+结果（head-to-head）：
+
+- `v66 vs v64 = 106/200`（53.0%）
+
+判读：
+
+1. 本轮样本满足 confirm 最低建议（`>=200`），可用于关键对手稳定性判断。
+2. 结果从此前 `48/100 -> 50/100 -> 53/200` 连续上行，说明“去掉 move-cap”方向在修复 `v64` 对位上有效。
+3. 但 `53%` 仍未达到“`>55%`”判优阈值，不能宣称“v66 已明确优于 v64”。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source）仍有效：在移除硬减步后未丢失主将稳健性，`v66` 仍能保持对关键对手正向微优势。
+2. ANTWar 借鉴（reserved 软约束化）有效：由“硬截断动作”改为“reserve floor”，`v66 vs v64` 从负/平转为 `53%`。
+
+### 68.4 回到生产口径的结论
+
+生产最新（`eval_20260304_125156`）显示：
+
+- champion 切换 `v1 -> v2`；
+- `pairs` 按旧 champion=`v1` 构建；
+- gauntlet 口径存在 champion 依赖漂移。
+
+结论：
+
+1. 生产 Elo 仍为唯一权威；iter confirm 仅作为候选证据。
+2. 当前生产与 iter 不再明显冲突：生产中 `v66` 位次高于 `v64`，iter confirm 也给出 `53%` 正向。
+3. 但未达到 `>55%`，因此状态维持 `neutral`（接近可用，不足以宣称明确替代）。
+
+### 68.5 风险与下一步
+
+风险：
+
+1. `v66 vs v64` 虽转正但优势窄，仍可能受 seed/对手池波动影响。
+2. threat-source 在高压态仍有额外计算开销；虽受硬截止保护，仍应继续控复杂度。
+
+下一步：
+
+1. 做二次 confirm：`v66 vs v64` 再跑 `>=200` 局（新 seed）验证是否稳定高于 53%。
+2. 若仍在 52~54% 区间，优先继续简化（减少 overlay 中低收益惩罚项）而非新增分支。
+3. 若上到 `>55%` 且稳定，再扩展到 `v53/v1/v2` 的统一 `>=200` gate。
+
+### 68.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码保留 `hard_cutoff_hit` + `CLOCK_THREAD_CPUTIME_ID`；
+   - 评测产物无逐步统计，无法给出精确触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 搜索主路径受 `<=200ms` 硬截止保护；
+   - 高压态 threat-source 计算仍是预算热点。
+3. 若有风险，下一轮降复杂度/剪枝计划：
+   - 进一步抬高 `should_enable_reserved_gate` 触发阈值；
+   - 在不损伤对位收益前提下减少 overlay 低收益分支；
+   - 保持“软约束优先、硬截断最少”的简化路线。
+
+## 69. 本回合增量（2026-03-04，v66 in-place：reserved 软释放，confirm 复验）
+
+### 69.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_130144`）
+  - `mode=gauntlet`，`games_per_pair=6`
+  - `champion.old/new = cpp_v2_beam -> cpp_v1_current`
+  - `config.pairs` 仍按旧 champion=`v2` 构建（各 challenger vs `v2` + anchors）。
+- 迭代口径：`/www/autolab/runtime/scopes/iter/latest.json`（回合起始为 `eval_20260304_125633`）
+- 迭代记录：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（多来源威胁）
+  - ANTWar：`danger/reserved`（危险态保留、非危险态释放）
+
+本轮强制判读结论：
+
+1. gauntlet 对手池受 champion 切换影响（高优先级风险），生产 Elo 绝对值不能跨轮直接当作同池比较。
+2. 生产 Elo 是唯一权威；iter Elo 仅用于候选筛选。
+
+### 69.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 本轮目标是继续“简化优先”验证，属于现有 `v66` 的小步策略回收。
+2. 改动与结构完全兼容，无需新目录快照。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt`。
+   - 映射：保留主将 threat-source 计数，仅在高压态启用，作为 reserve floor 的增强依据。
+   - 代码落点：`count_threat_sources_to_cell(...)` + `should_enable_reserved_gate(...)`。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved` 的“危险保留、非危险释放”。
+   - 映射：新增 `apply_reserved_release_floor(...)`，在低 danger ratio 下释放 1 点 reserve，避免过保守。
+   - 代码落点：主循环与每步循环中在 reserve 计算后调用该函数。
+
+本轮简化变化：
+
+1. 延续上轮已移除的 `move_cap` 硬减步路径，保持动作路径无硬截断分支。
+2. 引入“软释放”替代“硬限制”，减少策略补丁层数。
+
+硬截止与回退：
+
+1. 保留 `CLOCK_THREAD_CPUTIME_ID`。
+2. 保留 `kSearchStepBudgetMs=200` 与 `hard_cutoff_hit` 保底回退。
+
+### 69.3 可复现实验（已执行，隔离 scope）
+
+执行命令（confirm，脚本入口，14 并发）：
+
+- `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=100 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260324`
+
+产物：
+
+- 轮次：`eval_20260304_130613`（`runtime_scope=iter`）
+- 汇总：`/www/autolab/runtime/scopes/iter/eval_20260304_130613_summary.json`
+- 明细：`/www/autolab/runtime/scopes/iter/eval_20260304_130613_matches.jsonl`
+- 总局数：`200`（关键对手 confirm 门槛达成）
+
+结果（head-to-head）：
+
+- `v66 vs v64 = 106/200`（53.0%）
+
+判读：
+
+1. 样本量达 `>=200`，可用于 confirm 级判断。
+2. 与上一轮 confirm（`seed=20260323`）结果完全一致：`106/200`，说明当前胜率大约稳定在 53% 附近。
+3. 仍未达到 `>55%` 阈值，因此不能宣称“v66 明确优于 v64”。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source）保持有效：在继续保留该机制下，`v66` 对 `v64` 维持稳定正向（53%）。
+2. ANTWar 借鉴（reserved 软释放）有效性有限：未进一步提升超过 53%，但保持了“不过度保守且不回退到负向”的状态。
+
+### 69.4 回到生产口径的结论
+
+生产最新（`eval_20260304_130144`）显示：
+
+- champion 从 `v2` 切回 `v1`；
+- `pairs` 按旧 champion=`v2` 构建；
+- 生产 gauntlet 口径存在 champion 依赖漂移。
+
+结论：
+
+1. 生产 Elo 仍是唯一权威，iter confirm 仅作为候选证据。
+2. 生产与 iter 未出现方向冲突（均显示 `v66` 不弱于 `v64`），但也都不构成“显著领先”证据。
+3. 本轮标签维持 `neutral`。
+
+### 69.5 风险与下一步
+
+风险：
+
+1. `v66 vs v64` 长期停留在约 53%，说明当前策略已接近局部平台期。
+2. threat-source 计算虽已条件化，仍是高压态 CPU 风险点。
+
+下一步：
+
+1. 不再增加新门控，优先做“减法式”ablation：尝试去掉 overlay 低收益惩罚项（保持硬截止不变）。
+2. 若下轮仍在 53% 左右，转向固定池大样本 Elo（`>=1000`）判断整体稳定排名，避免在单对位上过拟合。
+3. 如需晋升论断，必须先达成关键对手 `>55%` 且 `>=200` 的硬门槛。
+
+### 69.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码路径保留 `hard_cutoff_hit` + `CLOCK_THREAD_CPUTIME_ID`；
+   - 评测产物无逐步命中计数，无法精确统计。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 搜索主路径仍受 `<=200ms` 硬截止保护；
+   - 高压态 threat-source 计算仍可能抬升预算占用。
+3. 若有风险，下一轮降复杂度/剪枝计划：
+   - 进一步减少 overlay 低收益项，避免新增分支；
+   - 如收益不降则提高 `should_enable_reserved_gate` 触发阈值；
+   - 继续保持“软约束优先、硬截断最少”的简化路线。
+
+## 70. 本回合增量（2026-03-04，v66 in-place：overlay 分支减法）
+
+### 70.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_131255`）
+  - `mode=gauntlet`，`games_per_pair=6`
+  - `champion.old/new = cpp_v1_current -> cpp_v2_beam`
+  - `config.pairs` 仍按旧 champion=`v1` 构建（各 challenger vs `v1` + anchors）。
+- 迭代口径（回合起始）：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_130613`）
+- 迭代记录：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（多来源威胁）
+  - ANTWar：`danger/reserved`（危险态保留、非危险态释放）
+
+本轮强制判读结论：
+
+1. 生产 gauntlet 对手池受 champion 切换影响（高优先级风险）：本轮生产池围绕旧 champion=`v1`，不可把跨轮 Elo 绝对值直接对比。
+2. 生产 Elo 仍是唯一权威；iter Elo 仅用于候选筛选。
+
+### 70.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 本轮目标是“减少分支与状态变量”的减法改造，与 `v66` 结构兼容。
+2. 改动尚未通过关键对手 `>55%` 门槛，不满足固化新目录的必要性。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt`。
+   - 映射：继续把 threat-source 计数作为主将 reserve floor 的高压增强信号。
+   - 代码落点：`count_threat_sources_to_cell(...)` + `apply_reserved_main_floor(...)`。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved`（危险态保留，安全态释放）。
+   - 映射：继续保留 `apply_reserved_main_floor(...)` + `apply_reserved_release_floor(...)` 软约束，不回到硬截断动作数。
+   - 代码落点：主循环与逐步决策中的 reserve 计算链路。
+
+本轮核心简化（算法级）：
+
+1. 在 `select_best_move_overlay(...)` 中删除 pressure-loss 次级惩罚链路：
+   - 删除 `base_enemy_main_pressure`、`pressure_loss/allowed_pressure_loss`；
+   - 删除对应 veto 分支与 penalty 计分分支。
+2. 保留主约束：
+   - `base_reply_veto`（敌方回复上限）；
+   - `dominance` 否决；
+   - `hard_cutoff_hit` 回退。
+
+硬截止约束：
+
+1. 仍使用 `CLOCK_THREAD_CPUTIME_ID`。
+2. 仍保持单步 `<=200ms`（`kSearchStepBudgetMs=200`）与保底回退路径。
+
+### 70.3 可复现实验（已执行，隔离 scope）
+
+中止说明（记录但不纳入结论）：
+
+1. 试运行 gate（`games_per_pair=100`，`v66` vs `v64/v1/v2`，seed=20260325）耗时过长，中止。
+2. 试运行 confirm（`games_per_pair=100`，`v66` vs `v64`，seed=20260326）同样耗时过长，中止。
+
+本轮有效实验（用于结论）：
+
+- 命令：
+  - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260327`
+- 产物：
+  - 轮次：`eval_20260304_133531`
+  - 汇总：`/www/autolab/runtime/scopes/iter/eval_20260304_133531_summary.json`
+  - 明细：`/www/autolab/runtime/scopes/iter/eval_20260304_133531_matches.jsonl`
+- 结果（head-to-head）：
+  - `v66 vs v64 = 51/100`（51.0%）
+
+判读：
+
+1. 样本达到两 AI 最低可判读门槛（`>=100`），但仍低于 confirm 建议（`>=200`）。
+2. 相比上一轮 `53.0%`（200 局），本轮简化后仅 `51.0%`，未体现增益。
+3. 未达到 `>55%`，不能宣称“v66 明确优于 v64”。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source）仍有效但增益有限：在删分支后仍保持微弱正向（51%）。
+2. ANTWar 借鉴（reserved 软约束）本轮未带来额外提升：结果回落到 51%。
+
+### 70.4 回到生产口径的结论
+
+生产最新（`eval_20260304_131255`）显示：
+
+1. champion 切换为 `v2`，但对手池按旧 champion=`v1` 构建，gauntlet 漂移风险仍高。
+2. 生产中 `v66` 位次高于 `v64`，iter 本轮 `51/100` 也保持同方向（无冲突）。
+3. 但证据强度不足以给出“显著优于”结论，本轮标签维持 `neutral`（偏回落）。
+
+### 70.5 风险与下一步
+
+风险：
+
+1. `v66 vs v64` 在 51%~53% 区间震荡，接近平台期。
+2. 即使做了分支减法，单局总耗时仍偏高，导致 `>=200` confirm 成本高。
+
+下一步：
+
+1. 固定 `v66 vs v64` 先补一轮 `>=200` confirm（必要时拆分为两次 `games_per_pair=50` 同 seed 组）。
+2. 若仍在 51%~53%，考虑回滚本轮 overlay 减法，或仅在高压态保留 pressure-loss（条件启用）。
+3. 增加 `hard_cutoff_hit` 计数输出，定位真实 CPU 热点后再做剪枝。
+
+### 70.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码保留 `hard_cutoff_hit` + `CLOCK_THREAD_CPUTIME_ID`；
+   - 评测产物无逐步命中统计，无法给出精确触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 单步搜索路径仍受 `<=200ms` 硬截止保护；
+   - 风险主要在 overlay 中多次 `select_best_move_base(...)` 的累计计算量。
+3. 若有风险，下一轮降复杂度/剪枝计划：
+   - 继续收缩 overlay 候选池；
+   - 将高成本分支仅在高 danger ratio 下启用；
+   - 在不破坏强制回退路径前提下优先做分支删减。
+
+## 71. 本回合增量（2026-03-04，v66 in-place：danger-only pressure-drop veto）
+
+### 71.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_135243`）
+  - `mode=gauntlet`，`games_per_pair=6`
+  - `champion.old/new = cpp_v1_current -> cpp_v2_beam`
+  - `config.pairs` 按旧 champion=`v1` 构建（各 challenger vs `v1` + anchors）。
+- 迭代口径（回合起始）：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_133531`）
+- 迭代记录：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt` + `reserve_positions`
+  - ANTWar：`danger/reserved` 状态驱动
+
+本轮强制判读结论：
+
+1. 本轮生产 gauntlet 对手池受 champion 切换影响（高优先级风险），生产 Elo 不能跨轮直接按绝对值比较。
+2. 生产 Elo 是唯一权威；iter Elo 仅用于候选筛选。
+
+### 71.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 仍是 `v66` 内的单分支修复，结构兼容且可回滚。
+2. 本轮目标是验证“最小危险态补丁”而非形成新架构，不满足新目录必要性。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt` / `reserve_positions`（威胁来源与保留位）。
+   - 映射：继续将 threat-source 作为主将 reserve floor 增强信号，避免在高压态过度外放。
+   - 代码落点：`count_threat_sources_to_cell(...)` + `apply_reserved_main_floor(...)`。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved`（只在危险态启用更保守约束）。
+   - 映射：在 overlay 中新增 `pressure_drop_veto`，仅高压态启用；非危险态不启用。
+   - 代码落点：`OverlayTuning.pressure_drop_veto_enabled/slack` 与 `select_best_move_overlay(...)` 的单阈值 veto。
+
+本轮改动要点（简化优先）：
+
+1. 相比历史 pressure-loss 链路，仅恢复一个“高压态单阈值 veto”：
+   - 只保留 `pressure_drop > slack` 时否决；
+   - 不恢复 pressure-loss penalty 与多系数调参。
+2. 继续保留上轮的分支减法主体（没有回滚整套旧链路）。
+
+硬截止与回退：
+
+1. 保留 `CLOCK_THREAD_CPUTIME_ID` 计时。
+2. 保留 `kSearchStepBudgetMs=200` 和 `hard_cutoff_hit` 回退。
+
+### 71.3 可复现实验（已执行，隔离 scope）
+
+实验命令（两轮，累计 confirm 200 局）：
+
+1. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260330`
+2. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260331`
+
+产物：
+
+1. `eval_20260304_134431`：`v66 vs v64 = 50/100`
+2. `eval_20260304_134710`：`v66 vs v64 = 51/100`
+
+合并判读（关键对手 confirm）：
+
+1. 累计 `v66 vs v64 = 101/200`（50.5%）。
+2. 样本达到 `>=200`，可用于 confirm 结论。
+3. 相比前次 `106/200`（53.0%）出现回落，且远低于 `>55%` 判优阈值。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source reserve）仍保证“不过度冒进”，但未带来对 `v64` 的强优势。
+2. ANTWar 借鉴（danger-only veto）成功保持了低复杂度危险态约束，但胜率未提升（50.5%）。
+
+### 71.4 回到生产口径的结论
+
+生产最新（`eval_20260304_134253`）显示：
+
+1. champion 从 `v2` 切到 `v1`，且 `pairs` 仍围绕旧 champion=`v2`，gauntlet 口径漂移风险持续存在。
+2. 生产中 `v66` 仍略高于 `v64`，iter confirm（101/200）方向不冲突但强度很弱。
+3. 本轮不支持“v66 明显优于 v64”结论，标签维持 `neutral`（本轮改动无增益）。
+
+### 71.5 风险与下一步
+
+风险：
+
+1. `v66 vs v64` 在 50%~53% 区间震荡，已表现为平台期。
+2. overlay 分支虽简化，但对强对位的收益不足，属于“复杂度下降但强度未升”。
+
+下一步：
+
+1. 回滚本轮 `pressure_drop_veto`，与当前版做同口径 A/B（各 100 局）验证是否纯噪声。
+2. 若仍平台，转向固定池大样本 Elo（`>=1000`）评估整体稳定排序，不再在 `v64` 单对位过拟合。
+3. 加入 `hard_cutoff_hit` 计数输出，量化 CPU 热点后再做下一步剪枝。
+
+### 71.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍保留 `hard_cutoff_hit` + `CLOCK_THREAD_CPUTIME_ID`；
+   - 评测结果文件没有逐步命中计数，无法精确统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 单步仍有 `<=200ms` 硬截止保护；
+   - 风险点在 overlay 内多次 base move 求解的累计开销。
+3. 若有风险，下一轮降复杂度/剪枝计划：
+   - 继续减小 overlay 候选池；
+   - 仅在高 danger ratio 保留高成本分支；
+   - 优先删分支而非新增补丁。
+
+## 72. 本回合增量（2026-03-04，v66 in-place：overlay 仅危险态启用）
+
+### 72.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_134253`）
+  - `mode=gauntlet`，`games_per_pair=6`
+  - `champion.old/new = cpp_v2_beam -> cpp_v1_current`
+  - `config.pairs` 按旧 champion=`v2` 构建（各 challenger vs `v2` + anchors）。
+- 迭代口径（回合起始）：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_134710`）
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt` / `reserve_positions`
+  - ANTWar：`danger/reserved` 状态驱动
+
+本轮强制判读结论：
+
+1. gauntlet 对手池受 champion 切换影响（高优先级风险），生产 Elo 不能跨轮按绝对值横比。
+2. 生产 Elo 是唯一权威；iter Elo 仅用于候选筛选。
+
+### 72.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 继续在 `v66` 上做小步可回滚改造，结构兼容。
+2. 改造目标是进一步简化策略路径，不涉及新架构固化。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt` / `reserve_positions`。
+   - 映射：继续保留 threat-source 驱动的 reserve floor，维持高压态防线。
+   - 代码落点：`count_threat_sources_to_cell(...)` + `apply_reserved_main_floor(...)`。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved`（危险态才进入保守控制）。
+   - 映射：overlay 策略改为“仅高风险启用”，非危险态直接回退 base move。
+   - 代码落点：`choose_overlay_tuning(...)` 在 `!high_risk` 时 `tuning.enabled=false` 直接返回。
+
+本轮核心简化：
+
+1. 删除原“非高压态 conservative overlay”整段参数与分支。
+2. 保留高压态 overlay（含单阈值 `pressure_drop_veto`）与 base 回退。
+3. 有效减少非高压局面的状态变量与补丁层数。
+
+硬截止与回退：
+
+1. 保留 `CLOCK_THREAD_CPUTIME_ID`。
+2. 保留 `kSearchStepBudgetMs=200` 与 `hard_cutoff_hit` 回退路径。
+
+### 72.3 可复现实验（已执行，隔离 scope）
+
+实验命令（两轮累计 confirm 200 局）：
+
+1. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260332`
+2. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260333`
+
+产物与结果：
+
+1. `eval_20260304_135424`：`v66 vs v64 = 55/100`
+2. `eval_20260304_135654`：`v66 vs v64 = 56/100`
+3. 合并：`v66 vs v64 = 111/200`（55.5%）
+
+判读：
+
+1. 累计样本 `>=200`，满足 confirm 门槛。
+2. 对 `v64` 达到 `>55%`，满足“新版本优于该单一老版本（k=1）”的门槛条件。
+3. 该结论仅对 `v64` 成立，尚不能外推到 `v1/v2/v53`。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source reserve）与 ANTWar 借鉴（danger-only 控制）组合在本轮恢复了对 `v64` 的有效优势（111/200）。
+2. 证据为两次独立 seed 的稳定正向（55%、56%）。
+
+### 72.4 回到生产口径的结论
+
+生产最新（`eval_20260304_135243`）显示：
+
+1. champion 切换与对手池漂移风险仍在（旧 champion=`v1` 池）。
+2. 生产里 `v66` 略高于 `v64`，与本轮 iter confirm（55.5%）方向一致，无冲突。
+3. 本轮可给出“`v66` 相对 `v64` 有效优势”的结论，但不宣称对多基线全面领先。
+
+### 72.5 风险与下一步
+
+风险：
+
+1. 当前仅完成对 `v64` 的 `>=200` confirm，关键基线 `v1/v2` 仍缺同量级验证。
+2. gauntlet champion 切换仍会造成生产 Elo 绝对值漂移。
+
+下一步：
+
+1. 按 gate 顺序补 `v66 vs v1`、`v66 vs v2` 各 `>=100`（建议继续两轮 `50+50`）。
+2. 若两者都接近或超过 55%，再进入固定池大样本 Elo（`>=1000`）确认稳定排名。
+3. 在代码中增加 `hard_cutoff_hit` 计数日志，量化 CPU 热点。
+
+### 72.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码路径保留 `hard_cutoff_hit` + `CLOCK_THREAD_CPUTIME_ID`；
+   - 评测产物不含逐步命中计数，无法精确统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 单步仍受 `<=200ms` 硬截止保护；
+   - 风险主要在高压态 overlay 的多次候选评估累计。
+3. 若有风险，下一轮降复杂度/剪枝计划：
+   - 继续压缩高压态候选池；
+   - 仅在 threat-source 高阈值时启用最贵分支；
+   - 保持“非危险态直接 base”的简化主线。
+
+## 73. 本回合增量（2026-03-04，v66 in-place：非危险态直回 base + v1/v2 confirm）
+
+### 73.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_141016`）
+  - `mode=gauntlet`，`games_per_pair=1`，`rating_mode=cumulative`
+  - `champion.old/new = cpp_v1_current -> cpp_v66_generals_weapon_econ`
+  - `config.pairs` 仍按旧 champion=`v1` 构建（各 challenger vs `v1` + anchors）。
+- 迭代口径（回合起始）：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_141535`）
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt` / `reserve_positions`
+  - ANTWar：`danger/reserved` 状态驱动
+
+本轮强制判读结论：
+
+1. gauntlet 对手池受 champion 切换影响（高优先级风险）依旧成立。
+2. 生产 Elo 为唯一权威；iter Elo 仅作候选筛选与直接对战验证。
+
+### 73.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 本轮是“继续减分支”的小步修复，与现有 `v66` 完全兼容。
+2. 属于可回滚调优，不需要新目录固化。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt` + `reserve_positions`（威胁来源与保留位）。
+   - 映射：继续用 threat-source 强化主将 reserve floor。
+   - 代码落点：`count_threat_sources_to_cell(...)` + `apply_reserved_main_floor(...)`。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved`（仅危险态进入保守控制）。
+   - 映射：overlay 在非高压态直接禁用，回退 base chooser；危险态才启用 overlay/veto。
+   - 代码落点：`choose_overlay_tuning(...)` 中 `!high_risk => tuning.enabled=false`。
+
+本轮简化收益：
+
+1. 删除非危险态整段 conservative overlay 分支，减少状态与参数耦合。
+2. 仅保留高压态 overlay（含 `pressure_drop_veto`），保持关键防守控制。
+
+硬截止与回退：
+
+1. 保留 `CLOCK_THREAD_CPUTIME_ID`。
+2. 保留 `kSearchStepBudgetMs=200` 与 `hard_cutoff_hit`。
+
+### 73.3 可复现实验（已执行，隔离 scope）
+
+实验命令（两轮，均脚本入口 + 14 并发）：
+
+1. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam --seed 20260334`
+2. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam --seed 20260335`
+
+产物与分轮结果：
+
+1. `eval_20260304_140823`：vs `v1` `79/100`，vs `v2` `77/100`
+2. `eval_20260304_141535`：vs `v1` `80/100`，vs `v2` `77/100`
+
+合并（confirm 级）：
+
+1. `v66 vs v1 = 159/200`（79.5%）
+2. `v66 vs v2 = 154/200`（77.0%）
+3. 结合上一轮已完成的 `v66 vs v64 = 111/200`（55.5%）
+
+判读：
+
+1. 对 `v1/v2/v64` 三个关键老版本均满足 `>=200` 且 `>55%`。
+2. 按当前门槛，可宣称 `v66` 对这 3 个目标老版本具备明确优势（直接对战口径）。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source reserve）与 ANTWar 借鉴（danger-only 控制）在本轮继续生效，且对 `v1/v2` 出现强优势。
+2. 非危险态直回 base 的减法没有削弱关键对位，反而使 gate/confirm 结果更稳定。
+
+### 73.4 回到生产口径的结论
+
+生产最新（`eval_20260304_141016`）显示：
+
+1. champion 已切到 `v66`，方向与本轮 iter 直接对战结论一致。
+2. 但生产 gauntlet 仍受 champion 切换和对手池漂移影响，绝对 Elo 不做跨轮硬比较。
+3. 本轮给出“`v66` 相对 `v1/v2/v64` 的直接对战优势成立”结论；更大范围排序仍需固定池大样本验证。
+
+### 73.5 风险与下一步
+
+风险：
+
+1. 生产口径当前 `games_per_pair=1` 且 `rating_mode=cumulative`，短期波动和历史累计混合，需要谨慎解读绝对 Elo。
+2. 虽然关键三对位已过门槛，但对更老版本全集的泛化仍待固定池验证。
+
+下一步：
+
+1. 进入固定池大样本 Elo（`>=1000`）验证 `v66` 排名稳定性（iter scope）。
+2. 若稳定榜首，再考虑固化新快照或推广为默认候选。
+3. 增加 `hard_cutoff_hit` 计数输出，量化 CPU 热点并进一步缩减高压态候选集。
+
+### 73.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码保留 `hard_cutoff_hit` + `CLOCK_THREAD_CPUTIME_ID`；
+   - 当前评测产物无逐步触发计数，无法精确统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 单步仍受 `<=200ms` 硬截止保护；
+   - 风险集中在高压态 overlay 的累计评估开销。
+3. 若有风险，下一轮降复杂度/剪枝计划：
+   - 继续减少高压态候选池；
+   - 提高高成本分支触发阈值；
+   - 保持“非危险态直接 base”主路径不回退。
+
+## 74. 本回合增量（2026-03-04，v66 in-place：threat-origin 驱动 overlay 启停简化）
+
+### 74.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_144413`）
+  - `mode=adaptive`，`games_per_pair=1`，`rating_mode=cumulative`
+  - `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`（本轮未发生 champion 切换）
+  - `config.pairs` 为 adaptive 抽样对阵池，不是固定 gauntlet 全量池。
+- 迭代口径（回合起始并最终）：`/www/autolab/runtime/scopes/iter/latest.json`（先 `eval_20260304_142919`，后更新到 `eval_20260304_144359`）
+- 迭代记录：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt` / `reserve_positions`
+  - ANTWar：`global_state` / `danger` / `reserved`
+
+本轮强制判读结论：
+
+1. 生产 Elo 仍是唯一权威；iter Elo 仅用于候选筛选与对战验证。
+2. 本轮 `champion.old == champion.new`，对手池未受到“champion 切换”扰动；但生产为 adaptive 抽样池，跨 tag Elo 绝对值仍不可直接横比。
+
+### 74.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 仅在 `v66` 上做小步门控简化，和现有结构兼容。
+2. 改动是“减少无效 overlay 分支”，属于可回滚微改，不需要新目录固化。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt`（威胁来源数量）。
+   - 映射：把“主将威胁来源数量”作为 overlay 启停和候选池规模的一级信号，避免在低来源压力时展开额外分支。
+   - 代码落点：`choose_overlay_tuning(...)` 中新增 `main_threat_sources = count_threat_sources_to_cell(...)`，并据此约束 `pool_limit` 与 `high_risk` 判定。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`global_state/danger/reserved`（危险态才进入保守控制）。
+   - 映射：仅在“近身对抗 + 足够危险（danger 或 source_alert）”时启用 overlay；其余局面保持 base 路径。
+   - 代码落点：`high_risk = main_danger>=0.55 || (duel_close && (main_danger>=0.40 || source_alert))`。
+
+本轮简化收益（结构层面）：
+
+1. 减少“仅因主将接近就开启 overlay”的误触发，降低状态分支数量。
+2. 低威胁来源场景下收缩候选池，降低高成本评估路径触发概率。
+
+硬截止与回退（保持不变）：
+
+1. `CLOCK_THREAD_CPUTIME_ID` CPU 计时口径。
+2. `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退路径。
+
+### 74.3 可复现实验（已执行，隔离 scope）
+
+实验命令（两轮 seed，均脚本入口 + 14 并发）：
+
+1. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam --seed 20260336`
+2. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam --seed 20260337`
+
+产物与结果：
+
+1. `eval_20260304_142919`：vs `v1` `83/100`，vs `v2` `72/100`
+2. `eval_20260304_144359`：vs `v1` `82/100`，vs `v2` `71/100`
+
+合并（confirm 级）：
+
+1. `v66 vs v1 = 165/200`（82.5%）
+2. `v66 vs v2 = 143/200`（71.5%）
+
+判读：
+
+1. 两个关键对手均满足 `>=200` 且 `>55%`。
+2. 相比上一轮 `v66`（`v1=159/200`, `v2=154/200`），本轮对 `v1` 略升、对 `v2` 略降，属于“结构简化后的混合变化”，先记为稳定正优势而非显著提升。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-origin）生效证据：引入来源计数后，仍保持对 `v1/v2` 大样本正优势（`165/200`、`143/200`）。
+2. ANTWar 借鉴（danger-only）生效证据：在减少 overlay 触发范围后，关键对位未崩塌，说明“危险态控制、平稳态简化”可行。
+
+### 74.4 回到生产口径的结论
+
+生产最新（`eval_20260304_144413`）显示：
+
+1. 当前为 adaptive 对阵口径，`champion` 未切换（`v66 -> v66`），本轮不存在 champion 切换导致的对手池突变。
+2. 因 production 非固定池、且 cumulative 累计，绝对 Elo 不用于跨 tag 直接强弱判定。
+3. 本轮可确认的强结论仍来自 iter 直接对战：`v66` 对 `v1/v2` 均在 `>=200` 样本下显著领先。
+
+### 74.5 风险与下一步
+
+风险：
+
+1. 本轮只复验了 `v1/v2`，尚未同步复验 `v64` 是否维持此前 `>55%` 的 confirm 水平。
+2. 生产 adaptive 池会持续变动，不能把单轮 production 排名当作稳定排序结论。
+
+下一步：
+
+1. 补做 `v66 vs v64` 复验（建议 `200` 局）检查本轮简化是否影响该关键对位。
+2. 进入固定池大样本 Elo（`>=1000`）验证 `v66` 的稳定榜首性。
+3. 加入 `hard_cutoff_hit` 计数输出，量化真实触发频率，继续压缩高压态高成本分支。
+
+### 74.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍含 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 当前评测产物无逐步计数，无法精确统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 单步有硬截止兜底；
+   - 风险仍集中在高压态 overlay 的候选评估累计开销。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 在高压态继续按 `threat-source` 收缩候选池；
+   - 仅对 threat/source 同时高的局面放宽分支；
+   - 保持非危险态走 base 的简化路径。
+
+## 75. 本回合增量（2026-03-04，v66 in-place：复用 step danger/source，补 v64 confirm）
+
+### 75.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_145725`）
+  - `mode=adaptive`，`games_per_pair=6`，`rating_mode=cumulative`
+  - `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v64_generals_rebuild`（已发生晋升切换）
+  - `config.pairs` 为 adaptive 抽样池（含 `cpp_v64_generals_rebuild vs cpp_v66_generals_weapon_econ` 等）。
+- 迭代口径：`/www/autolab/runtime/scopes/iter/latest.json`（本轮结束为 `eval_20260304_145932`）
+- 迭代记录：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt` / `reserve_positions`
+  - ANTWar：`global_state` / `danger` / `reserved`
+
+本轮强制判读结论：
+
+1. 生产 Elo 仍是唯一权威；iter Elo 仅用于候选筛选。
+2. 本轮已发生 `champion` 切换；由于生产是 adaptive 而非 gauntlet，风险形态不是“gauntlet 固定池切换高危”，但 production 排序口径已受对局抽样与晋升反馈影响，需以 head-to-head 复验校准。
+
+### 75.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 本轮是“减少重复扫描/减少状态分支”的小步改造，与 `v66` 结构兼容。
+2. 不涉及架构替换，属于可回滚优化，按规则保持 in-place。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt`（威胁来源数是决策主信号）。
+   - 映射：把每步主将 `threat_sources` 当成主输入，复用到 overlay 调参，避免重复重新扫描。
+   - 代码落点：`choose_overlay_tuning(...)` 改为直接接收 `main_danger/main_threat_sources`；主循环计算后复用。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`global_state/danger/reserved`（危险态才启用保守控制）。
+   - 映射：仅在 `reserve_gate` 或 `duel_close` 时计算 threat-sources，其余平稳态不展开额外 threat-source 扫描。
+   - 代码落点：主循环新增 `reserve_gate || duel_close_step` 触发条件。
+
+本轮简化收益：
+
+1. 去掉 `choose_overlay_tuning` 内部每步重复 `count_threat_sources_to_cell(...)`。
+2. 减少一层“调参函数内再判态再扫描”的分支嵌套，主循环单点产出并复用。
+
+硬截止与回退（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID` 计时口径。
+2. `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退。
+
+### 75.3 可复现实验（已执行，隔离 scope）
+
+实验命令（脚本入口，14 并发，两轮 confirm）：
+
+1. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260338`
+2. `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260339`
+
+产物与结果：
+
+1. `eval_20260304_145707`：`v66 vs v64 = 57/100`
+2. `eval_20260304_145932`：`v66 vs v64 = 57/100`
+
+合并（confirm 级）：
+
+1. `v66 vs v64 = 114/200`（57.0%）
+
+判读：
+
+1. 满足 `>=200` 且 `>55%`，本轮确认 `v66` 对 `v64` 直接对战优势成立。
+2. 结合前一轮已确认结果：`v66 vs v1 = 165/200`、`v66 vs v2 = 143/200`，当前 `v1/v2/v64` 三关键基线均满足门槛。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source 作为主信号）在本轮“减少重复扫描”后仍保持对 `v64` 稳定优势（两 seed 同为 `57/100`）。
+2. ANTWar 借鉴（danger-only）在本轮依然成立：仅危险相关场景计算 threat-source，未导致关键对位退化。
+
+### 75.4 回到生产口径的结论
+
+生产最新（`eval_20260304_145725`）显示：
+
+1. champion 从 `v66` 切到 `v64`，与本轮 iter 直接对战（`v66` 对 `v64` `114/200`）方向冲突。
+2. 生产当前为 adaptive 抽样池，不能以单轮 Elo 绝对值替代固定池强度结论。
+3. 按“生产口径冲突需做 head-to-head 复验”的规则，本轮已补做并满足 `>=100`（实际 `200`）复验样本；在直接对战口径下仍判定 `v66` 对 `v64` 为正优势。
+
+### 75.5 风险与下一步
+
+风险：
+
+1. 本轮确认的是 `v64` 对位；尽管 `v1/v2` 已有 confirm，仍缺“固定池 >=1000 局 Elo”级别稳定排序证据。
+2. 生产已出现 `v66 -> v64` 晋升，与近期 head-to-head 结论冲突，短窗排序波动风险上升。
+
+下一步：
+
+1. 执行固定对手池大样本 Elo（`>=1000` 局）验证 `v66` 稳定榜首性。
+2. 若排序稳定，再考虑是否固化快照；否则继续优先做简化剪枝而不是叠补丁。
+3. 可选补充：为 `hard_cutoff_hit` 增加计数输出，量化真实命中率。
+
+### 75.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍有 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 评测产物无逐步计数，无法精确统计命中次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 单步存在硬截止兜底；
+   - 风险主要来自高压态 overlay 候选累计评估。
+3. 若有风险，下一轮降复杂度/改进剪枝：
+   - 继续限定 threat-source 计算触发条件；
+   - 优先复用 step 级中间量，避免函数内重复扫描；
+   - 保持非危险态直接走 base 的主路径。
+
+## 76. 本回合增量（2026-03-04，v66 in-place：duel_close 低危险态跳过 threat-source 扫描）
+
+### 76.1 回合起始状态与必做判读
+
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_151618`）
+  - `mode=adaptive`，`games_per_pair=6`，`rating_mode=cumulative`
+  - `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`
+  - `config.pairs` 为 adaptive 抽样池（包含多组 `v66` 与历史基线对局）。
+- 迭代口径（回合起始）：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_145932`）
+- 迭代记录：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（多来源威胁计数）
+  - ANTWar：`danger/reserved`（危险态才进入保守控制）
+
+本轮强制判读结论：
+
+1. 生产 Elo 仍是唯一权威；iter Elo 仅用于候选筛选。
+2. 当前生产是 adaptive（非 gauntlet），且 `champion` 本轮未切换；不存在“gauntlet champion 切换导致对手池突变”的高优先级风险场景。
+
+### 76.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 源码：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 本轮是“继续减分支/减重复扫描”的微改，结构与 `v66` 完全兼容。
+2. 属于可回滚简化优化，不需要新目录固化。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt`。
+   - 映射：保留 threat-source 作为高价值信号，但不在低信息量场景盲扫。
+   - 代码落点：step 循环中 `overlay_source_gate` 控制 `count_threat_sources_to_cell(...)` 触发。
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved`。
+   - 映射：`duel_close` 且 `danger<0.40` 时不进入来源扫描，只有显式危险才进入保守分支。
+   - 代码落点：`overlay_source_gate = reserve_gate || (duel_close_step && step_main_danger >= 0.40)`。
+
+本轮简化收益（预期）：
+
+1. 减少近身但低危险局面的 threat-source 重复扫描。
+2. 进一步压缩“低风险触发保守分支”的状态空间。
+
+硬截止与回退（保持不变）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`。
+2. `kSearchStepBudgetMs=200` + `hard_cutoff_hit`。
+
+### 76.3 可复现实验（已执行，隔离 scope）
+
+实验命令：
+
+1. gate（关键三基线）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260340`
+2. 冲突补复验（v64）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260341`
+
+产物与结果：
+
+1. `eval_20260304_152053`（gate）
+   - `v66 vs v1 = 80/100`
+   - `v66 vs v2 = 73/100`
+   - `v66 vs v64 = 46/100`
+2. `eval_20260304_152333`（v64 复验）
+   - `v66 vs v64 = 59/100`
+
+合并判读（当前代码）：
+
+1. `v66 vs v64 = 105/200`（52.5%）
+2. `v66 vs v1/v2` 仅有本轮 gate 的 `100` 局样本（正向，但尚未完成本轮代码版本的 `200` 局 confirm）。
+
+结论：
+
+1. 本轮简化在 `v64` 对位上未达到 `>55%` 门槛（`52.5%`），不能宣称当前代码“优于 v64”。
+2. 相比上一轮（上一版代码）`v66 vs v64 = 114/200`，本轮 tweak 出现不稳定回落，按本轮改动标签更接近 `neutral/regression`。
+
+借鉴点是否生效（证据）：
+
+1. Generals 借鉴（threat-source）仍可提供判别，但“过度收紧触发”导致对 `v64` 稳定性下降（`46/100` 与 `59/100` 分化）。
+2. ANTWar 借鉴（danger-only）方向成立，但阈值 `0.40` 可能过强，导致近身低危险阶段漏掉必要 threat-source 信息。
+
+### 76.4 回到生产口径的结论
+
+生产最新（`eval_20260304_151618`）显示：
+
+1. `mode=adaptive`，`champion` 本轮未切换。
+2. 生产抽样池不能替代固定池/直接对战判优。
+3. 本轮关键判优仍以 iter head-to-head 为准：当前 tweak 下 `v66 vs v64` 仅 `52.5%`，不能作为“明显更强”结论。
+
+### 76.5 风险与下一步
+
+风险：
+
+1. 本轮新增阈值使 `v64` 对位出现明显不稳定（两 seed 分化大）。
+2. 若继续沿用该阈值，可能在近身低危险态漏判 threat-source，造成中盘决策偏差。
+
+下一步：
+
+1. 回调该阈值（例如恢复 `duel_close` 即可触发来源扫描，或降到 `>=0.30`）并做 `v64` `200` 局 confirm。
+2. 对当前代码再补 `v1/v2` 各 `>=100`（建议补到 `200`）后再给版本级判优。
+3. 推进固定池 `>=1000` 局 Elo，避免 adaptive 抽样噪声干扰版本结论。
+
+### 76.6 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码路径仍有 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 当前评测产物无逐步触发计数，无法给出精确次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 单步有硬截止兜底；
+   - 风险仍在高压态 overlay 多候选累计评估。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 优先调回“duel_close 来源扫描”阈值而非新增更多补丁；
+   - 继续复用 step 中间量，避免函数内重复扫描；
+   - 保持非危险态直接 base 主路径。
+
+## 77. 本回合增量（2026-03-04，v66 in-place：threat-source 饱和计数 + 双层触发）
+
+### 77.1 回合起始状态与必做判读
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_155621`）
+  - `mode=adaptive`，`games_per_pair=6`
+  - `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`
+  - `config.pairs` 为 adaptive 抽样池（本轮包含多条与 `v66` 相关对局）
+- 迭代口径（隔离）：`/www/autolab/runtime/scopes/iter/latest.json`
+- 回放分析：
+  - `runtime/scopes/iter/replay_analysis/latest.json`
+  - `docs/replay_analysis/iter_latest.md`（已同步为本轮最新 replay 分析）
+- 对局索引：iter `latest.json.paths.matches`
+  - `/www/autolab/runtime/scopes/iter/eval_20260304_154813_matches.jsonl`
+  - 每行含 `replay_file`，可直开原始回放逐帧核对
+- 迭代记录：`/www/docs/round2_autolab_and_iterations.md`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`
+  - ANTWar：`danger` / `reserved` / `global_state`
+
+本轮强制判读结论：
+
+1. 生产 Elo 仍是唯一权威；iter Elo 仅用于候选筛选。
+2. 本轮生产为 `adaptive`（非 gauntlet），且 `champion` 未切换，因此不存在“gauntlet champion 切换导致对手池突变”的高优先级风险场景；但 adaptive 抽样池下 Elo 绝对值仍不可跨轮直接当强度结论。
+
+### 77.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 改动是对 `v66` 现有 threat-source 流程的简化重构，和当前架构兼容；
+2. 属于“小步可回滚”改造，不需要新目录固化。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt` 的“来源计数作为核心信号”
+   - 映射：来源数在达到策略阈值后不需要继续累计，采用饱和计数减少无效扫描
+   - 代码落点：`count_threat_sources_to_cell(..., cap)`，达到 `cap` 立即返回
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`danger/reserved` 的危险态分层控制
+   - 映射：`reserve_gate` 用高精度探测（cap=4），`duel_close` 中风险用轻量探测（cap=2）
+   - 代码落点：step 循环的双层触发
+     - `reserve_gate -> cap=4`
+     - `duel_close && step_main_danger>=0.28 -> cap=2`
+
+本轮关键机制变化：
+
+1. 新增常量：
+   - `kThreatSourceProbeCap=4`
+   - `kThreatSourceAlertCap=2`
+   - `kDuelCloseSourceProbeDanger=0.28`
+2. `count_threat_sources_to_cell` 改为带 `cap` 的饱和计数并早停；
+3. 主循环把“是否扫描来源数”从单阈值改为双层触发，减少低价值重复扫描分支。
+
+硬截止与回退（保持）：
+
+1. CPU 计时口径仍是 `CLOCK_THREAD_CPUTIME_ID`
+2. 搜索单步硬截止 `kSearchStepBudgetMs=200`
+3. 截止后保底回退仍依赖 `hard_cutoff_hit` 路径
+
+### 77.3 可复现实验（隔离 scope，脚本入口）
+
+执行命令：
+
+1. gate（关键三基线）  
+   `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260342`
+2. confirm（关键对手 v64）  
+   `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260343`
+
+结果：
+
+1. `eval_20260304_154112`（gate）
+   - `v66 vs v1 = 80/100`
+   - `v66 vs v2 = 73/100`
+   - `v66 vs v64 = 46/100`
+2. `eval_20260304_154813`（confirm）
+   - `v66 vs v64 = 59/100`
+3. 合并关键对位（本轮代码）：
+   - `v66 vs v64 = 105/200`（52.5%）
+
+判读：
+
+1. `v66 vs v64` 达到 `200` 样本，但未超过 `55%`，不能宣称当前改动后 `v66` 明显优于 `v64`。
+2. `v66 vs v1/v2` 本轮仍为 gate 正向（各 `100` 局）。
+
+### 77.4 Replay 分析与原始回放核对
+
+回放分析文件（本轮已更新到最新 tag）：
+
+1. `runtime/scopes/iter/replay_analysis/latest.json`（`tag=eval_20260304_154813`）
+2. `docs/replay_analysis/iter_latest.md`（已同步）
+
+聚合证据（`154813`）：
+
+1. `v66`：`win_rate=0.59`，`no_effect_rate=0.0661`，`avg_actions=247.72`
+2. `v64`：`win_rate=0.41`，`no_effect_rate=0.0658`，`avg_actions=254.18`
+3. 动作结构：`v66` 较少 `general_skill/call_general`，较多 `general_upgrade`，说明本轮改动未把策略推向更重技能分支。
+
+对局索引与逐帧核对（直接从 `paths.matches` 的 `replay_file` 打开）：
+
+1. 索引文件：`/www/autolab/runtime/scopes/iter/eval_20260304_154813_matches.jsonl`
+2. 负例核对（`seed=20260343`，`v66` 负，`max_round=66`）  
+   回放：`.../20260304_154813_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260343_rounds-180.jsonl`  
+   turning point（analysis）：`round 39`，`delta_army_lead_p0=-11`  
+   帧动作核对：`round 38-40` 中 `v66` 出现升级/将军位移动作并行，`v64` 连续前线推进动作，负例显示中盘响应节奏仍可能偏慢。
+3. 正例核对（`seed=20261254`，`v66` 胜，`max_round=180`）  
+   回放：`.../20260304_154813_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261254_rounds-180.jsonl`  
+   turning point（analysis）：`round 167`，`delta_army_lead_p0=-108`（对 p0 不利，即对 p1 的 v66 有利）  
+   帧动作核对：`round 166-168` 中 `v66` 持续多路兵线动作并在后续回合叠加召将，形成后段兵力摆动放大。
+
+回放结论（必须项）：
+
+1. 本轮改动没有引入明显“无效动作率激增”问题（`no_effect_rate` 基本与 v64 持平）。
+2. 但负例样本显示中盘压力交换仍不稳，和 `v66 vs v64 = 105/200` 未达判优门槛一致。
+
+### 77.5 回到生产口径的结论
+
+生产最新：`/www/autolab/runtime/latest.json`（`eval_20260304_153152`）
+
+1. `mode=adaptive`，`champion.old/new = v66 -> v66`
+2. 本轮生产未出现 champion 切换导致的对手池突变风险（gauntlet 高危场景不触发）
+3. 最终判优仍以本轮 iter head-to-head 大样本为依据：当前改动下对 `v64` 为 `52.5%`，不满足“明显更强”标准。
+
+### 77.6 风险与下一步
+
+风险：
+
+1. 双层触发虽降低了扫描成本，但对 `v64` 关键对位没有形成净增益（仍 `52.5%`）。
+2. 中盘高压交换段仍有被 `v64` 反压样本（回放 seed `20260343`）。
+
+下一步：
+
+1. 在不增加分支复杂度前提下，优先回调 `duel_close` 轻量探测触发条件（例如仅调单阈值），并再做 `v64` `200` 局 confirm。
+2. 若仍不稳定，考虑回退到上一版 `duel_close` 探测门控，保持“饱和计数早停”这项简化收益。
+3. 补充固定池大样本 Elo（`>=1000` 局）验证，避免只看单轮 gauntlet/adaptive 信号。
+
+### 77.7 回合末强制自检
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍包含 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 当前评测产物无逐步硬截止计数，无法给出次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 单步有硬截止兜底；
+   - 风险主要在高压态 overlay 候选累计评估。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 保留饱和计数早停（`cap`）；
+   - 继续减少中风险态不必要来源扫描；
+   - 若收益不足，优先回退触发阈值而非叠加新分支。
+
+## 78. 本回合增量（2026-03-04，v66 in-place：duel_close 危险态滞回门控）
+
+### 78.1 回合起始状态与必做判读
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产口径：`/www/autolab/runtime/latest.json`（`eval_20260304_153152`）
+  - `mode=adaptive`，`games_per_pair=6`
+  - `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`
+  - `config.pairs` 为 adaptive 抽样池（多组历史版本对战，含部分 `v66` 对位）
+- 迭代口径（隔离）：`/www/autolab/runtime/scopes/iter/latest.json`
+- 回放分析：
+  - `runtime/scopes/iter/replay_analysis/latest.json`
+  - `docs/replay_analysis/iter_latest.md`
+- 对局索引（iter latest）：
+  - `paths.matches = /www/autolab/runtime/scopes/iter/eval_20260304_161040_matches.jsonl`
+  - 每行包含 `replay_file`，可直接逐帧核对
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（来源计数主信号）
+  - ANTWar：`global_state/danger/reserved`（危险态带滞回的状态控制）
+
+本轮强制判读结论：
+
+1. 生产 Elo 仍是唯一权威，iter Elo 仅候选筛选。
+2. 本轮生产不是 gauntlet，且 champion 未切换；不存在“gauntlet champion 切换导致对手池突变”的高优先级风险场景。
+
+### 78.2 算法级改动（已落代码，未新建版本目录）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（in-place）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 仅在现有 `v66` 逻辑上做门控简化，不涉及架构不兼容改造。
+2. 仍属可回滚的小步实验，先用 gate/confirm 决定是否保留。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`threat_origin_cnt` 作为风险输入
+   - 映射：继续保留 threat-source 饱和计数（`cap` 早停）
+   - 代码落点：`count_threat_sources_to_cell(..., cap)`
+2. ANTWar 借鉴点 -> 本游戏映射 -> 代码落点
+   - 借鉴点：`global_state/danger` 的状态滞回
+   - 映射：`duel_close` 来源扫描由“单阈值”改为“on/off 双阈值滞回锁存”
+   - 代码落点：新增 `update_duel_source_probe_latch(...)`，
+     - `danger >= 0.28` 进入锁存
+     - `danger <= 0.22` 释放锁存
+     - `reserve_gate` 强制保持锁存
+
+硬截止与回退（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`
+2. `kSearchStepBudgetMs=200`
+3. `hard_cutoff_hit` 回退路径不变
+
+### 78.3 可复现实验（隔离 scope，脚本入口）
+
+执行命令：
+
+1. gate（三基线）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260344`
+2. confirm（v64）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260345`
+
+产物与结果：
+
+1. `eval_20260304_160144`（gate）
+   - `v66 vs v1 = 80/100`
+   - `v66 vs v2 = 73/100`
+   - `v66 vs v64 = 45/100`
+2. `eval_20260304_161040`（confirm）
+   - `v66 vs v64 = 58/100`
+3. 合并关键对手：
+   - `v66 vs v64 = 103/200`（51.5%）
+
+判读：
+
+1. `v66 vs v64` 达到 `200` 局，但显著低于 `>55%` 判优线。
+2. 与上一回合 `105/200` 相比，本轮滞回门控对 `v64` 对位进一步回落（`51.5%`）。
+
+### 78.4 Replay 分析与原始回放核对
+
+回放分析（脚本自动更新）：
+
+1. `runtime/scopes/iter/replay_analysis/latest.json`：`tag=eval_20260304_161040`，`analyzed_matches=100`，`missing_replay=0`
+2. `docs/replay_analysis/iter_latest.md`：已同步为同一 tag
+
+聚合证据（`161040`）：
+
+1. `v66`：`win_rate=0.58`，`no_effect_rate=0.06510`
+2. `v64`：`win_rate=0.42`，`no_effect_rate=0.06476`
+3. 动作结构：`v66` 仍偏“更多 general_upgrade、较少 general_skill/call_general”，本轮滞回门控未改变该宏观分布。
+
+对局索引与逐帧核对（基于 `paths.matches` 的 `replay_file`）：
+
+1. 负例（seed `20261256`，`v66` 负）
+   - 回放：`.../20260304_161040_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261256_rounds-180.jsonl`
+   - turning point：round95，`delta_army_lead_p0=-76`（对 p0 不利，p0 为 v64；对应 v66 未在该点完成反压）
+   - 帧动作核对：round94-96 双方均连续兵线推进，v64 在 round95 出现技能动作 `Action=[4,17,2,6,12]` 后形成大摆动。
+2. 正例（seed `20260345`，`v66` 胜）
+   - 回放：`.../20260304_161040_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260345_rounds-180.jsonl`
+   - turning point：round101，`delta_army_lead_p0=-39`（p0 即 v66 发生一次不利摆动但后续能收回）
+   - 帧动作核对：round100-102 双方持续双线推进，说明该改动更多影响边界触发稳定性，而非改变主战术骨架。
+
+回放结论：
+
+1. 本轮没有出现“无效动作率恶化”证据。
+2. 但关键对位胜率仍回落，说明滞回门控未解决 `v64` 中盘压制问题。
+
+### 78.5 回到生产口径的结论
+
+生产最新仍是 `eval_20260304_155621`（adaptive，champion 未切换）。
+
+1. 本轮生产口径不存在 gauntlet champion 切换风险。
+2. 版本优劣结论仍以本轮 iter head-to-head 为主：`v66 vs v64 = 103/200`，不能宣称“明显更强”。
+
+### 78.6 风险与下一步
+
+风险：
+
+1. “滞回门控”降低了边界抖动，但对 `v64` 关键对位仍负向回落。
+2. 若继续叠加门控状态，可能增加策略复杂度而收益不足。
+
+下一步：
+
+1. 保留 `cap` 早停，回退滞回门控（避免补丁层增厚），再做 `v64` `200` 局 confirm。
+2. 若要继续简化路线，可改为单阈值+固定窗口（而非锁存状态）以减少状态变量。
+3. 并行准备固定池大样本 Elo（`>=1000` 局）验证稳定排序，避免小样本波动误导。
+
+### 78.7 回合末强制自检
+
+1. 是否触发搜索硬截止：
+   - 代码仍含 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 当前产物无逐步计数，无法给出命中次数。
+2. 是否存在 `>200ms` 单步 CPU 风险：
+   - 有硬截止兜底；
+   - 风险点仍在高压态 overlay 候选累计评估。
+3. 若有风险，下一轮降复杂度/剪枝：
+   - 回退本轮锁存门控，减少状态分支；
+   - 保留饱和计数早停；
+   - 优先保证关键对位稳定性，再考虑进一步省算。
+
+## 79. 自动迭代回合（v66：移除滞回锁存，改为无状态 danger 分级探测）
+
+### 79.1 先读固定目标与最新状态（按要求）
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产评测：`/www/autolab/runtime/latest.json`（当前 `eval_20260304_161620`）
+- 迭代评测：`/www/autolab/runtime/scopes/iter/latest.json`（当前 `eval_20260304_164010`）
+- 回放分析：
+  - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+  - `/www/docs/replay_analysis/iter_latest.md`
+- 对局索引：iter latest `paths.matches=/www/autolab/runtime/scopes/iter/eval_20260304_164010_matches.jsonl`，逐行含 `replay_file`。
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（来源计数）
+  - ANTWar：`global_state/danger` 分级切分（危险态切强分支，非危险态保持简单策略）
+
+生产口径必做判读（`config.pairs` + `champion.old/new`）：
+
+1. `mode=adaptive`，`games_per_pair=6`，`pairs_count=45`（抽样对手池）。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`，未发生 champion 切换。
+3. 结论：本轮不存在 gauntlet + champion 切换导致对手池突变的高优先级风险；生产 Elo 仍是唯一权威，iter Elo 仅用于候选筛选。
+
+### 79.2 算法级改动（in-place，小步简化）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（未新建目录）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 改动是对 `v66` 已有 threat-source 门控的“减状态”重构，与现结构兼容。
+2. 属于可回滚的小步验证，先过 gate/confirm 再决定是否需要快照版本。
+
+“旧 AI 借鉴点 -> 本游戏映射 -> 代码落点”链路：
+
+1. Generals 借鉴点：`threat_origin_cnt`（威胁来源计数）
+   - 映射：保留 `count_threat_sources_to_cell(..., cap)` 饱和计数与早停。
+   - 代码落点：`count_threat_sources_to_cell` + step 内 `source_probe_cap`。
+2. ANTWar 借鉴点：`global_state/danger` 分级切分（危险态走强分支）
+   - 映射：移除滞回锁存状态，改为无状态 danger 分级：
+     - `reserve_gate` -> `cap=4`
+     - `duel_close && danger>=0.28` -> `cap=2`
+     - `duel_close && danger>=0.48` -> `cap=4`（critical）
+   - 代码落点：新增 `choose_threat_source_probe_cap(...)`，删除 `update_duel_source_probe_latch(...)` 与 `duel_source_probe_latched`。
+
+CPU 硬截止（保持不变）：
+
+1. `CLOCK_THREAD_CPUTIME_ID` 计时。
+2. `kSearchStepBudgetMs=200`。
+3. `hard_cutoff_hit` 保底回退路径仍在。
+
+### 79.3 可复现实验（隔离 scope，规定脚本）
+
+执行命令：
+
+1. gate（关键三基线）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260346`
+2. confirm（关键对手 v64）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260347`
+
+产物与结果：
+
+1. `eval_20260304_163017`（gate）
+   - `v66 vs v1 = 80/100`
+   - `v66 vs v2 = 73/100`
+   - `v66 vs v64 = 47/100`
+2. `eval_20260304_164010`（confirm）
+   - `v66 vs v64 = 57/100`
+3. 合并关键对手（满足 200 局口径）：
+   - `v66 vs v64 = 104/200`（52.0%）
+
+判读：
+
+1. `v66` 对 `v1/v2` 仍稳定领先（100 局口径）。
+2. 对关键对手 `v64` 虽较上一轮（`103/200`）小幅回升到 `104/200`，但仍显著低于 `>55%` 判优线，不能宣称优于 `v64`。
+
+### 79.4 Replay 分析与原始回放核对
+
+回放分析（脚本自动更新）：
+
+1. `runtime/scopes/iter/replay_analysis/latest.json`：`tag=eval_20260304_164010`，`analyzed_matches=100`，`missing_replay=0`。
+2. `docs/replay_analysis/iter_latest.md`：已同步到同一 tag。
+
+聚合证据（`164010`）：
+
+1. `v66`：`win_rate=0.570`，`no_effect_rate=0.063`，`avg_rounds=119.1`。
+2. `v64`：`win_rate=0.430`，`no_effect_rate=0.065`，`avg_rounds=119.1`。
+3. 动作结构：`v66` 仍偏更多 `general_upgrade`、较少 `general_skill/call_general`，宏观行为骨架未变。
+
+基于 `paths.matches` 的原始回放逐帧核对（含 `replay_file`）：
+
+1. 正例：seed `20260347`（`v66` 胜）
+   - 回放：`.../20260304_164010_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260347_rounds-180.jsonl`
+   - turning point：round166，`delta_territory_lead_p0=+2`，`delta_army_lead_p0=+44`。
+   - 帧核对：round165-167 双方持续兵线推进，`v66` 在 round166 后两步推进保持压制。
+2. 负例：seed `20261265`（`v66` 负，`v66` 在 p1）
+   - 回放：`.../20260304_164017_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261265_rounds-180.jsonl`
+   - turning point：round136，`delta_army_lead_p0=+353`（`v64` 侧大摆动）。
+   - 帧核对：round135-137 出现 `v64` 连续推进后，`v66` 在同窗内防线被放大穿透。
+
+回放结论：
+
+1. 本轮改动未引入 no-effect 恶化。
+2. 但 `v64` 对位仍存在中后盘大摆动失守样本，说明“去锁存后的分级探测”仅小幅止损，未达关键对位翻正。
+
+### 79.5 本轮借鉴点是否生效（强制项）
+
+1. Generals 借鉴点（来源计数）
+   - 证据：`v1/v2` 仍分别 `80/100`、`73/100`，基础稳定性保持。
+   - 判定：`部分生效`（稳定性有效，但非关键短板）。
+2. ANTWar 借鉴点（danger 分级切分）
+   - 证据：`v64` 从上一轮合并 `103/200` 回到 `104/200`（仅 +0.5pct）。
+   - 判定：`弱生效/未达目标`（止损幅度不足以改变结论标签）。
+
+### 79.6 回到生产口径的结论
+
+生产最新：`eval_20260304_161620`（adaptive，champion 未切换）。
+
+1. 本轮生产口径无 champion 切换导致的 gauntlet 池变风险。
+2. 版本优劣结论仍以 head-to-head 样本为准：当前 `v66 vs v64 = 104/200`，不满足“明显更强”声明条件。
+
+### 79.7 风险、下一步与回合末自检
+
+风险：
+
+1. 对 `v64` 关键对位仍低于判优线，存在中后盘 swing 被放大的风险。
+2. overlay 在高压态仍可能因候选评估链路偏长而靠近 CPU 上限。
+
+下一步：
+
+1. 保持“无状态分级探测”不回退，优先在 high-risk overlay 内再做一次减支（减少 veto 叠层或收缩候选池上限）并复验 `v64` 200 局。
+2. 若下一轮仍在 `52%` 附近，考虑固定池大样本（`>=1000` 局）确认真实排序，避免局部 seed 偏差。
+
+回合末强制自检：
+
+1. 是否触发搜索时间硬截止：
+   - 代码保留 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 当前日志无逐步计数字段，无法量化触发次数。
+2. 是否存在超过 `200ms` 单步 CPU 风险点：
+   - 有硬截止兜底；
+   - 风险点仍在高压态 overlay 候选评估（多次 threat 估计 + 应手评估）。
+3. 若有风险，下一轮降复杂度/剪枝：
+   - 继续减少 high-risk 分支层数（优先删次要 veto/penalty）；
+   - 保持 threat-source 饱和早停与 base 回退路径，确保复杂度单调可控。
+
+## 80. 自动迭代回合（v66：移除 pressure_drop_veto，继续简化 high-risk overlay）
+
+### 80.1 固定目标与最新状态读取
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产评测：`/www/autolab/runtime/latest.json`（`eval_20260304_171815`）
+- 迭代评测：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_172021`）
+- 回放分析：
+  - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+  - `/www/docs/replay_analysis/iter_latest.md`
+- 对局索引：`paths.matches=/www/autolab/runtime/scopes/iter/eval_20260304_172021_matches.jsonl`（每行含 `replay_file`）
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（来源计数）
+  - ANTWar：`global_state/danger + reserved`（危险态优先，分支选择保留主干）
+
+生产口径必做判读（`config.pairs` + `champion.old/new`）：
+
+1. 当前生产是 `adaptive`，`games_per_pair=6`，`pairs_count=45`。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`，本轮 latest 内未发生 champion 切换。
+3. 结论：本轮不存在“gauntlet + champion 切换”导致对手池突变的高优先级风险；但生产 champion 已从早前 v66 变为 v64，跨 tag Elo 绝对值仍不可直接比较。
+
+### 80.2 算法级改动（in-place，减分支）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（未新建目录）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 仅删除 high-risk overlay 的次级 veto 分支，不涉及架构不兼容。
+2. 属于“减复杂度验证”，先做 gate/confirm 再决定是否固化快照。
+
+“旧 AI 借鉴点 -> 映射 -> 代码落点”：
+
+1. Generals 借鉴点：`threat_origin_cnt`
+   - 映射：继续保留 threat-source 饱和计数（`cap` 早停）作为主风险输入。
+   - 代码落点：`count_threat_sources_to_cell(..., cap)` 与 `choose_threat_source_probe_cap(...)`。
+2. ANTWar 借鉴点：`danger/reserved` 下“保留主干、减少附加分支”
+   - 映射：在已有 danger/reserve 主门控下，删除次级 `pressure_drop_veto`，避免叠补丁分支。
+   - 代码落点：移除 `OverlayTuning` 中 `pressure_drop_veto_*` 字段及 `select_best_move_overlay(...)` 对应 veto 逻辑。
+
+CPU 硬截止（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`
+2. `kSearchStepBudgetMs=200`
+3. `hard_cutoff_hit` 回退路径
+
+### 80.3 可复现实验（规定脚本）
+
+执行命令：
+
+1. gate（关键三基线）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260348`
+2. confirm（关键对手 v64）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260349`
+
+结果：
+
+1. gate `eval_20260304_170145`
+   - `v66 vs v1 = 81/100`
+   - `v66 vs v2 = 73/100`
+   - `v66 vs v64 = 47/100`
+2. confirm `eval_20260304_172021`
+   - `v66 vs v64 = 56/100`
+3. 合并关键对位（200 局）：
+   - `v66 vs v64 = 103/200`（51.5%）
+
+判读：
+
+1. `v66` 对 `v1/v2` 仍有明显优势信号。
+2. 对 `v64` 关键对位从上一回合 `104/200` 回落到 `103/200`，仍低于 `>55%` 判优线。
+
+### 80.4 Replay 分析与逐帧核对
+
+回放分析（latest=`172021`）：
+
+1. `analyzed_matches=100`，`missing_replay=0`。
+2. 聚合：
+   - `v66`：`win_rate=0.560`，`no_effect_rate=0.0642`
+   - `v64`：`win_rate=0.440`，`no_effect_rate=0.0662`
+
+原始回放逐帧证据（来自 `paths.matches` 的 `replay_file`）：
+
+1. 正例：seed `20261260`（`v66` 胜，v66 在 p1）
+   - 回放：`.../20260304_172021_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261260_rounds-180.jsonl`
+   - turning point：round19，`delta_army_lead_p0=-17`（对 p0/v64 不利，v66 受益）
+   - 帧核对：round19 v66 出现技能动作 `Action=[4,1,2,12,6]` 后继续双线推进。
+2. 负例：seed `20260358`（`v66` 负，v66 在 p0）
+   - 回放：`.../20260304_172126_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260358_rounds-180.jsonl`
+   - turning point：round131，`delta_army_lead_p0=-29`
+   - 帧核对：round131 敌方出现 `Action=[7,7,3]`（召将）后配合推进，v66 在该窗口出现兵力摆动下滑。
+
+回放结论：
+
+1. 简化未造成 no-effect 恶化。
+2. 但对 `v64` 的中盘 swing 失守样本仍存在，关键短板未修复。
+
+### 80.5 回到生产口径的结论
+
+生产 latest：`eval_20260304_171815`（adaptive，champion 稳定为 `v64`）。
+
+1. 本轮不存在 gauntlet champion 切换导致的池跳变风险。
+2. 结论仍以关键 head-to-head 为准：`v66 vs v64 = 103/200`，不能宣称“新版本优于 v64”。
+
+### 80.6 风险、下一步与回合末自检
+
+风险：
+
+1. 去掉 `pressure_drop_veto` 后，对 `v64` 对位未改善，出现小幅回落。
+2. 虽已减分支，但高压态 overlay 仍有多次 threat/应手评估，CPU 预算风险仍在。
+
+下一步：
+
+1. 不恢复整条复杂 veto 链，只考虑“单条件、单阈值”的主将近域保护剪枝（继续简化路线）。
+2. 继续按 `v64` 关键对位 200 局口径复验，避免小样本误判。
+
+回合末自检：
+
+1. 是否触发搜索硬截止：
+   - 代码仍有 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 当前日志无命中计数，无法量化触发次数。
+2. 是否存在超过 `200ms` 单步 CPU 风险点：
+   - 有硬截止兜底；
+   - 风险点在高压态 overlay 内部多次候选评估。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 仅保留单一关键剪枝，避免多层 veto 叠加；
+   - 维持 threat-source 早停与 base 回退路径。
+
+## 81. 自动迭代回合（v66：移除 tactical_escape 特例链，统一 high-risk 评分）
+
+### 81.1 固定目标与最新状态
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产评测：`/www/autolab/runtime/latest.json`（`eval_20260304_175404`）
+- 迭代评测：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_180039`）
+- 回放分析：
+  - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+  - `/www/docs/replay_analysis/iter_latest.md`
+- 对局索引：`paths.matches=/www/autolab/runtime/scopes/iter/eval_20260304_180039_matches.jsonl`（每行包含 `replay_file`）
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`
+  - ANTWar：`global_state/danger`（危险态主分支）+ `reserved`（少分支保守主干）
+
+生产口径必做判读（`config.pairs` + `champion.old/new`）：
+
+1. `mode=adaptive`，`games_per_pair=6`，`pairs_count=45`。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v64_generals_rebuild`，本轮发生 champion 切换。
+3. 风险判断：
+   - 在 gauntlet 口径下 champion 切换属于高优先级风险；
+   - 但本轮生产是 adaptive 抽样，不是 gauntlet 固定挑战池，`config.pairs` 直接由抽样列表决定；
+   - 因此“gauntlet champion 切换导致池突变”风险在本轮 production latest 不直接触发，但该切换会影响后续 gauntlet 解释，应持续警惕。
+
+### 81.2 算法级改动（in-place，继续减复杂度）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（未新建版本目录）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 改动仅在 `v66` 内部删除 tactical 特例链，不涉及架构不兼容。
+2. 属于“小步可回滚”验证，先通过 gate/confirm 再决定是否固化快照。
+
+“旧 AI 借鉴点 -> 映射 -> 代码落点”链路：
+
+1. Generals 借鉴点：`threat_origin_cnt`
+   - 映射：继续以 threat-source 饱和计数作为主风险输入，不新增额外状态。
+   - 代码落点：`count_threat_sources_to_cell(..., cap)` + `choose_threat_source_probe_cap(...)`。
+2. ANTWar 借鉴点：`global_state/danger + reserved`
+   - 映射：危险态保留主干规则，删除 tactical_escape 特例分支（少状态、少补丁）。
+   - 代码落点：删除 `is_tactical_escape_candidate(...)` 与 `tactical_*` 评分链，high-risk 统一用 `base_reply_veto + dominance + base_anchor_penalty`。
+
+CPU 硬截止（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`
+2. `kSearchStepBudgetMs=200`
+3. `hard_cutoff_hit` 回退路径
+
+### 81.3 可复现实验（规定脚本，隔离 scope）
+
+执行命令：
+
+1. gate（关键三基线）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260350`
+2. confirm（关键对手 v64）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260351`
+
+结果：
+
+1. gate `eval_20260304_174158`
+   - `v66 vs v1 = 82/100`
+   - `v66 vs v2 = 73/100`
+   - `v66 vs v64 = 48/100`
+2. confirm `eval_20260304_180039`
+   - `v66 vs v64 = 57/100`
+3. 合并关键对位（200 局）：
+   - `v66 vs v64 = 105/200`（52.5%）
+
+判读：
+
+1. `v66` 对 `v1/v2` 依旧稳健领先。
+2. `v66 vs v64` 从上一回合 `103/200` 回升到 `105/200`，但仍显著低于 `>55%` 判优线，不能宣称优于 `v64`。
+
+### 81.4 Replay 分析与逐帧核对
+
+回放分析（latest=`180039`）：
+
+1. `analyzed_matches=100`，`missing_replay=0`。
+2. 聚合：
+   - `v66`：`win_rate=0.57`，`no_effect_rate=0.0656`，`avg_rounds=114.95`
+   - `v64`：`win_rate=0.43`，`no_effect_rate=0.0661`，`avg_rounds=114.95`
+
+原始回放逐帧（由 `paths.matches` 中 `replay_file` 直接核对）：
+
+1. 正例：seed `20260351`（`v66` 胜，p0）
+   - 回放：`.../20260304_180039_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260351_rounds-180.jsonl`
+   - turning point：round120，`delta_army_lead_p0=+78`
+   - 帧核对：round119-121 双方连续兵线推进，v66 在 round120-121 形成连续增益。
+2. 负例：seed `20260353`（`v66` 负，p0）
+   - 回放：`.../20260304_180040_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260353_rounds-180.jsonl`
+   - turning point：round39，`delta_territory_lead_p0=-1`，`delta_army_lead_p0=+57`（对 p0 不利）
+   - 帧核对：round39 敌方出现技能动作 `Action=[4,1,2,7,9]` 后继续推进，v66 未完成同窗反制。
+
+回放结论：
+
+1. 删除 tactical 特例链未引入 no-effect 恶化。
+2. 关键对位仍被 `v64` 技能窗口压制，短板仍在中盘技能交换与反压节奏。
+
+### 81.5 本轮借鉴点是否生效
+
+1. Generals 借鉴点（threat-origin 饱和计数）
+   - 证据：对 `v1/v2` 维持 `82/100`、`73/100`。
+   - 判定：`部分生效`（稳态有效）。
+2. ANTWar 借鉴点（danger/reserved 主分支、减少特例）
+   - 证据：关键对位从 `103/200` 回升到 `105/200`，仅 +1.0pct。
+   - 判定：`弱生效/未达目标`（仍未翻过 `>55%`）。
+
+### 81.6 回到生产口径结论
+
+生产 latest：`eval_20260304_175404`（adaptive，champion 现为 `v64`）。
+
+1. 本轮不属于 gauntlet 切池结论场景，但 champion 切换已发生，应继续避免跨 tag Elo 绝对值比较。
+2. 最终结论仍由关键 head-to-head 给出：`v66 vs v64 = 105/200`，仍不足以宣称 `v66` 优于 `v64`。
+
+### 81.7 风险、下一步与回合末自检
+
+风险：
+
+1. 对 `v64` 关键对位仍低于判优线。
+2. 高压态 overlay 虽已减分支，但仍存在多次候选评估，CPU 上限风险依旧。
+
+下一步：
+
+1. 继续简化路线：只加一个“主将近域技能响应”单条件剪枝，避免恢复多层特例。
+2. 在当前 champion=`v64` 背景下，优先做 `v66 vs v64` 直连 200 局复验作为 gate，减少噪声。
+
+回合末自检：
+
+1. 是否触发搜索硬截止：
+   - 代码仍有 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 当前日志无命中计数，无法直接量化触发次数。
+2. 是否存在 >200ms 单步 CPU 风险：
+   - 有硬截止兜底；
+   - 风险点在 high-risk overlay 的候选评估循环。
+3. 若有风险，下一轮降复杂度/改进剪枝：
+   - 继续维持单分支剪枝，不叠加 tactical 特例；
+   - 优先保留 base fallback 与 threat-source 早停。
+
+## 82. 自动迭代回合（v66：技能窗口风险剪枝，in-place）
+
+### 82.1 固定目标与最新状态
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产评测：`/www/autolab/runtime/latest.json`（`eval_20260304_180902`）
+- 迭代评测：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_182150`）
+- 回放分析：
+  - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（`eval_20260304_182150`）
+  - `/www/docs/replay_analysis/iter_latest.md`（本轮已同步到最新 tag）
+- 对局索引：`paths.matches=/www/autolab/runtime/scopes/iter/eval_20260304_182150_matches.jsonl`（每行含 `replay_file`）
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`
+  - ANTWar：`global_state + attack_flag + enemy_emp + reserved`（时窗态切换）
+
+生产口径必做判读（`config.pairs` + `champion.old/new`）：
+
+1. 当前生产 `mode=adaptive`，`games_per_pair=6`，`pairs_count=45`；`config.pairs` 中包含 `v64-v66` 对局。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`，本轮 latest 内未发生 champion 切换。
+3. 风险判断：
+   - gauntlet 口径下，champion 切换会带来高优先级对手池变化风险；
+   - 但当前生产 latest 是 adaptive 且本 tag 内无切换，因此本轮不触发“切换致池突变”风险；
+   - 仍需避免跨 tag/跨池直接比较 Elo 绝对值。
+
+### 82.2 算法级改动（in-place，小步）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（未新建目录）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 改动只是在现有 overlay 风险门控上加单状态剪枝，不涉及架构不兼容。
+2. 属于“可回滚的小步验证”，先 gate 再决定是否继续扩展。
+
+“旧 AI 借鉴点 -> 映射 -> 代码落点”：
+
+1. Generals 借鉴点：`threat_origin_cnt`
+   - 映射：继续保留 threat-source 饱和计数作为主风险输入，避免恢复全量扫描。
+   - 代码落点：`count_threat_sources_to_cell(...)` + `choose_threat_source_probe_cap(...)`。
+2. ANTWar 借鉴点：`global_state + enemy_emp/reserved` 的“时窗态收紧”
+   - 映射：新增“敌方技能窗口（靠近我方主将）”检测，仅在该窗口对 high-risk overlay 收紧。
+   - 代码落点：
+     - `detect_enemy_skill_window_near_main(...)`
+     - `choose_overlay_tuning(..., enemy_skill_window)` 内收紧 `pool_limit/max_raw_drop/base_reply_veto_slack/dominance_threat_gain_min`
+     - step 循环传入 `step_enemy_skill_window` 给 `select_best_move_overlay(...)`
+
+CPU 硬截止（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`
+2. `kSearchStepBudgetMs=200`
+3. `hard_cutoff_hit` 回退路径
+
+### 82.3 可复现实验（规定脚本）
+
+执行命令：
+
+1. gate（关键三基线）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260352`
+
+结果（`eval_20260304_182150`，每对手 100 局）：
+
+1. `v66 vs v1 = 81/100`
+2. `v66 vs v2 = 74/100`
+3. `v66 vs v64 = 49/100`
+
+判读：
+
+1. 对 `v1/v2` 仍明显领先。
+2. 对 `v64` 回落到 49%，相对上一回合 `52.5%` 退化。
+3. 本轮对位样本达到 `>=100`，可作为二者相对强度结论；但不能据此宣称“v66 优于 v64”。
+
+### 82.4 Replay 分析与逐帧核对
+
+回放分析（latest=`182150`）：
+
+1. `analyzed_matches=300`，`missing_replay=0`，`replay_parse_errors=0`。
+2. `v66-v64` pair_stats：`v66 49/100`，`v64 51/100`，`avg_rounds=102.14`。
+3. `v66` 聚合：`win_rate=0.68`（三对手合并），`no_effect_rate=0.0610`。
+
+原始回放逐帧（由 `paths.matches` 中 `replay_file` 直接核对）：
+
+1. 正例（`v66` 胜）：seed `20263282`，`.../20260304_182712_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20263282_rounds-180.jsonl`
+   - turning point：round169，`delta_army_lead_p0=-51`（对 p1/v66 有利）
+   - 帧核对：round169 附近 `v66` 连续推进动作（如 `Action=[1,10,9,1,2]`），未见对手同窗技能反制。
+2. 负例（`v66` 负）：seed `20262370`，`.../20260304_182708_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20262370_rounds-180.jsonl`
+   - turning point：round174，`delta_army_lead_p0=-20`（对 p0/v66 不利）
+   - 帧核对：round174 对手出现技能动作 `Action=[4,16,2,14,13]`，随后跟进推进动作，`v66` 未完成反压。
+
+回放结论：
+
+1. “技能窗口收紧”方向命中现象（失败样本确有技能窗口冲击）。
+2. 但当前收紧强度不足以扭转 `v66-v64` 关键对位胜率。
+
+### 82.5 借鉴点是否生效
+
+1. Generals 借鉴点（threat-origin 饱和计数）
+   - 证据：`v66` 对 `v1/v2` 仍为 `81/100`、`74/100`。
+   - 判定：`生效（稳态对弱基线维持优势）`。
+2. ANTWar 借鉴点（时窗态收紧）
+   - 证据：`v66-v64` 本轮为 `49/100`，未改善关键对位。
+   - 判定：`未生效（方向合理但参数/触发仍不足）`。
+
+### 82.6 回到生产口径的结论
+
+生产 latest：`eval_20260304_180902`（adaptive，champion 仍为 `v64`）。
+
+1. 本轮 production latest 内无 champion 切换，且为 adaptive，不构成 gauntlet 切池结论场景。
+2. iter gate 显示 `v66-v64=49/100`，与生产 champion=`v64` 方向一致，不存在“生产与近期结论冲突”而必须补做额外复验的情况。
+3. 结论标签：本轮改动对关键对位为退化信号，不能用于晋升结论。
+
+### 82.7 风险、下一步与回合末自检
+
+风险：
+
+1. 技能窗口剪枝引入后，`v66-v64` 仍未转正且回落至 49%。
+2. overlay 仍需多次 `compute_threat + enemy/my follow`，复杂度较高。
+
+下一步：
+
+1. 保持简化路线，不再叠加新特例链；优先尝试“主将危险分数驱动的单阈值动态 `enemy_weight`”替代多参数收紧。
+2. 关键对位先按 `v66 vs v64` 做 `>=200` 局 confirm 再判断是否继续该方向。
+
+回合末自检：
+
+1. 是否触发搜索时间硬截止：
+   - 代码层面仍有 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 当前评测日志未记录命中次数，无法量化是否触发。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 有硬截止兜底；
+   - 风险点集中在 `select_best_move_overlay` 内多次候选评估与 follow-up 计算。
+3. 若有风险，下一轮降复杂度/剪枝方案：
+   - 进一步压缩高风险候选池上限，优先减少重复 threat 评估调用；
+   - 若收益不稳，回退到更短路径（更少参数的单阈值策略）。
+
+## 83. 自动迭代回合（v66：技能窗口仅作用 reserved floor，撤销 overlay 收紧）
+
+### 83.1 固定目标与最新状态
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产评测：`/www/autolab/runtime/latest.json`（`eval_20260304_191239`）
+- 迭代评测：`/www/autolab/runtime/scopes/iter/latest.json`（gate `eval_20260304_190128`，confirm `eval_20260304_192127`）
+- 回放分析：
+  - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（`eval_20260304_192127`）
+  - `/www/docs/replay_analysis/iter_latest.md`（已同步到 `192127`）
+- 对局索引：
+  - gate：`/www/autolab/runtime/scopes/iter/eval_20260304_190128_matches.jsonl`
+  - confirm：`/www/autolab/runtime/scopes/iter/eval_20260304_192127_matches.jsonl`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`
+  - ANTWar：`global_state + reserved`（危险时增保守，不在危险时扩分支）
+
+生产口径必做判读（`config.pairs` + `champion.old/new`）：
+
+1. 当前生产 latest 是 `adaptive`，`games_per_pair=6`，`pairs_count=45`。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`，本 tag 内未发生 champion 切换。
+3. `config.pairs` 本轮不含 `v64-v66` 直接对局。
+4. 判读：gauntlet 口径下“champion 切换引发对手池变化”的高优先级风险本轮不触发；但因 adaptive 抽样池不同，仍禁止跨 tag 直接比较 Elo 绝对值。
+
+### 83.2 算法级改动（in-place，简化）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（未新建版本目录）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+
+本轮未新建版本目录原因：
+
+1. 改动是对补充12的简化回收，属于同一结构内可回滚小步。
+2. 尚未通过 `v64` 关键对位的严格判优线，不满足固化新目录条件。
+
+“旧 AI 借鉴点 -> 映射 -> 代码落点”：
+
+1. Generals 借鉴点：`threat_origin_cnt`
+   - 映射：继续使用 threat-source 饱和计数维持主将风险识别。
+   - 代码落点：`count_threat_sources_to_cell(...)`、`choose_threat_source_probe_cap(...)`。
+2. ANTWar 借鉴点：`global_state/reserved`（仅在危险态保守）
+   - 映射：撤销“技能窗口收紧 overlay 参数”这条补丁链，改为技能窗口只抬升 `main_safe_reserve`。
+   - 代码落点：
+     - 保留 `detect_enemy_skill_window_near_main(...)`
+     - 新增 `apply_skill_window_reserve_floor(...)`
+     - 在 step 循环中 `apply_reserved_release_floor(...)` 之后调用该函数
+     - 删除 `enemy_skill_window` 对 `choose_overlay_tuning(...)` 与 `select_best_move_overlay(...)` 的参数穿透
+
+CPU 硬截止（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`
+2. `kSearchStepBudgetMs=200`
+3. `hard_cutoff_hit` 回退路径
+
+### 83.3 可复现实验（规定脚本）
+
+执行命令：
+
+1. gate（关键三基线）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260353`
+2. confirm（关键对手补样本）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260354`
+
+结果：
+
+1. gate `eval_20260304_190128`（每对手 100 局）
+   - `v66 vs v1 = 81/100`
+   - `v66 vs v2 = 74/100`
+   - `v66 vs v64 = 56/100`
+2. confirm `eval_20260304_192127`
+   - `v66 vs v64 = 54/100`
+3. 合并关键对位（200 局）：
+   - `v66 vs v64 = 110/200`（55.0%）
+
+判读：
+
+1. `v1/v2` 优势稳定。
+2. 关键对位从上一轮 `49/100` 明显恢复到 `56/100`（gate），但在 confirm 回落到 `54/100`。
+3. 合并为 `55.0%`，仍未满足“>55%”严格宣称线，不能宣称 `v66` 明确优于 `v64`。
+
+### 83.4 Replay 分析与逐帧核对
+
+回放分析（latest=`192127`）：
+
+1. `analyzed_matches=100`，`missing_replay=0`。
+2. `v66-v64`：`54/100`，`avg_rounds=116.84`。
+3. no-effect：`v66=0.06293`，`v64=0.06674`。
+
+原始回放逐帧（confirm tag）：
+
+1. 正例（`v66` 胜）：seed `20260354`
+   - 回放：`.../20260304_192127_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260354_rounds-180.jsonl`
+   - turning point：round122，`delta_army_lead_p0=+94`
+   - 帧核对：round122 出现对手技能动作 `Action=[4,18,2,9,9]`，v66 仍保持连续推进（前后回合 `Action=[1,11,5,2,1]` 等）。
+2. 负例（`v66` 负）：seed `20261265`
+   - 回放：`.../20260304_192127_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261265_rounds-180.jsonl`
+   - turning point：round136，`delta_army_lead_p0=+353`（对 p0/v64 有利）
+   - 帧核对：round136 出现技能动作 `Action=[4,21,2,8,9]` 后，v64 连续推进，v66 未能在相邻回合反压。
+
+回放结论：
+
+1. “技能窗口 -> reserved floor”比“技能窗口 -> overlay收紧”更稳（胜率恢复）。
+2. 但技能窗口失守样本仍存在，尚未达到稳定压制 `v64`。
+
+### 83.5 借鉴点是否生效
+
+1. Generals 借鉴点（threat-source 饱和计数）
+   - 证据：`v66` 对 `v1/v2` 维持 `81/100`、`74/100`。
+   - 判定：`生效`。
+2. ANTWar 借鉴点（危险态 reserved 主干）
+   - 证据：`v66-v64` 从补充12的 `49/100` 恢复到 gate `56/100`，但 confirm `54/100`。
+   - 判定：`部分生效（恢复但不稳定）`。
+
+### 83.6 回到生产口径的结论
+
+生产 latest：`eval_20260304_191239`（adaptive，champion 维持 `v66`）。
+
+1. 本轮 production latest 内无 champion 切换，不触发 gauntlet 切池高风险判读。
+2. 本轮迭代结论以 iter 关键对位样本为准：`v66 vs v64 = 110/200 (55.0%)`，未达到 `>55%` 声称线。
+3. 最终标签：`neutral`（较上一轮回升，但仍不足以宣称明确优势）。
+
+### 83.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v66-v64` 仍在 54~56% 区间波动，稳定性不足。
+2. overlay 计算链仍偏重，潜在 CPU 压力仍存在。
+
+下一步：
+
+1. 继续简化：尝试只用单阈值动态 `enemy_weight`（基于 `step_main_danger`），不再新增分支状态。
+2. 优先做 `v66-v64` 直连 `>=200` 局确认（固定两批 seed），再考虑是否进行更大结构改动。
+
+回合末自检：
+
+1. 是否触发搜索硬截止：
+   - 代码仍含 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`；
+   - 评测日志未输出触发次数，无法量化。
+2. 是否存在 >200ms 单步 CPU 风险：
+   - 有硬截止兜底；
+   - 风险点仍在 `select_best_move_overlay` 的多次候选评估与 follow-up 计算。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 保持“少状态 + 单阈值”策略，继续压缩 overlay 内重复评估路径；
+   - 若收益继续波动，回退到更短路径版本做对照复验。
+
+## 84. 自动迭代回合（v66：overlay 改为单一连续风险分数，补充14）
+
+### 84.1 固定目标与最新状态
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产评测：`/www/autolab/runtime/latest.json`（`eval_20260304_195549`）
+- 迭代评测：
+  - smoke：`/www/autolab/runtime/scopes/iter/eval_20260304_194044_summary.json`
+  - gate：`/www/autolab/runtime/scopes/iter/eval_20260304_194245_summary.json`
+  - confirm：`/www/autolab/runtime/scopes/iter/eval_20260304_200105_summary.json`
+  - latest：`/www/autolab/runtime/scopes/iter/latest.json`（`eval_20260304_200105`）
+- 回放分析：
+  - `python3 /www/autolab_replay_analyze.py --scope iter --latest`（已执行）
+  - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（tag=`eval_20260304_200105`）
+  - `/www/docs/replay_analysis/iter_latest.md`（已同步到 `200105`）
+- 对局索引：`/www/autolab/runtime/scopes/iter/eval_20260304_200105_matches.jsonl`
+- 旧 AI 参考：
+  - Generals：`threat_origin_cnt`（来源计数参与风险）
+  - ANTWar：`global_state/reserved`（危险态统一收紧）
+
+生产口径必做判读（`config.pairs` + `champion.old/new`）：
+
+1. 当前生产 latest 为 `adaptive`，`pairs_count=45`，且 `config.pairs` 内含 `['cpp_v64_generals_rebuild','cpp_v66_generals_weapon_econ']` 直接对局。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`，本 tag 内未发生 champion 切换。
+3. 判读：本轮“champion 切换导致对手池突变”的高优先级风险未触发；但生产池为 adaptive，仍禁止跨 tag 直接比较 Elo 绝对值。
+
+### 84.2 算法级改动（in-place，简化分支）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（未新建版本目录）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+- 函数：`choose_overlay_tuning(...)`（约 623-690 行）
+
+本轮未新建版本目录原因：
+
+1. 改动是 `v66` 内部调参逻辑重构（离散门控 -> 连续风险分数），与现有结构兼容。
+2. 尚未通过关键对手 `v64` 的严格判优阈值（`>55%` 且足量稳定），不满足固化新目录条件。
+
+“旧 AI 借鉴点 -> 映射 -> 代码落点”：
+
+1. Generals 借鉴点：`threat_origin_cnt`
+   - 映射：`main_threat_sources` 从离散开关改为连续 `source_pressure`（饱和上限），直接参与 `risk_score`。
+   - 代码落点：`choose_overlay_tuning(...)` 内 `source_pressure` 计算。
+2. ANTWar 借鉴点：`global_state/reserved`
+   - 映射：用单一 `risk_score` 驱动 overlay 保守程度（`enemy_weight/base_anchor_penalty/max_raw_drop` 等），替代多段 `high_risk/source_alert` 分支。
+   - 代码落点：`choose_overlay_tuning(...)` 内 `risk_score/risk_alpha` 与一组连续参数映射。
+
+CPU 硬截止（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`
+2. `kSearchStepBudgetMs=200`
+3. `hard_cutoff_hit` 回退路径
+
+### 84.3 可复现实验（规定脚本）
+
+执行命令：
+
+1. smoke（方向筛选，每对手 20 局）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=10 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260355`
+2. gate（关键三基线，每对手 100 局）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260356`
+3. confirm（关键对手补样本 100 局）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260357`
+
+结果：
+
+1. smoke `eval_20260304_194044`（仅方向）：
+   - `v66 vs v1 = 16/20`
+   - `v66 vs v2 = 14/20`
+   - `v66 vs v64 = 13/20`
+2. gate `eval_20260304_194245`：
+   - `v66 vs v1 = 80/100`
+   - `v66 vs v2 = 72/100`
+   - `v66 vs v64 = 57/100`
+3. confirm `eval_20260304_200105`：
+   - `v66 vs v64 = 52/100`
+4. 合并关键对位（`194245 + 200105`）：
+   - `v66 vs v64 = 109/200`（54.5%）
+
+判读：
+
+1. `v66` 对 `v1/v2` 维持明显优势（`>=100` 局有效）。
+2. 关键对位 `v64` 在 gate 为正（57%），但 confirm 回落到 52%，合并 200 局为 54.5%。
+3. 未达到“对目标老版本 `>55%` 且足量稳定”的严格宣称线，不能宣称 `v66` 明确优于 `v64`。
+
+### 84.4 Replay 分析与逐帧核对
+
+回放分析（latest=`200105`）：
+
+1. `rows_in_matches_file=100`，`analyzed_matches=100`，`missing_replay=0`，`replay_parse_errors=0`。
+2. `v66-v64` pair_stats：`v66 52/100`，`v64 48/100`，`avg_rounds=119.94`。
+3. 聚合动作分布显示 `v64` 的 `general_skill/call_general` 仍明显更多（`513/379` vs `418/217`）。
+
+原始回放逐帧（由 `paths.matches` 的 `replay_file` 直接核对）：
+
+1. 正例（`v66` 胜）：seed `20260357`
+   - 回放：`.../20260304_200105_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260357_rounds-180.jsonl`
+   - turning point（replay 分析）：round52，`delta_army_lead_p0=+82`
+   - 帧核对：round52 前后主要是双方军团推进交换（如 `p0 Action=[1,3,8,4,2]`），未见同回合技能压制。
+2. 负例（`v66` 负）：seed `20260358`
+   - 回放：`.../20260304_200105_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260358_rounds-180.jsonl`
+   - turning point（replay 分析）：round131，`delta_army_lead_p0=-29`
+   - 帧核对：round131 出现对手征召与推进（`p1 Action=[7,7,3]`，后接推进动作），随后局面继续向 `v64` 倾斜。
+
+回放结论：
+
+1. 连续风险分数改造后，`v66` 在部分中盘交换回合更稳定（gate 有所回升）。
+2. 但关键局仍会被 `v64` 的技能/征召节奏拉开，confirm 未维持 gate 优势。
+
+### 84.5 借鉴点是否生效
+
+1. Generals 借鉴点（来源计数连续化）
+   - 证据：gate 对 `v1/v2` 仍为 `80/100`、`72/100`，关键对位 gate 提升到 `57/100`。
+   - 判定：`部分生效`（方向正确，但对 `v64` 稳定性不足）。
+2. ANTWar 借鉴点（单状态危险收紧）
+   - 证据：`risk_score` 路径减少了离散分支；但 `v64` confirm 为 `52/100`。
+   - 判定：`部分生效`（结构更简，但收益未稳定固化）。
+
+### 84.6 回到生产口径的结论
+
+生产 latest：`eval_20260304_195549`（adaptive，champion 维持 `v64`）。
+
+1. 本轮 production latest 内无 champion 切换，切池高优风险不触发。
+2. 生产池已含 `v64-v66` 对局；iter 的 gate 与 confirm 显示该对位仅弱优势且不稳定（`109/200=54.5%`）。
+3. 结论标签：`neutral`（结构简化成立，但关键对位未达严格判优线）。
+
+### 84.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v66-v64` 在 gate 与 confirm 间波动（57% -> 52%），存在样本间不稳定。
+2. `select_best_move_overlay` 仍有多次 `compute_threat + enemy/my follow` 评估，CPU 压力点未根除。
+
+下一步：
+
+1. 延续简化路线：在不增分支的前提下，进一步压缩高风险态 `pool_limit` 与重复评估路径。
+2. 若下一轮仍波动，回退到补充13并做固定双 seed A/B 复验，确认是否确有净增益。
+
+回合末自检：
+
+1. 是否触发搜索硬截止：
+   - 代码层面仍是 `CLOCK_THREAD_CPUTIME_ID + 200ms + hard_cutoff_hit`；
+   - 本轮评测日志无触发计数，无法量化命中率。
+2. 是否存在 >200ms 单步 CPU 风险：
+   - 有硬截止兜底；
+   - 风险点仍在 overlay 候选多次前瞻评估。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 继续减少候选池与重复评估次数；
+   - 必要时将 overlay 回退为更短路径（更少参数）并做对照复验。
+
+## 85. 自动迭代回合（v66：危险态门控下的前线征召窗口，补充15）
+
+### 85.1 固定目标与最新状态
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产评测：`/www/autolab/runtime/latest.json`（当前 `tag=eval_20260304_203650`）
+- 迭代评测：
+  - smoke：`eval_20260304_202203`
+  - gate：`eval_20260304_202328`
+  - confirm：`eval_20260304_204034`
+  - latest：`/www/autolab/runtime/scopes/iter/latest.json`（`tag=eval_20260304_204034`）
+- 回放分析：
+  - `python3 /www/autolab_replay_analyze.py --scope iter --latest`（已执行）
+  - `latest.json`：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（`tag=eval_20260304_204034`）
+  - 报告：`/www/docs/replay_analysis/iter_latest.md`（已同步）
+- 对局索引：`/www/autolab/runtime/scopes/iter/eval_20260304_204034_matches.jsonl`
+
+生产口径必做判读（`config.pairs` + `champion.old/new`）：
+
+1. `config.pairs` 仍为 gauntlet 大池（45 对），且包含多组 `v64/v66` 相关配对（含直接 `['cpp_v64_generals_rebuild','cpp_v66_generals_weapon_econ']`）。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`，本 tag 内无 champion 切换。
+3. 判读：本轮“champion 切换导致对手池突变”的高优风险未触发；但 gauntlet 池本身是动态构成，仍禁止跨 tag 比较 Elo 绝对值。
+
+### 85.2 算法级改动（in-place，小步简化）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（未新建版本目录）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+- 关键改动点：
+  - 新增 `count_sub_generals_alive(...)`
+  - 扩展 `choose_recruit_cell(...)`，加入 `accept_threshold` 与 `attack_window`
+  - 在主循环征召阶段增加 `recruit_attack_window`（`duel_close && !reserve_state && enemy_sub_count > my_sub_count`）
+  - 攻击窗口下把征召门槛从 `owned_cells>=10 / score>=20` 放宽为 `owned_cells>=8 / score>=14`
+
+本轮未新建版本目录原因：
+
+1. 仅为 v66 现有征召策略的单点重构，结构兼容且可回滚。
+2. 关键对位 `v64` 尚未稳定过 gate/confirm 判优阈值，不满足固化新目录条件。
+
+“旧 AI 借鉴点 -> 本游戏映射 -> 代码落点”：
+
+1. Generals 借鉴点：前线附近按局部兵力结构补充副将（`call_generals` 的近战区补位思路）。
+   - 映射：当主将接触距离近且我方副将数落后时，打开“进攻征召窗口”，优先在前线/靠近敌主将区域征召。
+   - 代码落点：`count_sub_generals_alive` + `recruit_attack_window` + `choose_recruit_cell(..., attack_window=true)`。
+2. ANTWar 借鉴点：`global_state/reserved` 下危险态先保守，非危险态才放开进攻动作。
+   - 映射：若 `should_enable_reserved_gate` 判定处于保守危险态，则禁止进入 aggressive recruit window。
+   - 代码落点：征召阶段 `reserve_state` 门控。
+
+CPU 硬截止（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`
+2. `kSearchStepBudgetMs=200`
+3. `hard_cutoff_hit` 保底回退路径
+
+### 85.3 可复现实验（规定脚本）
+
+执行命令（均为 iter scope，14 并发）：
+
+1. smoke：
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=10 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260358`
+2. gate：
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260359`
+3. confirm：
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260360`
+
+结果：
+
+1. smoke `eval_20260304_202203`（方向筛选，60 局）
+   - `v66 vs v1 = 14/20`
+   - `v66 vs v2 = 16/20`
+   - `v66 vs v64 = 13/20`
+2. gate `eval_20260304_202328`（每对手 100 局）
+   - `v66 vs v1 = 82/100`
+   - `v66 vs v2 = 74/100`
+   - `v66 vs v64 = 55/100`
+3. confirm `eval_20260304_204034`（`v66 vs v64` 100 局）
+   - `v66 vs v64 = 52/100`
+4. 关键合并（gate+confirm）：
+   - `v66 vs v64 = 107/200 = 53.5%`
+
+判读：
+
+1. `v66` 对 `v1/v2` 仍稳定优势（`>=100` 局有效）。
+2. 关键目标 `v64` 合并 200 局仅 `53.5%`，低于“`>55%`”严格判优阈值。
+3. 本轮结论仅可记为未通过关键 gate/confirm，不得宣称 `v66` 明确优于 `v64`。
+
+### 85.4 Replay 分析与逐帧核对
+
+回放分析（latest=`204034`）：
+
+1. `rows_in_matches_file=100`，`analyzed_matches=100`，`missing_replay=0`，`replay_parse_errors=0`。
+2. `pair_stats`：`v66 52/100`，`v64 48/100`，`avg_rounds=114.82`。
+3. 动作聚合：`v64` 仍明显更高频使用 `general_skill/call_general`（`475/347`），`v66` 为（`361/215`）。
+
+原始回放逐帧核对（由 `notable_matches.longest[].replay_file` 直接打开）：
+
+1. 正例：seed `20261272`，turning point round `171`
+   - 回放：`.../20260304_204034_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261272_rounds-180.jsonl`
+   - round170~172 关键动作：
+     - p0: `[1,14,11,3,1]`, `[1,12,7,3,1]`, `[1,9,12,3,21]`
+     - p1(v66): `[1,11,9,1,1]`, `[1,10,5,1,1]`, `[1,9,10,4,2]`
+2. 正例：seed `20261273`，turning point round `123`
+   - 回放：`.../20260304_204035_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261273_rounds-180.jsonl`
+   - round122~124 关键动作：
+     - p0: `[1,12,13,3,2]`, `[1,11,13,3,2]`, `[1,11,14,3,3]`
+     - p1(v66): `[1,11,11,4,2]`, `[1,10,13,2,3]`, `[1,9,13,2,2]`
+
+回放结论：
+
+1. 新征召窗口未改变“v64 技能/征召频率更高”的总体事实。
+2. 中后盘仍主要由军团推进交换主导，关键局没有稳定观察到 v66 通过征召节奏持续反压 v64。
+
+### 85.5 借鉴点是否生效
+
+1. Generals 借鉴点（前线副将补位）
+   - 证据：`v1/v2` 仍高胜率（`82/100`,`74/100`）；但对 `v64` 仅 `107/200`。
+   - 判定：`部分生效`（中低压对局有收益，关键对手稳定性不足）。
+2. ANTWar 借鉴点（reserved 门控）
+   - 证据：危险态下 aggressive recruit 被抑制，未出现明显大样本崩盘；但关键对位未转化为稳定提升。
+   - 判定：`部分生效`（控制了风险扩散，但未带来关键对位净增益）。
+
+### 85.6 回到生产口径的结论
+
+生产 latest：`eval_20260304_203650`（gauntlet/adaptive 池，champion 维持 `v66`）。
+
+1. 本 tag 内 champion 未切换，未触发“切换导致对手池突变”高优风险。
+2. 但生产池是 gauntlet 动态对阵，不能把本 tag Elo 与其他 tag 绝对值横比。
+3. 结合 iter 关键对位 `107/200=53.5%`，本轮改动结论标签：`regression`（相对补充14关键对位回撤）。
+
+### 85.7 风险、下一步与回合末自检
+
+风险：
+
+1. 对 `v64` 的胜率仍在 52%~55% 区间波动，本轮未越过严格门槛。
+2. 单步评估仍依赖 overlay 多候选前瞻，CPU 压力点仍在。
+
+下一步：
+
+1. 不再增加征召分支，改为减少 overlay 重复评估（优先裁剪候选与 follow-up 计算次数）。
+2. 先做固定对手 `v64` 的最小结构改动 A/B 复验（保持 200 局口径）再决定是否回退本补丁。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍含 `CLOCK_THREAD_CPUTIME_ID + 200ms + hard_cutoff_hit`；
+   - 现有评测日志无命中计数，无法直接统计触发次数。
+2. 是否存在 >200ms 单步 CPU 风险点：
+   - 有硬截止兜底；
+   - 风险点仍在 `select_best_move_overlay` 的多候选前瞻评估链。
+3. 若有风险，下一轮降复杂度/剪枝方案：
+   - 继续压缩候选池与重复 `compute_threat/follow-up` 评估；
+   - 优先做“同结构减分支”而非再叠加新状态逻辑。
+
+## 86. 自动迭代回合（v66：征召金币缓冲 + 技能窗口收敛，补充16）
+
+### 86.1 固定目标与最新状态
+
+- 固定目标已重读：`/www/docs/codex_objective_fixed.md`
+- 生产评测：`/www/autolab/runtime/latest.json`（当前 `tag=eval_20260304_211513`）
+- 迭代评测（隔离）：
+  - smoke：`eval_20260304_210144`
+  - gate：`eval_20260304_210310`
+  - confirm：`eval_20260304_212040`
+  - latest：`/www/autolab/runtime/scopes/iter/latest.json`（`tag=eval_20260304_212040`）
+- 回放分析：
+  - 已执行：`python3 /www/autolab_replay_analyze.py --scope iter --latest`
+  - `latest.json`：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（`tag=eval_20260304_212040`）
+  - `iter_latest.md`：`/www/docs/replay_analysis/iter_latest.md`（已同步）
+- 对局索引：`/www/autolab/runtime/scopes/iter/eval_20260304_212040_matches.jsonl`
+
+生产口径必做判读（`config.pairs` + `champion.old/new`）：
+
+1. 当前生产 latest：`champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`，本 tag 内无 champion 切换。
+2. `config.pairs` 仍为 gauntlet/adaptive 池（45 对）；当前池内 `v64` 相关对局 9 组、`v66` 仅 1 组，且无直接 `v64-v66` 对局。
+3. 判读：本 tag 内“由 champion 切换导致对手池突变”未触发；但由于 champion 已稳定在 `v64`，`v66` 在生产池曝光显著下降，gauntlet 绝对 Elo 更不可跨 tag 直比（高优先级风险仍在）。
+
+### 86.2 算法级改动（in-place，小步简化）
+
+版本与代码落点：
+
+- 版本：`cpp_v66_generals_weapon_econ`（未新建版本目录）
+- 文件：`/www/ai_cpp/v66/ai_v66.cpp`
+- 关键改动：
+  1. 新增 `compute_recruit_coin_buffer(...)`：按危险态/技能窗口/接敌态计算征召前金币缓冲。
+  2. 征召窗口从“`duel_close && !reserve && sub_count落后`”收敛为：
+     - `duel_close && !reserve && sub_count落后 && enemy_skill_window`。
+  3. 征召阈值由补充15的激进配置回收：
+     - `owned_need: 8 -> 9`，`accept_threshold: 14 -> 16`。
+  4. 增加硬条件：`my_coin >= 50 + recruit_coin_buffer` 才允许征召。
+
+本轮未新建版本目录原因：
+
+1. 改动是对补充15征召逻辑的风险收敛，结构完全兼容当前 `v66` 主体。
+2. 关键对位尚未通过 gate/confirm，不满足“固化新目录”条件。
+
+旧 AI 借鉴链路（强制项）：
+
+1. Generals 借鉴点：`reserve_positions`（按经济/局势保留资源，不把扩张打满）。
+   - 本游戏映射：征召前预留 `coin buffer`，避免为副将补位透支技能预算。
+   - 代码落点：`compute_recruit_coin_buffer(...)` 与征召前 `my_coin >= 50 + buffer`。
+2. ANTWar 借鉴点：`global_state + reserved`（危险态优先保守）。
+   - 本游戏映射：`reserve_state` 与 `enemy_skill_window` 同时参与征召窗口门控，在高压态收紧进攻征召。
+   - 代码落点：征召段 `recruit_attack_window` 条件和 `reserve_state` 分支。
+
+CPU 硬截止（保持）：
+
+1. `CLOCK_THREAD_CPUTIME_ID`
+2. `kSearchStepBudgetMs=200`
+3. `hard_cutoff_hit` 保底回退路径
+
+### 86.3 可复现实验（规定脚本）
+
+执行命令（iter scope，14 并发）：
+
+1. smoke（每对手20局）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=10 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260361`
+2. gate（每对手100局）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v1_current,cpp_v2_beam,cpp_v64_generals_rebuild --seed 20260362`
+3. confirm（关键对手补样本100局）
+   - `EXPERIMENT_RUNTIME_SCOPE=iter EXPERIMENT_GAMES_PER_PAIR=50 EXPERIMENT_MAX_ROUNDS=180 EXPERIMENT_JOBS=14 EXPERIMENT_CPU_POLICY=all /www/scripts/autolab_eval_experiment_once.sh --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild --challengers cpp_v66_generals_weapon_econ --opponents cpp_v64_generals_rebuild --seed 20260363`
+
+结果：
+
+1. smoke `eval_20260304_210144`：
+   - `v66 vs v1 = 17/20`
+   - `v66 vs v2 = 15/20`
+   - `v66 vs v64 = 11/20`（smoke 仅方向）
+2. gate `eval_20260304_210310`：
+   - `v66 vs v1 = 81/100`
+   - `v66 vs v2 = 72/100`
+   - `v66 vs v64 = 53/100`
+3. confirm `eval_20260304_212040`：
+   - `v66 vs v64 = 44/100`
+4. 关键合并（gate+confirm）：
+   - `v66 vs v64 = 97/200 = 48.5%`
+
+判读：
+
+1. 对 `v1/v2` 仍保持明显优势（`>=100` 局有效）。
+2. 关键对位 `v64` 从 gate 的 `53%` 在 confirm 回落到 `44%`，200局合并仅 `48.5%`，明确回归。
+3. 不能宣称 `v66` 优于 `v64`，且当前改动方向失败。
+
+### 86.4 Replay 分析与逐帧核对
+
+回放分析（latest=`212040`）：
+
+1. `rows_in_matches_file=100`，`analyzed_matches=100`，`missing_replay=0`，`replay_parse_errors=0`。
+2. `pair_stats`：`v66 44/100`，`v64 56/100`，`avg_rounds=118.09`。
+3. 动作分布：`v64` 的 `general_skill/call_general` 仍显著高于 `v66`（`466/392` vs `351/146`）。
+
+原始回放逐帧（直接打开 replay）：
+
+1. 胜例（`v66` 胜）seed `20260363`，turning point round `166`
+   - 回放：`.../20260304_212040_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260363_rounds-180.jsonl`
+   - round165~167 片段含敌方技能动作：`p1 Action=[4,19,2,10,9]`，随后双方继续推进交换。
+2. 负例（`v66` 负）seed `20260365`，turning point round `125`
+   - 回放：`.../20260304_212040_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260365_rounds-180.jsonl`
+   - round125 双方均放技能：`p0 Action=[4,0,2,11,8]`、`p1 Action=[4,1,2,12,10]`，但后续 `v64` 延续推进并守住优势。
+
+回放结论：
+
+1. 本轮“征召金币缓冲”确实降低了 `v66` 的征召频率（`call_general` 降至 146），但对关键对位形成反效果。
+2. `v64` 在技能/征召节奏优势仍在，`v66` 中后盘反压能力进一步下降。
+
+### 86.5 借鉴点是否生效
+
+1. Generals 借鉴点（资源保留再扩张）
+   - 证据：征召频率下降明显，但 `v66-v64` 合并降至 `48.5%`。
+   - 判定：`未生效（对关键对位为负收益）`。
+2. ANTWar 借鉴点（危险态保守门控）
+   - 证据：高压态征召被抑制，未见无脑扩张；但关键样本中被 `v64` 节奏压制更明显。
+   - 判定：`部分生效（控险生效，但收益端失败）`。
+
+### 86.6 回到生产口径的结论
+
+生产 latest：`eval_20260304_211513`（champion 维持 `v64`）。
+
+1. 当前生产 tag 内 champion 未切换；但 gauntlet 池中 `v66` 曝光低，不能以生产 Elo 判定该改动优劣。
+2. 关键判定以 iter 头对头样本为准：`v66 vs v64 = 97/200`，显著低于阈值。
+3. 结论标签：`regression`。
+
+### 86.7 风险、下一步与回合末自检
+
+风险：
+
+1. 征召收紧后，`v66` 对 `v64` 的技能/征召对抗进一步恶化。
+2. `select_best_move_overlay` 仍是 CPU 热点（多候选 + 双侧 follow-up 评估）。
+
+下一步：
+
+1. 回退本轮征召收紧或做 A/B 双开关（仅保留一个门控项），优先恢复关键对位基线。
+2. 在不增状态的前提下，继续减少 overlay 重复评估次数（先减复杂度，再看收益）。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍含 `CLOCK_THREAD_CPUTIME_ID + 200ms + hard_cutoff_hit`；
+   - 评测汇总暂无触发计数。
+2. 是否存在 >200ms 单步 CPU 风险点：
+   - 有硬截止兜底；
+   - 风险点仍在 overlay 候选前瞻链。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 缩减 overlay 候选与 follow-up 评估调用；
+   - 避免再增加新的条件状态，优先回到更短路径策略。
+
+### 87.1 固定目标与最新状态
+
+已重新读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产评测（唯一权威口径）：
+
+1. `latest.json` 当前为 `eval_20260304_221558`，`mode=adaptive`，`config.pairs` 共 `45` 组。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`（本 tag 内未发生 champion 切换）。
+3. 必做判读（gauntlet 高优先级风险）：
+   - 本轮对手池**未受 champion 切换直接影响**（old/new 未切换）；
+   - 但 `adaptive` 采样导致跨 tag `config.pairs` 变化，生产 Elo 绝对值仍不可跨 tag 直接比较。
+
+iter 评测（仅用于候选筛选）：
+
+1. `iter/latest.json` 当前为 `eval_20260304_220641`（`v66 vs v64` 单对手，100局）。
+2. `iter/replay_analysis/latest.json` 与 `docs/replay_analysis/iter_latest.md` 已同步到 `220641`：
+   - `analyzed_matches=100`，`missing_replay=0`，`replay_parse_errors=0`。
+3. 对局索引已核对：
+   - `paths.matches=/www/autolab/runtime/scopes/iter/eval_20260304_220641_matches.jsonl`；
+   - 每行包含 `replay_file`，可直接逐帧打开。
+
+### 87.2 算法级改动（in-place，小步简化，continue）
+
+本轮继续沿用并验证上一心跳已落地的 `v66` in-place 算法改造，不新建版本目录。
+
+1. 代码落点：`/www/ai_cpp/v66/ai_v66.cpp`
+2. 关键改动（已在代码中）：
+   - `compute_recruit_coin_buffer(...)` 简化为 `reserve_state + duel_close + sub_gap` 的短路径逻辑（减少条件层数）；
+   - `recruit_attack_window` 调整为 `duel_close && !reserve_state && sub_gap > 0`；
+   - 窗口阈值采用更直接的 `owned_need=8`、`accept_threshold=15.0`。
+3. 搜索硬截止（硬约束）：
+   - 仍使用 `CLOCK_THREAD_CPUTIME_ID` + `200ms` CPU 截止，`hard_cutoff_hit` 保底回退路径未移除。
+4. 本轮未新建版本原因：
+   - 当前改动与 `v66` 结构兼容，属于可回滚的小步简化与门控重排，未达到“需新目录固化快照”的必要性。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_value/impact_value` 风险评估与门控思路（`past_AIs/Generals-AI/main.cpp`）
+   - 映射：本游戏中用 `duel_close + threat/accept_threshold` 控制征召触发；
+   - 落点：`choose_recruit_cell(...)` + `recruit_attack_window` 判定。
+2. ANTWar 借鉴点：`safe_coin + danger/reserved` 资源保留机制（`past_AIs/ANTWar-AI/main.cpp`）
+   - 映射：本游戏中引入 `reserve_state` 与 `recruit_coin_buffer`，危险态优先保留金币；
+   - 落点：`compute_recruit_coin_buffer(...)` 与征召 coin guard。
+
+### 87.3 可复现实验（规定脚本）
+
+全部实验均使用：`/www/scripts/autolab_eval_experiment_once.sh`（iter 隔离、14核并发）。
+
+1. smoke（方向筛选）`eval_20260304_214146`：
+   - `v66 vs v1 = 17/20`
+   - `v66 vs v2 = 15/20`
+   - `v66 vs v64 = 10/20`（smoke，不用于最终判优）
+2. gate（关键基线，>=100 局）`eval_20260304_214520`：
+   - `v66 vs v1 = 82/100`
+   - `v66 vs v2 = 75/100`
+   - `v66 vs v64 = 58/100`
+3. confirm-1 `eval_20260304_220042`：
+   - `v66 vs v64 = 50/100`
+4. confirm-2（本轮新增）`eval_20260304_220641`（seed=`20260390`）：
+   - `v66 vs v64 = 58/100`
+
+本轮新增实验命令（可复现）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260390
+```
+
+关键汇总：
+
+1. `v66 vs v64`（gate + confirm-2）=`(58+58)/200 = 116/200 = 58.0%`。
+2. `v66 vs v64`（gate + confirm-1 + confirm-2）=`166/300 = 55.3%`。
+3. 对 `v1/v2` 目前仅各 `100` 局，尚不满足“宣称优于多个老版本（每个>=200局）”的严格条件。
+
+### 87.4 Replay 分析与逐帧核对
+
+latest replay 分析（tag=`220641`）：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：`v66 58/100`，`v64 42/100`，`avg_rounds=119.17`。
+3. 动作分布：
+   - `v66`: `general_skill=362`, `call_general=206`
+   - `v64`: `general_skill=504`, `call_general=397`
+
+原始回放索引核对（来自 `paths.matches`）：
+
+1. 胜例：seed `20260390`
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260304_220641/20260304_220641_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260390_rounds-180.jsonl`
+2. 负例：seed `20261302`
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260304_220641/20260304_220641_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261302_rounds-180.jsonl`
+
+回放判读：
+
+1. `v66` 在降低征召/技能动作频率后，仍能在本轮 confirm 达到 `58/100`，说明“保留金币+窗口征召”并非只带来保守副作用。
+2. 负例中仍可见大地盘波动（`terr_swing` 高样本），说明关键风险仍在中后盘波动管理，而非单点征召触发本身。
+
+### 87.5 借鉴点是否生效
+
+1. Generals 借鉴点（威胁评估门控）
+   - 证据：`v66 vs v64` 在新增 confirm（`220641`）达到 `58/100`，且 gate+confirm-2 为 `116/200`；
+   - 判定：`部分生效`（关键对位回升，但仍有 seed 波动）。
+2. ANTWar 借鉴点（safe_coin/danger reserve）
+   - 证据：`v66` 的 `call_general` 低于 `v64`（`206` vs `397`）且本轮仍赢 `58%`；
+   - 判定：`生效`（资源保留未阻断胜率，改善了过度征召风险）。
+
+### 87.6 回到生产口径的结论
+
+生产 latest：`eval_20260304_221558`，`champion v64 -> v64`。
+
+1. 本 tag 内 champion 未切换，故“对手池受 champion 切换影响”风险本轮为否；
+2. 但生产为 adaptive/gauntlet，跨 tag Elo 绝对值仍不可直接当成最终强弱结论；
+3. 与 iter 最新 head-to-head 结果不冲突（iter 新增 confirm 显示 `v66` 对 `v64` 回升到 `58/100`）。
+
+结论标签：`promising`（仅针对 `v66 vs v64` 的当前方向，非全池最终结论）。
+
+### 87.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v66-v64` 关键对位存在 seed 波动（`50/100` 到 `58/100`），稳定性尚不足。
+2. 搜索 CPU 热点仍在 overlay 候选 + 双侧 follow-up 评估链。
+
+下一步：
+
+1. 继续补做 `v66 vs v64` confirm（再加 `>=100`，优先凑到 400+ 总样本）验证是否稳定维持 `>55%`；
+2. 对 `v1/v2` 追加到各 `>=200` 才讨论“优于多个老版本”的严格宣称；
+3. 若波动再次放大，优先减 overlay 评估调用次数，而不是叠新分支。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码中硬截止机制仍在（`CLOCK_THREAD_CPUTIME_ID` + `200ms` + 回退）；
+   - 评测汇总未提供触发计数，无法从报告直接统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 有潜在风险点（overlay 多候选链），但有硬截止兜底。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 收紧 overlay 候选池与 follow-up 调用上限；
+   - 保持 in-place 简化，不新增状态机分支。
+
+### 88.1 固定目标与最新状态
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产评测（唯一权威口径）：
+
+1. 当前 `latest.json` 为 `eval_20260304_223616`，`mode=adaptive`，`config.pairs` 共 `45` 组。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`。
+3. 必做判读（gauntlet 高优先级风险）：
+   - 本 tag 内无 champion 切换，因此“对手池受 champion 切换影响”= 否；
+   - 但 `adaptive` 采样仍导致跨 tag 对手池变化，生产 Elo 绝对值不可跨 tag 直接比较。
+
+迭代评测（隔离，仅候选筛选）：
+
+1. `iter/latest.json` 更新为 `eval_20260304_224141`（`v66 vs v64`，100 局）。
+2. replay latest 同步更新：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json` 与 `docs/replay_analysis/iter_latest.md` 均为 `224141`。
+3. 对局索引核对：
+   - `paths.matches=/www/autolab/runtime/scopes/iter/eval_20260304_224141_matches.jsonl`；
+   - 每行均含 `replay_file`，可直接逐帧核对。
+
+### 88.2 算法级改动（in-place，小步简化）
+
+本轮继续在 `v66` 上做 in-place 小步改造，不新建版本目录。
+
+改动目标：
+
+1. 针对 replay 中高频“大地盘波动”样本，减少远端征召导致的扩张摆动。
+2. 保持结构简化，不引入新状态机层。
+
+代码落点：`/www/ai_cpp/v66/ai_v66.cpp`
+
+1. `choose_recruit_cell(...)` 新增主将支持半径门控参数 `main_dist_cap`：
+   - 若候选格距离我方主将超过上限，直接跳过；
+   - 额外增加“靠近主将”支持分，降低远端孤立征召概率。
+2. 征召阶段根据态势设置距离上限：
+   - `reserve_state ? 9 : (recruit_attack_window ? 12 : 10)`。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_value/impact_value` 的“安全位置优先”思想。
+   - 本游戏映射：征召位置必须受主将支持半径约束，避免远端高波动落点。
+   - 代码落点：`choose_recruit_cell(...)` 的 `main_dist_cap` 和主将距离得分。
+2. ANTWar 借鉴点：`danger/reserved` 下收紧扩张。
+   - 本游戏映射：`reserve_state` 时把征召半径收得更紧（cap=9）。
+   - 代码落点：征召前 `recruit_main_dist_cap` 计算与传参。
+
+本轮未新建版本原因：
+
+1. 改动与 `v66` 主体结构完全兼容，仅是征召候选筛选的局部简化。
+2. 尚未通过更大样本 gate/confirm 稳定验证，不具备固化新目录的必要性。
+
+### 88.3 可复现实验（规定脚本）
+
+按要求使用：`/www/scripts/autolab_eval_experiment_once.sh`（iter 隔离、14核并发）。
+
+命令：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260391
+```
+
+结果（`eval_20260304_224141`）：
+
+1. `v66 vs v64 = 56/100`（满足两 AI 相对强度比较最小样本 `>=100`）。
+2. 不足以据此做多 AI 排序结论，仅可作为关键对位 confirm 信号。
+
+### 88.4 Replay 分析与逐帧核对
+
+latest replay（`224141`）摘要：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：`v66 56/100`，`v64 44/100`，`avg_rounds=120.58`。
+3. 动作分布：
+   - `v66`: `general_skill=409`, `call_general=209`
+   - `v64`: `general_skill=551`, `call_general=402`
+
+原始回放核对（来自 `paths.matches`）：
+
+1. 胜例：seed `20260391`
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260304_224141/20260304_224141_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260391_rounds-180.jsonl`
+   - 关键 turning point：round `136`，`delta_army_lead_p0=+321`。
+2. 负例：seed `20261302`
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260304_224141/20260304_224141_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261302_rounds-180.jsonl`
+   - 关键 turning point：round `121`，`delta_territory_lead_p0=+2`，`delta_army_lead_p0=+46`。
+
+回放结论：
+
+1. 新门控未削弱关键对位基本胜率（仍 >55%）；
+2. 但“最大地盘波动”样本仍高，说明仅靠征召半径收紧无法单独消除中后盘摆动。
+
+### 88.5 借鉴点是否生效
+
+1. Generals 借鉴点（安全位置优先）
+   - 证据：征召逻辑已落地主将支持半径门控，关键对位 `56/100` 未退化到阈值下。
+   - 判定：`部分生效`。
+2. ANTWar 借鉴点（danger/reserved 收敛扩张）
+   - 证据：`reserve_state` 对征召半径更严格；`v66` 征召动作数仍显著低于 `v64`（209 vs 402）。
+   - 判定：`生效`（控险方向成立，收益幅度有限）。
+
+### 88.6 回到生产口径的结论
+
+生产 latest（本轮读取时）为 `eval_20260304_223616`，`champion` 仍 `v64 -> v64`。
+
+1. 生产 gauntlet 无 champion 切换事件，不存在“由切换触发的池子突变”风险；
+2. 生产 Elo 仅作候选信号，最终优劣仍以 iter 头对头样本为主；
+3. 本轮新样本显示 `v66 vs v64 = 56/100`，方向正向但提升幅度有限。
+
+结论标签：`neutral`。
+
+### 88.7 风险、下一步与回合末自检
+
+风险：
+
+1. 关键对位虽 >55%，但波动仍大（replay 中高 `terr_swing` 样本持续存在）。
+2. 搜索热点仍在 overlay 候选 + 双侧 follow-up，存在接近 200ms 风险。
+
+下一步：
+
+1. 继续做 `v66 vs v64` confirm（再加 `>=100`），优先把当前策略总样本拉高到 `>=200` 新增窗口；
+2. 若波动不收敛，优先削减 overlay 候选/跟随评估调用而非新增分支。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍有 `CLOCK_THREAD_CPUTIME_ID` + `200ms` + 回退；
+   - 当前评测输出未暴露触发计数。
+2. 是否存在 >200ms 单步 CPU 风险点：
+   - 风险点仍在 overlay 深评估；
+   - 但存在 CPU 硬截止兜底。
+3. 下一轮降复杂度/改进剪枝计划：
+   - 在高 danger/低收益候选下进一步压缩 overlay pool 和 my-follow 调用次数。
+
+### 89.1 固定目标与最新状态
+
+已重新读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json` 为 `eval_20260304_225705`，`config.pairs` 共 `45` 组，且包含 `v64-v66` 直接对局。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`（本 tag 内未切换）。
+3. 必做判读（gauntlet 高优先级风险）：
+   - 本 tag 内“对手池受 champion 切换影响”= 否；
+   - 但近期上一生产 tag `eval_20260304_225052` 发生过 `v64 -> v66` 切换，跨 tag 对手池与 Elo 绝对值仍不可直接比较。
+
+iter 口径（仅候选筛选）：
+
+1. 本轮新增 `iter/latest.json = eval_20260304_230146`。
+2. replay latest 同步为 `eval_20260304_230146`，`rows=100`、`analyzed=100`、`missing=0`、`parse_errors=0`。
+
+### 89.2 算法改动（沿用本轮 in-place 代码）
+
+本轮不新建版本目录，继续验证已落地的 `v66` in-place 小步改动：
+
+1. 在 `choose_recruit_cell(...)` 增加主将支持半径门控 `main_dist_cap`；超半径候选直接剔除。
+2. 增加主将邻近支持分（更偏向可联动落点）。
+3. 征召窗口半径：`reserve_state ? 9 : (recruit_attack_window ? 12 : 10)`。
+
+代码位置：`/www/ai_cpp/v66/ai_v66.cpp`。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat/impact` 的“安全位置优先”。
+   - 映射：征召必须受主将支持半径约束，减少远端孤立扩张。
+   - 落点：`choose_recruit_cell(...)` 的距离门控与支持分。
+2. ANTWar 借鉴点：`danger/reserved` 下收敛扩张。
+   - 映射：`reserve_state` 时把征召半径收紧到 `9`。
+   - 落点：`recruit_main_dist_cap` 的态势分支。
+
+本轮未新建版本原因：
+
+1. 本轮是对既有征召候选筛选的局部简化与验证，结构与 `v66` 完全兼容；
+2. 关键对位尚未形成“稳定 >55%”的 confirm 证据，不满足固化快照必要性。
+
+### 89.3 可复现实验（规定脚本）
+
+执行命令（iter 隔离，14核并发）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260392
+```
+
+结果：`eval_20260304_230146`
+
+1. `v66 vs v64 = 53/100`（满足两 AI 相对强度门槛 `>=100`）。
+2. 与上一轮同代码 confirm（`56/100`）合并：`109/200 = 54.5%`，未达到 `>55%` 严格线。
+
+### 89.4 Replay 分析与对局核对
+
+replay 报告（`iter_latest.md` / `latest.json`）：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：`v66 53` vs `v64 47`，`avg_rounds=110.12`。
+3. 动作分布：
+   - `v66`: `general_skill=289`, `call_general=237`
+   - `v64`: `general_skill=351`, `call_general=350`
+
+从 `paths.matches` 与 replay 逐帧索引核对：
+
+1. `v66` 胜例（seed=`20260392`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260304_230146/20260304_230146_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20260392_rounds-180.jsonl`
+   - turning point：round `2`，`delta_army_lead_p0=+20`（对 p0=v64 有利，随后反转），全局 `army_lead_abs_max=15`，对局较短（`max_round=9`）。
+2. `v66` 负例（seed=`20260393`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260304_230146/20260304_230146_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20260393_rounds-180.jsonl`
+   - turning point：round `13`，`delta_army_lead_p0=+20`；`territory_lead_abs_max=24`，`army_lead_abs_max=53`。
+
+replay 结论：
+
+1. 主将支持半径门控并未造成明显崩盘（关键对位仍保持小幅正胜率）；
+2. 但高波动样本仍存在（本批 `army_swing` 峰值可达 `814`），说明“远端征召收紧”尚不足以单独解决中后盘摆动。
+
+### 89.5 本轮结论（回到生产口径）
+
+1. 生产 latest（`225705`）本 tag 内 champion 未切换，单 tag 对手池切换风险为否；
+2. 但近期已发生过 `v64->v66` 切换，gauntlet 跨 tag Elo 绝对值不可直接作为版本强弱结论；
+3. 关键对位新证据：同代码两次 confirm 合并 `109/200=54.5%`，当前不支持“稳定优于 v64”的结论。
+
+结论标签：`neutral`。
+
+### 89.6 风险、下一步与回合末自检
+
+风险：
+
+1. `v66-v64` 仍处于窄优势/高波动区间（`54.5%`，未过 `>55%` 严格线）。
+2. 复杂度热点仍在 overlay 候选 + follow-up 评估链。
+
+下一步：
+
+1. 再补 `v66 vs v64` `>=100` 局 confirm，优先把“当前代码窗口”扩大到 `>=300` 再判优；
+2. 若仍 <55%，优先继续减法：收紧 `pool_limit` 与 follow-up 次数，而非加新状态分支。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码硬截止机制仍在（`CLOCK_THREAD_CPUTIME_ID` + `<=200ms` + 回退）；
+   - 本轮评测输出未暴露触发计数，未观测到可证明的触发样本。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 仍有潜在风险点（overlay 深评估）；
+   - 已有硬截止兜底，风险可控但未消失。
+3. 若有风险，下轮降复杂度/剪枝方案：
+   - 在高 danger 态进一步下调 overlay 候选上限；
+   - 减少低收益 follow-up 评估调用，保留主约束链。
+
+### 90.1 固定目标与最新状态
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260304_231915`。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`。
+3. `config.pairs` 共 `45` 组，且包含 `v66-v64` 直接对局。
+4. 必做判读（gauntlet 高优先级风险）：
+   - 本 tag 内 champion 未切换，因此“本轮对手池受 champion 切换影响”= 否；
+   - 但 gauntlet 口径跨 tag 对手池可能变化，生产 Elo 绝对值仍不可跨 tag 直接比较。
+
+iter 口径（候选筛选）：
+
+1. 两轮 confirm：`eval_20260304_232120` 与 `eval_20260304_232544`。
+2. 最新 iter（`latest.json`）当前指向 `232544`，`paths.matches` 为：
+   - `/www/autolab/runtime/scopes/iter/eval_20260304_232544_matches.jsonl`
+
+### 90.2 算法级改动（in-place，小步）
+
+文件：`/www/ai_cpp/v66/ai_v66.cpp`。
+
+改动内容（征召阶段 danger 源门控）：
+
+1. 新增低成本主将 threat-source 探测（cap=2）用于征召安全门控：
+   - `recruit_main_threat_sources`、`recruit_source_alert`。
+2. 仅在“非 reserve 且非 source_alert 且 sub_gap>0”时开启前压征召窗口：
+   - `recruit_attack_window = duel_close && !reserve_state && !recruit_source_alert && sub_gap>0`。
+3. source alert 下统一收紧征召策略：
+   - 增加金币缓冲（`+10`）；
+   - 收缩主将支持半径（`cap=8`）；
+   - 抬高征召阈值（`accept_threshold=22`）。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin`（来源数）思想。
+   - 映射：用主将受威胁来源数作为“是否允许前压征召”的门控；
+   - 代码落点：征召段 `recruit_main_threat_sources/recruit_source_alert`。
+2. ANTWar 借鉴点：`danger/reserved + safe_coin`。
+   - 映射：source alert 视作 danger 子态，提升 `coin buffer` 并收紧扩张半径；
+   - 代码落点：`recruit_coin_buffer += 10` 与 `recruit_main_dist_cap/accept_threshold` 收紧。
+
+本轮未新建版本原因：
+
+1. 改动与 `v66` 结构兼容，属于单段策略门控减法，不需拆新目录；
+2. 尚未通过 `>=200` 局稳定优势 gate，不满足固化新版本的必要性。
+
+### 90.3 可复现实验（规定脚本）
+
+全部使用：`/www/scripts/autolab_eval_experiment_once.sh`（iter 隔离、14核）。
+
+1. confirm-A（seed=`20260393`）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260393
+```
+
+结果：`eval_20260304_232120`，`v66 vs v64 = 58/100`。
+
+2. confirm-B（seed=`20260450`）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260450
+```
+
+结果：`eval_20260304_232544`，`v66 vs v64 = 49/100`。
+
+合并（本轮同代码）
+
+1. `v66 vs v64 = (58+49)/200 = 107/200 = 53.5%`。
+2. 达到 `>=100` 的两 AI 比较门槛，但未达到“稳定优于 v64（>55%）”线。
+
+### 90.4 Replay 分析与原始回放核对
+
+A. `eval_20260304_232120`（`58/100`）
+
+1. replay：`rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. 动作分布：
+   - `v66`: `general_skill=371`, `call_general=204`
+   - `v64`: `general_skill=512`, `call_general=401`
+3. 样本核对：
+   - 胜例 seed `20260393`：
+     `/www/autolab/runtime/scopes/iter/replays/eval_20260304_232120/20260304_232120_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260393_rounds-180.jsonl`
+     turning point：round `61`，`delta_territory_lead_p0=-3`，`delta_army_lead_p0=-20`。
+   - 负例 seed `20260394`：
+     `/www/autolab/runtime/scopes/iter/replays/eval_20260304_232120/20260304_232120_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260394_rounds-180.jsonl`
+     turning point：round `30`，`delta_territory_lead_p0=-1`，`delta_army_lead_p0=+13`（后续短局失稳）。
+
+B. `eval_20260304_232544`（`49/100`，latest）
+
+1. replay：`rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. 动作分布：
+   - `v66`: `general_skill=327`, `call_general=180`
+   - `v64`: `general_skill=379`, `call_general=322`
+3. 样本核对：
+   - 胜例 seed `20260450`：
+     `/www/autolab/runtime/scopes/iter/replays/eval_20260304_232544/20260304_232544_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260450_rounds-180.jsonl`
+     turning point：round `16`，`delta_territory_lead_p0=+2`，`delta_army_lead_p0=-6`。
+   - 负例 seed `20261361`：
+     `/www/autolab/runtime/scopes/iter/replays/eval_20260304_232544/20260304_232544_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261361_rounds-180.jsonl`
+     turning point：round `24`，`delta_territory_lead_p0=-1`，`delta_army_lead_p0=+23`。
+
+Replay 结论：
+
+1. source alert 门控能显著压低征召/技能频次（相较旧样本），但对胜率提升不稳定；
+2. 两次 confirm 呈现“58/100 与 49/100”强波动，说明当前门控对不同对局分布敏感。
+
+### 90.5 回到生产口径的结论
+
+1. 生产 latest `231915` 本 tag 内 champion 未切换，对手池切换风险为否；
+2. 生产 gauntlet 与 iter 两轮 confirm 未出现“必须立即做生产冲突复验”的强冲突信号；
+3. 本轮同代码 `200` 局仅 `53.5%`，不支持“稳定优于 v64”的结论。
+
+结论标签：`regression`（相对补充18/19 的窗口表现未改善）。
+
+### 90.6 风险、下一步与回合末自检
+
+风险：
+
+1. 关键对位高波动（`58/100` -> `49/100`），策略对 seed/对局形态敏感；
+2. source alert 门控可能过早抑制前压，导致部分局势丢失反打窗口。
+
+下一步：
+
+1. 不新增目录，先做“减法回滚”：保留 threat-source 探测，但撤销 `accept_threshold=22` 的过强抬升，仅保留 coin buffer/半径收紧；
+2. 再做 `v66-v64` `>=100` 局 confirm，观察波动是否收敛。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 搜索链硬截止仍在（`CLOCK_THREAD_CPUTIME_ID` + `200ms` + 回退）；
+   - 评测产物未暴露触发计数，无法统计触发次数。
+2. 是否存在超过 `200ms` 单步 CPU 风险点：
+   - 潜在风险仍在 overlay 深评估链；
+   - 已有硬截止兜底。
+3. 若有风险，下轮如何降复杂度/改进剪枝：
+   - 继续压缩低收益候选与 follow-up 调用；
+   - 优先保留单一主约束链，避免叠加新状态补丁。
+
+### 91.1 固定目标与最新状态
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260304_235453`。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`。
+3. `config.pairs` 共 `45` 组，本 tag 不含 `v66-v64` 直接对局。
+4. 必做判读（gauntlet 高优先级风险）：
+   - 本 tag 内 champion 未切换，因此“本轮对手池受 champion 切换影响”= 否；
+   - 但上一生产阶段发生过 `v64 -> v66` 切换，跨 tag 仍存在对手池变化风险，生产 Elo 绝对值不可直比。
+
+iter 口径（仅候选筛选）：
+
+1. 本轮新评测：`eval_20260305_000203`（`v66 vs v64`，100 局）。
+2. replay latest 同步为 `eval_20260305_000203`，`rows=100`、`analyzed=100`、`missing=0`、`parse_errors=0`。
+
+### 91.2 算法级改动（in-place，小步回滚）
+
+文件：`/www/ai_cpp/v66/ai_v66.cpp`。
+
+本轮执行“减法回滚”以降低过保守：
+
+1. 保留 `recruit_source_alert` 的 threat-source 探测、保币（`+10`）与半径收紧（`cap=8`）；
+2. 移除 source-alert 下额外阈值抬升分支：
+   - `accept_threshold` 从 `recruit_attack_window ? 15 : (source_alert ? 22 : 20)`
+   - 简化为 `recruit_attack_window ? 15 : 20`。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin` 来源计数。
+   - 映射：继续以来源数触发 `source_alert` 门控。
+2. ANTWar 借鉴点：`safe_coin / reserved`。
+   - 映射：高压子态保留额外金币缓冲与扩张半径收缩，但不再叠加额外评分阈值分支。
+
+本轮未新建版本原因：
+
+1. 仅是补充20的局部回滚，结构完全兼容 `v66`；
+2. 尚未形成稳定 gate 证据，不满足新目录固化条件。
+
+### 91.3 可复现实验（规定脚本）
+
+命令：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260460
+```
+
+结果：`eval_20260305_000203`
+
+1. `v66 vs v64 = 53/100`（达到两 AI 相对强度结论门槛 `>=100`）。
+2. 相比补充20的单批次低点（`49/100`）有回升，但仍未过 `>55%` 线。
+
+### 91.4 Replay 分析与原始回放核对
+
+replay 摘要（`eval_20260305_000203`）：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`；
+2. `pair_wins`：`v66 53`，`v64 47`，`avg_rounds=108.08`；
+3. 动作分布：
+   - `v66`: `general_skill=317`, `call_general=203`
+   - `v64`: `general_skill=498`, `call_general=377`
+
+原始回放核对（来自 matches/replay_file）：
+
+1. 负例 seed `20260460`：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_000203/20260305_000203_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20260460_rounds-180.jsonl`
+   - turning point：round `5`，`delta_territory_lead_p0=-1`，`delta_army_lead_p0=-11`（短局失衡）。
+2. 胜例 seed `20260461`：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_000203/20260305_000203_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20260461_rounds-180.jsonl`
+   - turning point：round `29`，`delta_territory_lead_p0=-3`，`delta_army_lead_p0=-3`（中盘反超）。
+
+Replay 判读：
+
+1. “阈值回滚”后仍保留低频征召/技能特征（相较 v64 明显更少）；
+2. 但短局波动仍在，说明本轮只部分修复了补充20的保守过度问题。
+
+### 91.5 回到生产口径的结论
+
+1. 生产 latest 本 tag 内 champion 未切换，对手池切换风险为否；
+2. 因生产本 tag 不含 `v66-v64` 直接对局，而本轮 iter `53/100` 未形成强优势，当前不做“明显优于 v64”宣称；
+3. 如需判优，仍需继续 head-to-head 补样本（建议再 `>=100`）。
+
+结论标签：`neutral`。
+
+### 91.6 风险、下一步与回合末自检
+
+风险：
+
+1. `v66-v64` 仍在 50% 附近摆动（`53/100`），稳定性不足；
+2. 生产 gauntlet 本 tag 无直接 `v66-v64` 对局，难直接与迭代结论闭环。
+
+下一步：
+
+1. 在当前代码上继续补 `v66-v64` confirm（再 `>=100`），形成同代码 `>=200` 窗口；
+2. 若仍低于 `55%`，优先继续减法（减少 source-alert 额外干预）而非新加分支。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 硬截止机制仍在：`CLOCK_THREAD_CPUTIME_ID` + `200ms` + 回退；
+   - 评测输出未提供触发计数，无法直接统计。
+2. 是否存在超过 `200ms` 单步 CPU 风险点：
+   - 风险点仍在 overlay 深评估链；
+   - 有硬截止兜底。
+3. 若有风险，下轮降复杂度/剪枝计划：
+   - 继续压缩低收益候选评估，减少 follow-up 调用次数。
+
+### 92.1 固定目标与最新状态
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260305_005347`（`mode=adaptive`）。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v64_generals_rebuild`（`promoted=true`）。
+3. `config.pairs` 共 `45` 组；本 tag 内包含多组 `v64`/`v66` 相关对阵，但不含直接 `v64-v66` 对打。
+4. 必做判读（gauntlet 高优先级风险）：本轮存在 champion 切换，因此“对手池受 champion 切换影响”= 是（高优先级风险，跨 tag Elo 绝对值不可直比）。
+
+iter 口径（仅候选筛选）：
+
+1. 最新 iter：`eval_20260305_010140`。
+2. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_010140_matches.jsonl`。
+3. replay latest：`eval_20260305_010140`，`rows=100`、`analyzed=100`、`missing=0`、`parse_errors=0`。
+
+### 92.2 算法级改动（in-place，小步简化）
+
+文件：`/www/ai_cpp/v66/ai_v66.cpp`。
+
+本轮改动（不新建版本目录）：
+
+1. 新增 `RecruitPlan` 与 `choose_recruit_plan(...)`，用单一连续 `aggression` 分数统一驱动征召参数（`coin_buffer/main_dist_cap/owned_need/accept_threshold/attack_window`）。
+2. 移除原征召段的离散组合分支（`recruit_source_alert + recruit_attack_window + 多重 ternary`），将决策收敛到一个策略函数输出，减少状态拼接与补丁层数。
+3. 保持搜索链路不变，`CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退仍生效。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin`（威胁来源数）思想。
+   - 映射：`main_threat_sources` 直接进入 `aggression` 连续评分，不再单独拉出 `source_alert` 状态树。
+   - 代码落点：`choose_recruit_plan(...)` 与征召调用点。
+2. ANTWar 借鉴点：`reserved/safe_coin`。
+   - 映射：`reserve_state` 直接压低 `aggression` 并抬升 `coin_buffer`、收紧 `main_dist_cap`，把保币与扩张收敛放在同一主干。
+   - 代码落点：`choose_recruit_plan(...)`。
+
+本轮未新建版本原因：
+
+1. 改动与 `v66` 结构兼容，且属于“分支收敛”的 in-place 简化，不需要新目录固化。
+2. 当前仅完成 100 局 gate 样本，尚未达到同代码 `>=200` confirm，不满足新版本固化条件。
+
+### 92.3 可复现实验（规定脚本）
+
+命令（iter 隔离，14 核）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260395
+```
+
+结果：`eval_20260305_010140`
+
+1. `v66 vs v64 = 56/100`（满足两 AI 比较门槛 `>=100`）。
+2. 本轮作为“生产 champion 切换后”的 head-to-head 复验，满足“冲突先复验”要求。
+
+### 92.4 Replay 分析与原始回放核对
+
+replay 摘要（`iter_latest.md` / `latest.json`）：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：`v66 56` vs `v64 44`，`avg_rounds=112.99`。
+3. 动作分布：
+   - `v66`: `general_skill=261`, `call_general=176`
+   - `v64`: `general_skill=492`, `call_general=395`
+
+原始回放逐帧核对（来自 `paths.matches`）：
+
+1. 胜例（`v66` 胜，seed=`20261307`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_010140/20260305_010140_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261307_rounds-180.jsonl`
+   - replay turning point：round `86`，`delta_army_lead_p0=-37`（对 p1 的 `v66` 有利）。
+   - 帧动作抽样：`Round 44, Player 1, Action [7,8,8]`；`Round 104, Player 1, Action [7,11,8]`（`v66` 采用低频征召）。
+2. 负例（`v66` 负，seed=`20260396`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_010140/20260305_010140_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260396_rounds-180.jsonl`
+   - replay turning point：round `140`，`delta_army_lead_p0=-241`（`v66` 失衡）。
+   - 帧动作抽样：对手 `v64` 在 `Round 24/49/81/96` 多次 `Action [7,...]`，而 `v66` 仅见 `Round 111, Player 0, Action [7,8,1]`（征召节奏偏慢）。
+
+replay 结论：
+
+1. 简化后的连续门控能维持较低技能/征召频次，同时本轮胜率回到 `56/100`。
+2. 但极端波动仍明显（`army_swing` 峰值 `619`、`terr_swing` 峰值 `104`），中后盘稳定性仍未解决。
+
+### 92.5 借鉴点是否生效
+
+1. Generals 借鉴点（threat-origin 连续化）：
+   - 证据：本轮 `v66-v64` 回到 `56/100`，且 `no_effect_rate` 优于 `v64`（`0.062` vs `0.065`）。
+   - 判定：`部分生效`（方向为正，但样本仍偏少）。
+2. ANTWar 借鉴点（reserved/safe_coin 收敛）：
+   - 证据：`v66` 的 `call_general` 与 `general_skill` 持续显著低于 `v64`（`176/261` vs `395/492`），回放中 `v66` 征召触发更克制。
+   - 判定：`生效`（控险目标达成）。
+
+### 92.6 回到生产口径的结论
+
+1. 生产 latest 已发生 `v66 -> v64` champion 切换，说明对手池存在切换影响风险。
+2. 针对该冲突，本轮已补做 head-to-head 复验（`100` 局）并得到 `v66 56/100`。
+3. 但同代码仅 `100` 局，尚未达到“稳定优于”所需的 `>=200` confirm；当前不宣称 `v66` 稳定强于 `v64`。
+
+结论标签：`neutral`。
+
+### 92.7 风险、下一步与回合末自检
+
+风险：
+
+1. 关键对位虽回升到 `56/100`，但样本仅 100，且高波动局依旧多。
+2. 生产口径刚发生 champion 切换，跨 tag 排名波动可能继续放大解读偏差。
+
+下一步：
+
+1. 在当前同代码上补做 `v66-v64` 额外 `>=100` 局 confirm，使窗口达到 `>=200` 再判优。
+2. 若 200 局仍无法稳定 `>55%`，优先再做减法：下调高风险态 overlay 候选上限，而非新增状态分支。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍具备 `CLOCK_THREAD_CPUTIME_ID` + `200ms` + 回退；
+   - 评测产物无触发计数字段，未能从日志直接统计触发次数。
+2. 是否存在超过 `200ms` 单步 CPU 风险点：
+   - 风险点仍在 overlay 候选评估链；
+   - 但有硬截止兜底，未出现“无保底”的路径。
+3. 若有风险，下轮如何降复杂度/改进剪枝：
+   - 按 `main_danger` 收缩 overlay pool 上限；
+   - 提前终止低收益候选评估，减少 follow-up 调用。
+
+### 93.1 固定目标与最新状态（continue）
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260305_011624`（`mode=adaptive`）。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`（`promoted=false`）。
+3. `config.pairs` 共 `45` 组，且包含 `v64-v66` 直接对阵（1 组）。
+4. 必做判读（gauntlet 高优先级风险）：
+   - 就本 tag 而言，champion 未切换（old=new），因此“本轮对手池是否受 champion 切换影响”= 否；
+   - 但跨 tag 仍存在高风险（上一生产 tag 出现过 `v66 -> v64`），禁止跨 scope/跨池直接比较 Elo 绝对值。
+
+iter 口径（仅候选筛选）：
+
+1. 最新 iter：`eval_20260305_012201`。
+2. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_012201_matches.jsonl`。
+3. replay latest：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（tag 同为 `eval_20260305_012201`），`rows=100`、`analyzed=100`、`missing=0`、`parse_errors=0`。
+
+### 93.2 算法级改动（in-place，继续简化分支）
+
+文件：`/www/ai_cpp/v66/ai_v66.cpp`。
+
+本轮改动（不新建版本目录）：
+
+1. 征召评分继续收敛：`choose_recruit_cell(...)` 从 `bool attack_window` 切换为连续 `aggression` 输入，移除离散开窗分支。
+2. 新评分主干改为连续权重：
+   - `front_weight = 20.0 + 2.0 * aggression`
+   - `main_support_weight = 0.75 - 0.30 * aggression`
+   - `enemy_main_weight = 1.0 + 0.8 * aggression`
+3. 调用点直接传入 `RecruitPlan.aggression`，保持 `coin_buffer/main_dist_cap/accept_threshold` 与评分同源，减少补丁层。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin/threat_origin_cnt`（来源计数）。
+   - 本游戏映射：`main_threat_sources` 进入 `choose_recruit_plan(...)` 的连续扣分，进一步驱动 `aggression` 而非离散 alert 开关。
+   - 代码落点：`choose_recruit_plan(...)` + `choose_recruit_cell(...)`。
+2. ANTWar 借鉴点：`reserved/safe_coin`（危险态资源保留）。
+   - 本游戏映射：`reserve_state` 降低 `aggression`，并抬升 `coin_buffer`、收紧 `main_dist_cap`，同一主干完成“保币+收敛征召”。
+   - 代码落点：`compute_recruit_coin_buffer(...)` + `choose_recruit_plan(...)`。
+
+本轮未新建版本原因：
+
+1. 仅为 `v66` 内部参数化重构（结构兼容），不需要目录级分叉；
+2. 当前仅有一轮 `100` 局 gate 证据，未达到 `>=200` confirm 固化门槛。
+
+### 93.3 可复现实验（规定脚本）
+
+命令（iter 隔离，14 核）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260396
+```
+
+结果：`eval_20260305_012201`
+
+1. `v66 vs v64 = 56/100`（满足两 AI 比较门槛 `>=100`，但仅为 gate 级样本）。
+2. 本轮不宣称“稳定优于 v64”，仍需同代码补足到 `>=200` 局 confirm。
+
+### 93.4 Replay 分析与原始回放核对
+
+replay 摘要（`iter_latest.md` / `latest.json`）：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：`v66 56` vs `v64 44`，`avg_rounds=115.31`。
+3. 动作分布：
+   - `v66`: `general_skill=326`, `call_general=177`
+   - `v64`: `general_skill=522`, `call_general=391`
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. 胜例（`v66` 胜，seed=`20261313`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_012201/20260305_012202_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20261313_rounds-180.jsonl`
+   - replay turning point：round `171`，`delta_army_lead_p0=-224`（对 p1 的 `v66` 有利）。
+   - 附近动作抽样：`Round 176, Player 1, Action [7,2,4]`，`Round 177/178, Player 1, Action [4,3,2,4,6]/[4,18,2,4,6]`。
+2. 负例（`v66` 负，seed=`20260439`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_012201/20260305_012341_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260439_rounds-180.jsonl`
+   - replay turning point：round `138`，`delta_army_lead_p0=-177`（p0 侧 `v66` 失衡）。
+   - 附近动作抽样：`Round 138, Player 0, Action [4,25,2,7,10]` 后，`Round 139, Player 1, Action [7,5,11]`。
+
+replay 结论：
+
+1. 结构简化后，`v66` 仍保持较低技能/征召频次（相对 `v64` 明显更克制）；
+2. 高摆动局仍多（`army_swing` 峰值 `619`、`terr_swing` 峰值 `104`），关键转折仍集中在中后盘技能与征召链附近。
+
+### 93.5 借鉴点是否生效
+
+1. Generals 借鉴点（threat-origin 连续化）：
+   - 证据：本轮保持 `56/100` 正胜率，且把来源压力映射到连续 `aggression` 后，征召评分分支继续减少。
+   - 判定：`部分生效`（方向为正，但波动仍大）。
+2. ANTWar 借鉴点（reserved/safe_coin 收敛）：
+   - 证据：`v66` 的 `call_general/general_skill` 继续显著低于 `v64`（`177/326` vs `391/522`），说明保币与克制征召仍在起作用。
+   - 判定：`生效`（控险有效，但需平衡终盘爆发）。
+
+### 93.6 回到生产口径的结论
+
+1. 生产 latest（`eval_20260305_011624`）本 tag 内 champion 未切换，因此本 tag 的对手池不受“本轮 champion 切换”影响。
+2. 但 gauntlet/adaptive 口径仍受 champion 身份与配对集影响，跨 tag/跨 scope Elo 绝对值不可直接对比。
+3. 本轮 iter `56/100` 仅作为候选信号；当前结论维持 `neutral`，不做“稳定优于 v64”宣称。
+
+### 93.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v66-v64` 仍只有单批次 `100` 局证据，统计稳定性不足；
+2. replay 显示高波动局未收敛，终盘技能链仍可能放大摆动。
+
+下一步：
+
+1. 维持同代码补做 `v66-v64` 额外 `>=100` 局 confirm，形成 `>=200` 窗口后再判优；
+2. 若 confirm 未稳定 `>55%`，优先继续减法：缩小高危险态 overlay 候选池与 follow-up 深评估次数。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物未记录触发计数，无法从现有日志直接统计次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 候选深评估链（`select_best_move_overlay`）；
+   - 已有 deadline 检查与 base 回退，不存在“无保底”路径。
+3. 若有风险，下轮如何降复杂度或改进剪枝：
+   - 用 `main_threat_sources/main_danger` 进一步压缩 overlay pool；
+   - 对低优先级候选更早退出，减少 follow-up 评估调用。
+
+### 94.1 固定目标与最新状态（continue）
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260305_013618`（`mode=adaptive`）。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v66_generals_weapon_econ`（`promoted=true`）。
+3. `config.pairs` 共 `45` 组，本 tag 内无直接 `v64-v66` 对打（`0` 组）。
+4. 必做判读（gauntlet 高优先级风险）：
+   - 本轮 production 发生 champion 切换，因此“本轮对手池是否受 champion 切换影响”= 是（高优先级风险）；
+   - 在该前提下，跨 tag Elo 绝对值不可直比，iter Elo 仅用于候选筛选。
+
+iter 口径（仅候选筛选）：
+
+1. 最新 iter：`eval_20260305_014143`。
+2. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_014143_matches.jsonl`。
+3. replay latest：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（tag 同为 `eval_20260305_014143`），`rows=100`、`analyzed=100`、`missing=0`、`parse_errors=0`。
+
+### 94.2 算法级改动（in-place，连续主干增补 lead 信号）
+
+文件：`/www/ai_cpp/v66/ai_v66.cpp`。
+
+本轮改动（不新建版本目录）：
+
+1. 新增 `sum_owned_army(...)`，用于快速估计当前局面兵力领先度。
+2. `choose_recruit_plan(...)` 新增 `territory_lead/army_lead` 入参，将“领先降攻、落后提攻”收敛到单一连续 `lead_signal`：
+   - `lead_signal = 0.55 * terr_signal + 0.45 * army_signal`
+   - `aggression -= 0.20 * max(0, lead_signal)`
+   - `aggression += 0.10 * max(0, -lead_signal)`
+3. 维持 `RecruitPlan` 单主干，不新增离散状态树；调用点在征召前直接计算领先度并传入。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`impact_value`（安全位置/优势局面不盲目冒进）。
+   - 本游戏映射：优势局面（地盘/兵力领先）自动降低征召 aggression，减少无效扩张。
+   - 代码落点：`choose_recruit_plan(...)` 的 `lead_signal` 抑制项。
+2. ANTWar 借鉴点：`global_state + reserved/safe_coin`（顺逆风态差异化资源策略）。
+   - 本游戏映射：落后时仅做受控增攻（`+0.10 * max(0,-lead_signal)`），避免直接切到离散攻击态。
+   - 代码落点：`choose_recruit_plan(...)` 的 `lead_signal` 提升项。
+
+本轮未新建版本原因：
+
+1. 改动是 `v66` 内部连续策略补充，结构完全兼容，不需要新目录；
+2. 仅完成 100 局 gate 样本，尚不足以触发版本固化。
+
+### 94.3 可复现实验（规定脚本）
+
+命令（iter 隔离，14 核）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260397
+```
+
+结果：`eval_20260305_014143`
+
+1. `v66 vs v64 = 57/100`（满足两 AI 比较门槛 `>=100`）。
+2. 仍属于 gate 级样本，未达同代码 `>=200` confirm。
+
+### 94.4 Replay 分析与原始回放核对
+
+replay 摘要（`iter_latest.md` / `latest.json`）：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：`v66 57` vs `v64 43`，`avg_rounds=114.56`。
+3. 动作分布：
+   - `v66`: `general_skill=332`, `call_general=173`
+   - `v64`: `general_skill=513`, `call_general=390`
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. 胜例（`v66` 胜，seed=`20260446`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_014143/20260305_014401_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260446_rounds-180.jsonl`
+   - replay turning point：round `133`，`delta_territory_lead_p0=-2`，`delta_army_lead_p0=332`。
+   - 附近动作抽样：`Round 131/133/134` 出现连续技能动作 `[4,...]`（双方换技能后 p0 侧建立兵力优势）。
+2. 负例（`v66` 负，seed=`20260439`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_014143/20260305_014343_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260439_rounds-180.jsonl`
+   - replay turning point：round `138`，`delta_army_lead_p0=-177`。
+   - 附近动作抽样：`Round 138, Player 0, Action [4,25,2,7,10]` 后，`Round 139, Player 1, Action [7,5,11]`。
+
+replay 结论：
+
+1. 新增 lead 信号后，`v66` 仍保持“低征召/低技能频次”相对特征；
+2. 高波动局依旧存在（`army_swing` 峰值仍达 `619`，`terr_swing` 峰值 `106`），本轮更多体现为胜率小幅改善而非波动根治。
+
+### 94.5 借鉴点是否生效
+
+1. Generals 借鉴点（impact 优势抑攻）：
+   - 证据：`v66-v64` 从上一轮 `56/100` 到本轮 `57/100`，且 `v66` 的 `no_effect_rate` 继续优于 `v64`（`0.0616` vs `0.0650`）。
+   - 判定：`部分生效`（方向为正，但增益幅度小）。
+2. ANTWar 借鉴点（顺逆风受控增攻）：
+   - 证据：`v66` 的 `call_general/general_skill` 仍显著低于 `v64`（`173/332` vs `390/513`），说明“保币与克制”主干仍在。
+   - 判定：`生效`（控险有效，待 confirm 验证稳定性）。
+
+### 94.6 回到生产口径的结论
+
+1. 生产 latest 已切换 champion（`v64 -> v66`），说明当前 gauntlet 对手池与 champion 身份已变化。
+2. 但本 tag `config.pairs` 内无直接 `v64-v66` 对局，不能把该次切换直接视为 head-to-head 充分证据。
+3. 本轮 iter `57/100` 仅作为候选信号；当前结论保持 `neutral`，不做“稳定优于 v64”宣称。
+
+### 94.7 风险、下一步与回合末自检
+
+风险：
+
+1. 同代码仍只有 `100` 局，统计置信度不足；
+2. replay 高波动样本仍多，终盘技能链导致的 swing 问题尚未收敛。
+
+下一步：
+
+1. 继续同代码补 `v66-v64` 至少 `>=100` 局 confirm，形成 `>=200` 窗口后再判优；
+2. 若波动仍高，优先减法：进一步压缩高 danger 态下的 overlay pool/深评估次数。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 搜索链仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物未暴露触发计数字段，无法直接统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 主要风险仍在 overlay 候选深评估路径；
+   - 现有 deadline 检查与 base 回退仍在，无“无兜底”路径。
+3. 若有风险，下轮如何降复杂度或改进剪枝：
+   - 在高 danger/source 态进一步收紧候选池规模；
+   - 提前终止低收益候选的 follow-up 评估链。
+
+### 95.1 固定目标与最新状态（continue）
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260305_015407`（`mode=adaptive`）。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v66_generals_weapon_econ`（`promoted=false`）。
+3. `config.pairs` 共 `45` 组，本 tag 内无直接 `v64-v66` 对打（`0` 组）。
+4. 必做判读（gauntlet 高优先级风险）：
+   - 本 tag champion 未切换（old=new），因此“本轮对手池是否受 champion 切换影响”= 否；
+   - 但 gauntlet 仍受 champion/对手池影响，跨 tag 与跨 scope Elo 绝对值仍不可直比。
+
+iter 口径（仅候选筛选）：
+
+1. 最新 iter：`eval_20260305_020147`。
+2. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_020147_matches.jsonl`。
+3. replay latest：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（tag 同为 `eval_20260305_020147`），`rows=100`、`analyzed=100`、`missing=0`、`parse_errors=0`。
+
+### 95.2 算法级改动（in-place，连续 pressure 信号）
+
+文件：`/www/ai_cpp/v66/ai_v66.cpp`。
+
+本轮改动（不新建版本目录）：
+
+1. `choose_recruit_plan(...)` 新增 `enemy_skill_window` 输入，把 threat-source 与技能窗口合并为连续 `pressure_signal`：
+   - `pressure_signal = 0.65 * source_signal + 0.35 * skill_signal`
+   - `aggression -= 0.32 * pressure_signal`
+2. `coin_buffer` 与 `main_dist_cap` 同步连续化：
+   - `coin_buffer += round(pressure_signal * 6.0)`；
+   - `main_dist_cap -= round(pressure_signal)`，最终 `clamp(8,12)`。
+3. 去掉 `owned_need` 的二值分支，改为连续公式：
+   - `owned_need = clamp(10 - round(aggression*2), 8, 10)`。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin`/`impact_value` 连续威胁与安全度。
+   - 本游戏映射：`main_threat_sources + enemy_skill_window` 收敛为同一个 `pressure_signal` 影响征召强度。
+   - 代码落点：`choose_recruit_plan(...)`。
+2. ANTWar 借鉴点：`global_state/reserved/safe_coin`。
+   - 本游戏映射：危险窗口直接提高 `coin_buffer`、收缩 `main_dist_cap`，保持“危险态保币”主干。
+   - 代码落点：`choose_recruit_plan(...)` 与征召调用点 `enemy_skill_window` 输入。
+
+本轮未新建版本原因：
+
+1. 改动是 `v66` 内部连续化重构，结构兼容；
+2. 仅有 100 局 gate 样本，未达到版本固化门槛。
+
+### 95.3 可复现实验（规定脚本）
+
+命令（iter 隔离，14 核）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260398
+```
+
+结果：`eval_20260305_020147`
+
+1. `v66 vs v64 = 46/100`（满足双 AI 比较门槛 `>=100`，但结果回归）。
+2. 相比上一轮 `57/100` 明显下滑，本轮判定为 regression 信号。
+
+### 95.4 Replay 分析与原始回放核对
+
+replay 摘要（`iter_latest.md` / `latest.json`）：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：`v66 46` vs `v64 54`，`avg_rounds=107.94`。
+3. 动作分布：
+   - `v66`: `general_skill=303`, `call_general=174`
+   - `v64`: `general_skill=366`, `call_general=369`
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. 胜例（`v66` 胜，seed=`20260420`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_020147/20260305_020228_p0-cpp_v64_generals_rebuild_p1-cpp_v66_generals_weapon_econ_seed-20260420_rounds-180.jsonl`
+   - replay turning point：round `150`，`delta_territory_lead_p0=2`，`delta_army_lead_p0=-137`（对 p1 的 `v66` 有利）。
+   - 附近动作抽样：`Round 147, Player 0, Action [7,9,12]`。
+2. 负例（`v66` 负，seed=`20261310`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_020147/20260305_020147_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20261310_rounds-180.jsonl`
+   - replay turning point：round `157`，`delta_territory_lead_p0=1`，`delta_army_lead_p0=472`（p0 侧 `v66` 失衡）。
+   - 附近动作抽样：`Round 159, Player 1, Action [7,2,10]`。
+
+replay 结论：
+
+1. 本轮 `pressure_signal` 增强后，`v66` 仍保持低征召频次，但关键对位胜率下滑；
+2. 波动进一步恶化：`army_swing` 峰值到 `726`，`terr_swing` 峰值到 `124`。
+
+### 95.5 借鉴点是否生效
+
+1. Generals 借鉴点（threat/impact 连续化）：
+   - 证据：分支确实减少，但 `v66-v64` 从 `57/100` 回落至 `46/100`。
+   - 判定：`本轮未生效`（方向错误）。
+2. ANTWar 借鉴点（danger 保币）：
+   - 证据：`v66` 的 `call_general` 继续显著低于 `v64`（`174` vs `369`），但胜率反而回落。
+   - 判定：`过度生效`（保守过头，压制了中后盘对抗强度）。
+
+### 95.6 回到生产口径的结论
+
+1. 生产 latest（`eval_20260305_015407`）本 tag champion 未切换，切换风险在本 tag 内为否。
+2. 但该 tag 无 `v64-v66` 直接对局，不能用 production adaptive 排名替代 head-to-head 证据。
+3. 本轮 iter 明确回归（`46/100`），当前不宣称 `v66` 优于 `v64`。
+
+结论标签：`regression`。
+
+### 95.7 风险、下一步与回合末自检
+
+风险：
+
+1. 新 pressure 信号权重偏大，导致征召/进攻窗口过度收缩；
+2. replay 显示极端 swing 上升，稳定性未改善反而恶化。
+
+下一步：
+
+1. 先做减法回退：下调 `pressure_signal` 影响系数（尤其 `aggression` 扣分与 `coin_buffer` 加成）；
+2. 在同代码上补做 confirm（再 `>=100` 局）验证是否恢复到 `>=55%` 区间。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物未记录触发计数，无法直接统计次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 主要风险点仍在 overlay 候选深评估链；
+   - 仍有 deadline 检查与 base 回退兜底。
+3. 若有风险，下轮如何降复杂度或改进剪枝：
+   - 继续收缩高 danger 态候选池；
+   - 减少低收益 follow-up 评估并提前退出。
+
+### 96.1 固定目标与最新状态（continue）
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260305_021316`（`mode=adaptive`）。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`（`promoted=false`）。
+3. `config.pairs` 共 `45` 组，本 tag 无直接 `v64-v66` 对打（`0` 组）。
+4. 必做判读（gauntlet 高优先级风险）：
+   - 本 tag champion 未切换（old=new），因此“本轮对手池是否受 champion 切换影响”= 否；
+   - 但 gauntlet 仍依赖 champion 与对手池，跨 tag/跨 scope Elo 绝对值不可直比。
+
+iter 口径（仅候选筛选）：
+
+1. 最新 iter：`eval_20260305_022119`。
+2. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_022119_matches.jsonl`。
+3. replay latest：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`（tag 同为 `eval_20260305_022119`），`rows=100`、`analyzed=100`、`missing=0`、`parse_errors=0`。
+
+### 96.2 算法级改动（in-place，pressure 信号软化）
+
+文件：`/www/ai_cpp/v66/ai_v66.cpp`。
+
+本轮改动（不新建版本目录）：
+
+1. 对补充25的 `pressure_signal` 做减法回退，降低过保守副作用：
+   - `pressure_signal` 权重从 `0.65/0.35` 调整为 `0.78/0.22`（source/skill）。
+2. 下调压力惩罚强度：
+   - `aggression` 扣分从 `0.32` 降到 `0.14`；
+   - `coin_buffer` 压力附加从 `+round(pressure*6)` 降到 `+round(pressure*2)`。
+3. 去除 `main_dist_cap` 的压力二次扣减，减少同一信号在多维度重复惩罚（简化补丁叠加）。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`impact_value/threat_origin` 的“风险连续化而非硬开关”。
+   - 本游戏映射：保留连续 `pressure_signal`，但弱化惩罚斜率，避免过度抑攻。
+   - 代码落点：`choose_recruit_plan(...)` 的 `pressure_signal` 与 `aggression` 公式。
+2. ANTWar 借鉴点：`reserved/safe_coin` 的“危险态保币但不过度锁死”。
+   - 本游戏映射：保留轻量 `coin_buffer` 压力附加，移除过强半径惩罚。
+   - 代码落点：`choose_recruit_plan(...)` 的 `coin_buffer/main_dist_cap` 计算。
+
+本轮未新建版本原因：
+
+1. 本轮是对补充25的 in-place 回退修正，结构兼容；
+2. 结果仅 100 局 gate 样本，未满足版本固化条件。
+
+### 96.3 可复现实验（规定脚本）
+
+命令（iter 隔离，14 核）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260399
+```
+
+结果：`eval_20260305_022119`
+
+1. `v66 vs v64 = 59/100`（满足双 AI 比较门槛 `>=100`）。
+2. 相比补充25（`46/100`）明显恢复，但仍属 gate 样本，不能替代 `>=200` confirm。
+
+### 96.4 Replay 分析与原始回放核对
+
+replay 摘要（`iter_latest.md` / `latest.json`）：
+
+1. `rows=100`，`analyzed=100`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：`v66 59` vs `v64 41`，`avg_rounds=113.51`。
+3. 动作分布：
+   - `v66`: `general_skill=310`, `call_general=170`
+   - `v64`: `general_skill=496`, `call_general=390`
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. 胜例（`v66` 胜，seed=`20260446`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_022119/20260305_022704_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260446_rounds-180.jsonl`
+   - replay turning point：round `133`，`delta_territory_lead_p0=-2`，`delta_army_lead_p0=332`。
+   - 附近动作抽样：`Round 131/133/134` 连续技能动作 `[4,...]`（双方换技能后 p0 侧建立兵力优势）。
+2. 负例（`v66` 负，seed=`20260439`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_022119/20260305_022634_p0-cpp_v66_generals_weapon_econ_p1-cpp_v64_generals_rebuild_seed-20260439_rounds-180.jsonl`
+   - replay turning point：round `138`，`delta_army_lead_p0=-177`。
+   - 附近动作抽样：`Round 138, Player 0, Action [4,25,2,7,10]` 后，`Round 139, Player 1, Action [7,5,11]`。
+
+replay 结论：
+
+1. 软化后 `v66` 仍保持低技能/低征召频次特征，并恢复关键对位胜率；
+2. 波动仍高（`army_swing` 峰值 `619`、`terr_swing` 峰值 `106`），稳定性问题尚未根治。
+
+### 96.5 借鉴点是否生效
+
+1. Generals 借鉴点（连续风险而非硬开关）：
+   - 证据：在不引入新离散分支的前提下，关键对位从 `46/100` 回升到 `59/100`。
+   - 判定：`生效`（方向为正，但需 confirm）。
+2. ANTWar 借鉴点（危险态保币但不过度）：
+   - 证据：`v66` 的 `call_general/general_skill` 继续显著低于 `v64`（`170/310` vs `390/496`），且胜率已恢复。
+   - 判定：`部分生效`（控险与胜率暂时兼顾）。
+
+### 96.6 回到生产口径的结论
+
+1. 生产 latest（`eval_20260305_021316`）本 tag champion 未切换，切换风险在本 tag 内为否。
+2. 但本 tag 无 `v64-v66` 直接对局，不能用 production adaptive 排名替代 head-to-head 判优。
+3. 本轮 iter `59/100` 为正向候选信号；当前结论维持 `neutral`（未达 `>=200` confirm，不宣称稳定优于）。
+
+### 96.7 风险、下一步与回合末自检
+
+风险：
+
+1. 本轮仍仅 100 局，统计置信度不足；
+2. replay 高波动局仍较多，终盘 swing 问题未解决。
+
+下一步：
+
+1. 继续同代码补做 `v66-v64` 额外 `>=100` 局，形成 `>=200` confirm 后再判优；
+2. 若 confirm 仍摆动，优先继续减法：限制高 danger 态下 overlay 候选规模与 follow-up 深评估次数。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物未提供触发计数，无法直接统计。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 候选深评估链；
+   - 已有 deadline 与 base 回退兜底。
+3. 若有风险，下轮如何降复杂度或改进剪枝：
+   - 继续压缩高 danger/source 条件下的候选池；
+   - 对低收益候选更早终止 follow-up 评估。
+
+### 97.1 固定目标与最新状态（continue）
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260305_022924`（`mode=adaptive`）。
+2. `champion.old/new = cpp_v64_generals_rebuild -> cpp_v66_generals_weapon_econ`（`promoted=true`）。
+3. `config.pairs` 共 `45` 组，其中直接 `v64-v66` 对局 `1` 组（old/new 同对）。
+4. 必做判读（gauntlet 高优先级风险）：
+   - 本 tag 发生 champion 切换，因此“本轮对手池是否受 champion 切换影响”= 是（高优先级风险）；
+   - 生产 Elo 仍是唯一权威，但该 tag 的对手池/采样随 champion 变化，跨 tag Elo 绝对值不可直比。
+
+iter 口径（仅候选筛选）：
+
+1. 最新 iter：`eval_20260305_024959`。
+2. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_024959_matches.jsonl`。
+3. replay latest：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json` 与 `/www/docs/replay_analysis/iter_latest.md`（`rows=200`、`analyzed=200`、`missing=0`、`parse_errors=0`）。
+
+### 97.2 算法级改动（新版本 v68，overlay 风险池平滑限幅）
+
+新增版本目录与版本 ID（不改写旧快照）：
+
+1. 源码：`/www/ai_cpp/v68/ai_v68.cpp`
+2. 可执行：`/www/ai_cpp/v68/ai_v68`
+3. 注册 ID：`cpp_v68_overlay_smoothcap`
+
+注册信息（可复现）：
+
+```bash
+python3 /www/autolab_manage.py register-cpp \
+  --version-id cpp_v68_overlay_smoothcap \
+  --exe /www/ai_cpp/v68/ai_v68 \
+  --src /www/ai_cpp/v68/ai_v68.cpp \
+  --notes "smooth overlay pool cap + danger-weighted early-stop"
+```
+
+本轮唯一策略改动（相对 `v67`）：
+
+1. `choose_overlay_tuning(...)` 去掉分段阈值池规模切换（`risk<0.70` / `risk>=0.95`），改为连续平滑上限：
+   - `smooth_pool_cap = kOverlayStableMaxPool + round(risk_alpha*2)`，将 overlay 候选池收敛到 `[8,10]`。
+2. 提前停止条件改为随风险连续调节：
+   - `early_stop_gap = 18 + round(risk_alpha*6)`；
+   - `early_stop_min_evals = 4 + round((1-risk_alpha)*2)`。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin / impact_value`（连续威胁来源，不用硬阈值切段）。
+   - 本游戏映射：用 `main_threat_sources + main_danger` 连续化 overlay 搜索预算，而非分段切换池大小。
+   - 代码落点：`choose_overlay_tuning(...)` 的 `risk_alpha/smooth_pool_cap`。
+2. ANTWar 借鉴点：`global_state + danger + reserved/safe_coin`（危险态收敛开销）。
+   - 本游戏映射：高风险时减少搜索扩张并更早停止，优先稳定主线动作。
+   - 代码落点：`choose_overlay_tuning(...)` 的 `early_stop_gap/early_stop_min_evals` 连续调节。
+
+### 97.3 可复现实验（规定脚本，iter 隔离）
+
+命令（14 核，禁止写生产 champion）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v68_overlay_smoothcap,cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --challengers cpp_v68_overlay_smoothcap \
+  --opponents cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild \
+  --seed 20260405
+```
+
+结果：`eval_20260305_024959`
+
+1. `v68 vs v66 = 50/100`（达到两 AI 比较门槛 `>=100`，但无优势）。
+2. `v68 vs v64 = 50/100`（达到两 AI 比较门槛 `>=100`，但无优势）。
+3. 结论等级：`gate` 已达样本门槛，但当前仅 `neutral` 候选信号。
+
+### 97.4 Replay 分析与原始回放核对
+
+replay 摘要（`iter_latest.md` / `latest.json`）：
+
+1. `rows=200`，`analyzed=200`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：
+   - `v68-v66`: `50-50`（100 局）
+   - `v68-v64`: `50-50`（100 局）
+3. 动作分布（聚合）：
+   - `v68`: `general_skill=570`, `call_general=311`
+   - `v66`: `general_skill=281`, `call_general=182`
+   - `v64`: `general_skill=379`, `call_general=298`
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. `v68 vs v64` 胜例（seed=`20261414`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_024959/20260305_025154_p0-cpp_v68_overlay_smoothcap_p1-cpp_v64_generals_rebuild_seed-20261414_rounds-180.jsonl`
+   - turning point：round `26`（`delta_territory_lead_p0=+3`, `delta_army_lead_p0=+22`）。
+   - 附近动作：`Round 26, P0 Action [4,0,2,5,10]`，随后连续推进动作保持领先。
+2. `v68 vs v64` 负例（seed=`20261415`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_024959/20260305_025200_p0-cpp_v68_overlay_smoothcap_p1-cpp_v64_generals_rebuild_seed-20261415_rounds-180.jsonl`
+   - turning point：round `18`（`delta_territory_lead_p0=-2`, `delta_army_lead_p0=-4`）。
+   - 附近动作：`Round 17, P1 Action [7,1,5]` 后，`P0` 连续小步推进未扭转局面。
+3. `v68 vs v66` 胜例（seed=`20260405`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_024959/20260305_024959_p0-cpp_v68_overlay_smoothcap_p1-cpp_v66_generals_weapon_econ_seed-20260405_rounds-180.jsonl`
+   - turning point：round `66`（`delta_territory_lead_p0=+2`, `delta_army_lead_p0=+8`）。
+   - 附近动作：`Round 66, P0 Action [4,3,2,6,13]` 后转入收官。
+4. `v68 vs v66` 负例（seed=`20261316`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_024959/20260305_024959_p0-cpp_v66_generals_weapon_econ_p1-cpp_v68_overlay_smoothcap_seed-20261316_rounds-180.jsonl`
+   - turning point：round `122`（`delta_army_lead_p0=-227`，对 p1=`v68` 不利）。
+   - 附近动作：`Round 122, P1 Action [4,17,2,4,6]` 后仍被对手反压。
+
+replay 结论：
+
+1. `v68` 的 overlay 平滑限幅没有形成净胜率提升，两个关键对手都打成 `50/100`；
+2. 高波动仍存在（`largest_army_swing` 峰值 `1047`，`largest_territory_swing` 峰值 `116`），说明“更稳搜索预算”尚未转化为波动收敛。
+
+### 97.5 借鉴点是否生效
+
+1. Generals 借鉴点（threat-origin 连续化）：
+   - 证据：`choose_overlay_tuning` 已从分段切换改为连续 `risk_alpha` 平滑池上限，结构更简；
+   - 结果：关键对位均 `50/100`，未体现强度增益。
+   - 判定：`部分生效（结构简化生效，强度未提升）`。
+2. ANTWar 借鉴点（danger/reserved 的危险态收敛）：
+   - 证据：高风险下 overlay 候选池上限收敛到 `[8,10]`，并提前停止；
+   - 结果：仍出现高 swing 长局（如 `army_swing=1047`）。
+   - 判定：`未充分生效`。
+
+### 97.6 回到生产口径的结论
+
+1. 生产 latest（`eval_20260305_022924`）发生 champion 切换（`v64 -> v66`），对手池受影响风险为高。
+2. 该生产 tag 虽含 `1` 组 `v64-v66` 直接对局，但整体仍为 adaptive 抽样池，不能单轮替代固定 head-to-head 复验结论。
+3. 本轮 iter 结果仅用于候选筛选：`v68` 结论标签为 `neutral`，不宣称优于 `v64` 或 `v66`。
+
+### 97.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v68` 对关键基线无净增益（双 `50/100`），说明当前改动主要是结构简化而非强度突破；
+2. replay 高波动样本仍多，终盘摆动问题未解。
+
+下一步：
+
+1. 在 `v68` 上做“低收益候选跳过 my_follow”剪枝（继续减法，不加新状态机），优先压波动；
+2. 对 `v68 vs v66` 与 `v68 vs v64` 分别补到 `>=200` 局 confirm，再决定是否保留该分支。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍使用 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物未记录触发计数，无法直接统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best + my_follow` 双评估链；
+   - 本轮已通过池上限与提前停止降低风险，但未做计数可观测性。
+3. 若有风险，下轮如何降复杂度或改进剪枝：
+   - 增加 `hard_cutoff_hit` 计数日志并写入评测摘要；
+   - 在高风险态优先跳过 `raw_drop` 偏大的候选 follow-up 评估。
+
+### 98.1 固定目标与最新状态（continue）
+
+已重新读取并严格遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. 当前 `latest.json`：`eval_20260305_025927`（`mode=adaptive`）。
+2. `champion.old/new = cpp_v66_generals_weapon_econ -> cpp_v64_generals_rebuild`（`promoted=true`）。
+3. `config.pairs` 共 `45` 组，本 tag 内 `old/new` 直接对局 `0` 组。
+4. 必做判读（gauntlet 高优先级风险）：
+   - 本 tag 发生 champion 切换，因此“本轮对手池是否受 champion 切换影响”= 是（高优先级风险）；
+   - 且该 tag 无 old/new 直接对打，不能用单轮 production adaptive Elo 替代 head-to-head 复验。
+
+iter 口径（仅候选筛选）：
+
+1. 最新 iter：`eval_20260305_030348`。
+2. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_030348_matches.jsonl`。
+3. replay latest：`/www/autolab/runtime/scopes/iter/replay_analysis/latest.json` 与 `/www/docs/replay_analysis/iter_latest.md`（`rows=400`、`analyzed=400`、`missing=0`、`parse_errors=0`）。
+
+### 98.2 算法级改动（新版本 v69，overlay follow-up 连续剪枝）
+
+新增版本目录与版本 ID（旧快照不改写）：
+
+1. 源码：`/www/ai_cpp/v69/ai_v69.cpp`
+2. 可执行：`/www/ai_cpp/v69/ai_v69`
+3. 注册 ID：`cpp_v69_overlay_followup_prune`
+
+注册信息（可复现）：
+
+```bash
+python3 /www/autolab_manage.py register-cpp \
+  --version-id cpp_v69_overlay_followup_prune \
+  --exe /www/ai_cpp/v69/ai_v69 \
+  --src /www/ai_cpp/v69/ai_v69.cpp \
+  --notes "overlay follow-up pruning by raw-drop risk"
+```
+
+本轮策略改动（相对 `v68`，简化优先）：
+
+1. `OverlayTuning` 新增两个连续参数：
+   - `followup_raw_drop_cap`（决定是否评估 `my_follow`）
+   - `followup_skip_penalty`（跳过 follow-up 的轻惩罚）
+2. 在 `choose_overlay_tuning(...)` 中按 `risk_alpha` 连续设置：
+   - `followup_raw_drop_cap = 16 - 8*risk_alpha`（`[8,16]`）
+   - `followup_skip_penalty = 1.5 + 1.5*risk_alpha`
+3. 在 `select_best_move_overlay(...)` 中：
+   - 非 base 且 `raw_drop` 超过 cap 的候选，跳过 `my_follow` 深评估；
+   - 仍保留 enemy reply veto 与 base 回退链，防止无兜底路径。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin` 连续威胁来源 -> 本游戏映射为“低优先级分支不做二次跟进评估”。
+   - 代码落点：`select_best_move_overlay` 的 `should_eval_follow` 分支。
+2. ANTWar 借鉴点：`danger/reserved` 危险态收敛预算 -> 本游戏映射为“风险越高，follow-up 预算越紧”。
+   - 代码落点：`choose_overlay_tuning` 的 `followup_raw_drop_cap/followup_skip_penalty`。
+
+### 98.3 可复现实验（规定脚本，iter gate）
+
+命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v69_overlay_followup_prune,cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v69_overlay_followup_prune \
+  --opponents cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260406
+```
+
+结果：`eval_20260305_030348`
+
+1. `v69 vs v66 = 51/100`（`>=100`，轻微正向）。
+2. `v69 vs v64 = 48/100`（`>=100`，对当前生产 champion 仍劣势）。
+3. `v69 vs v1 = 84/100`（`>=100`，gate 正向）。
+4. `v69 vs v2 = 76/100`（`>=100`，gate 正向）。
+
+判读：本轮属于 gate 结果，尚无任一关键结论达到 `>=200` confirm；不能宣称“稳定优于多个老版本”。
+
+### 98.4 Replay 分析与原始回放核对
+
+replay 摘要（`iter_latest.md` / `latest.json`）：
+
+1. `rows=400`，`analyzed=400`，`missing=0`，`parse_errors=0`。
+2. `pair_stats`：
+   - `v69-v66`: `51-49`
+   - `v69-v64`: `48-52`
+   - `v69-v1`: `84-16`
+   - `v69-v2`: `76-24`
+3. `v69` 聚合：`win_rate=0.647`，`no_effect_rate=0.0567`，`avg_rounds=132.03`。
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. `v69 vs v66` 胜例（seed=`20261317`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_030348/20260305_030348_p0-cpp_v66_generals_weapon_econ_p1-cpp_v69_overlay_followup_prune_seed-20261317_rounds-180.jsonl`
+   - turning point：round `92`（`delta_army_lead_p0=+206`，对 p1=`v69` 有利）。
+   - 附近动作：`Round 92, P1 Action [4,16,2,9,11]` 后转入优势交换。
+2. `v69 vs v66` 负例（seed=`20260406`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_030348/20260305_030348_p0-cpp_v69_overlay_followup_prune_p1-cpp_v66_generals_weapon_econ_seed-20260406_rounds-180.jsonl`
+   - turning point：round `90`（`delta_army_lead_p0=-39`）。
+   - 附近动作：`Round 90, P0 Action [4,14,2,9,5]` 后未扭转下行。
+3. `v69 vs v64` 胜例（seed=`20262326`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_030348/20260305_030558_p0-cpp_v64_generals_rebuild_p1-cpp_v69_overlay_followup_prune_seed-20262326_rounds-180.jsonl`
+   - turning point：round `104`（`delta_army_lead_p0=-198`，对 p1=`v69` 有利）。
+   - 附近动作：`Round 104, P1 Action [4,16,2,11,3]`。
+4. `v69 vs v64` 负例（seed=`20261415`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_030348/20260305_030554_p0-cpp_v69_overlay_followup_prune_p1-cpp_v64_generals_rebuild_seed-20261415_rounds-180.jsonl`
+   - turning point：round `18`（`delta_territory_lead_p0=-2`, `delta_army_lead_p0=-4`），早盘丢节奏。
+
+replay 结论：
+
+1. `v69` 在非 champion 对手池（`v1/v2`）上增益明显，但对当前 champion `v64` 仍未过 50%；
+2. 高波动长局仍存在（`largest_army_swing` 峰值 `1232`，`largest_territory_swing` 峰值 `151`），说明剪枝降低了分支复杂度，但尚未显著收敛终盘 swing。
+
+### 98.5 借鉴点是否生效
+
+1. Generals 借鉴点（threat-origin 连续化）：
+   - 证据：`my_follow` 评估已从“全候选”改为“连续 raw_drop 门控”，结构更简；
+   - 结果：`v69-v66` 提升到 `51/100`，对 `v64` 仍 `48/100`。
+   - 判定：`部分生效`。
+2. ANTWar 借鉴点（danger/reserved 收敛预算）：
+   - 证据：高风险时 follow-up cap 更紧，避免低价值候选深评估；
+   - 结果：`v69` 的 `no_effect_rate=0.0567` 低于 `v64=0.0736`，但高波动仍在。
+   - 判定：`部分生效`（复杂度下降，稳定性收益不足）。
+
+### 98.6 回到生产口径的结论
+
+1. 生产 latest（`eval_20260305_025927`）发生 `v66 -> v64` champion 切换，且本 tag 无 old/new 直接对局，gauntlet 口径风险高。
+2. 本轮 iter 仅用于候选筛选：`v69` 对 `v1/v2` 强，但对当前 champion `v64` 仍不足；
+3. 结论标签：`neutral`（不宣称优于当前 champion 或稳定优于多个老版本）。
+
+### 98.7 风险、下一步与回合末自检
+
+风险：
+
+1. 对冠军关键对位 `v69-v64` 仍未达 50%+（`48/100`）；
+2. replay 仍有极端 swing（`army_swing` 到 `1232`），稳定性短板未解。
+
+下一步：
+
+1. 在 `v69` 上继续减法：对 `enemy_reply` 高且 `raw_drop` 大的候选提前终止，不再进入 overlay 打分；
+2. 先做 `v69 vs v64` 追加 `>=100` 局 confirm（形成 `>=200`），再做对 `v66` 的 confirm。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物未记录触发计数，无法直接统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best/my_follow` 评估链；
+   - 本轮通过 `followup_raw_drop_cap` 降低该风险，但不是可观测闭环。
+3. 若有风险，下轮如何降复杂度或改进剪枝：
+   - 在评测摘要中增加 `hard_cutoff_hit` 计数导出；
+   - 对高风险候选加更早的 veto，减少深评估调用次数。
+
+### 99.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_032841`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`（`promoted=false`）。
+3. `config.pairs` 共 `45` 对，其中包含 champion 的对局 `7` 对。
+4. 必做判读（champion 切换影响）：本 tag **未发生** champion 切换，因此本轮对手池不受“切换事件”直接影响；但 adaptive/gauntlet 的对手组成仍与 champion 身份耦合，跨 tag Elo 绝对值不可比较。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_033232`，mode=`gauntlet`，`matches=500`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_033232_matches.jsonl`（已用于逐局索引）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 99.2 算法级改动落地（新版本 `v70`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v70/ai_v70.cpp`（未改写旧版本快照）。
+2. 新版本 ID：`cpp_v70_overlay_opening_subpressure`。
+3. 注册项：`/www/autolab/registry.json`（`exe=/www/ai_cpp/v70/ai_v70`，`src=/www/ai_cpp/v70/ai_v70.cpp`，`notes=opening sub-gap pressure in overlay tuning`）。
+
+改动点（简化优先，未新增状态机）：
+
+1. 在 `choose_overlay_tuning(...)` 增加开局子将压力连续信号：
+   - `my_sub_count/enemy_sub_count -> sub_gap_signal`；
+   - `opening_signal = clamp((60-round)/60)`；
+   - `opening_sub_pressure = duel_close * opening_signal * sub_gap_signal`。
+2. 用同一连续信号联动 overlay 预算：
+   - `base_anchor_penalty`、`max_raw_drop`、`base_reply_veto_slack`；
+   - `followup_raw_drop_cap`、`followup_skip_penalty`；
+   - 并做 clamp，避免离散阈值补丁扩散。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin` 连续威胁来源。
+   - 本游戏映射：开局且子将劣势时，提高对候选后续验证强度，而不是新增离散状态分支。
+   - 代码落点：`choose_overlay_tuning(...)` 的 `opening_sub_pressure` 与后续连续调参。
+2. ANTWar 借鉴点：`danger/reserved` 的预算收敛。
+   - 本游戏映射：在危险态动态收紧/放宽 overlay 搜索预算（而非固定门槛）。
+   - 代码落点：`max_raw_drop/base_reply_veto_slack/followup_*` 的统一预算联动。
+
+### 99.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope，禁止生产晋升）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v70_overlay_opening_subpressure,cpp_v69_overlay_followup_prune,cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v70_overlay_opening_subpressure \
+  --opponents cpp_v69_overlay_followup_prune,cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260407
+```
+
+结果（tag=`eval_20260305_033232`，每对手 `100` 局，满足两 AI 比较 `>=100` 门槛）：
+
+1. `v70 vs v69 = 52/100`
+2. `v70 vs v66 = 46/100`
+3. `v70 vs v64(champion) = 51/100`
+4. `v70 vs v1 = 74/100`
+5. `v70 vs v2 = 70/100`
+
+口径判读：
+
+1. 这是 gate 结果，不是 confirm；当前关键对位均未达到 `>=200`。
+2. 不能宣称“新版本优于多个老版本”：`v70` 对 `v66` 仍为负。
+3. 与上一轮 `v69` 的同量级 gate 对比（仅作方向信号，不作跨实验严格判优）：`vs v64` 从 `48/100` 升到 `51/100`，但 `vs v66` 从 `51/100` 降到 `46/100`。
+
+### 99.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=500`，`analyzed=500`，`missing=0`，`parse_errors=0`。
+2. pair 统计：
+   - `v70-v69: 52-48`
+   - `v70-v66: 46-54`
+   - `v70-v64: 51-49`
+   - `v70-v1: 74-26`
+   - `v70-v2: 70-30`
+3. 波动仍高：`largest_army_swing=1047`，`largest_territory_swing=152`。
+
+原始回放逐帧核对（均来自 `paths.matches` 的 `replay_file`）：
+
+1. `v70 vs v66` 胜例（seed=`20262369`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_033232/20260305_033624_p0-cpp_v66_generals_weapon_econ_p1-cpp_v70_overlay_opening_subpressure_seed-20262369_rounds-180.jsonl`
+   - turning point：round `149`（`delta_army_lead_p0=-211`，p1=`v70` 受益）。
+   - 附近动作：`R149 P1 Action [1,11,1,3,1]`、`[1,11,1,4,1]`；对应回合 p0 兵力领先回撤。
+2. `v70 vs v66` 负例（seed=`20261426`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_033232/20260305_033527_p0-cpp_v70_overlay_opening_subpressure_p1-cpp_v66_generals_weapon_econ_seed-20261426_rounds-180.jsonl`
+   - turning point：round `130`（`delta_army_lead_p0=-290`，p0=`v70` 失衡）。
+   - 附近动作：`R130 P0 Action [4,17,2,7,5]` 后未能扭转下行。
+3. `v70 vs v64` 胜例（seed=`20262473`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_033232/20260305_033826_p0-cpp_v70_overlay_opening_subpressure_p1-cpp_v64_generals_rebuild_seed-20262473_rounds-180.jsonl`
+   - turning point：round `145`（`delta_army_lead_p0=+327`，p0=`v70` 放大优势）。
+   - 附近动作：`R145 P0 Action [1,9,13,2,1]` 后，p0 维持扩张节奏。
+4. `v70 vs v64` 负例（seed=`20262458`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_033232/20260305_033754_p0-cpp_v70_overlay_opening_subpressure_p1-cpp_v64_generals_rebuild_seed-20262458_rounds-180.jsonl`
+   - turning point：round `176`（`delta_army_lead_p0=-402`，p0=`v70` 终盘被反打）。
+   - 附近动作：`R176 P0 Action [4,23,2,4,8]` 与 `R176 P1 Action [4,5,2,7,2]` 同窗出现，随后兵力差急剧逆转。
+
+replay 结论：
+
+1. `v70` 对当前 champion `v64` 略有改善（`51/100`），但仍接近五五开；
+2. 对 `v66` 出现回退（`46/100`），且终盘高 swing 仍常见，稳定性问题未解。
+
+### 99.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（threat-origin 连续化）：
+   - 证据：开局子将压力被压缩为单一连续信号并直连 overlay 调参；
+   - 结果：对 champion 对位从上一轮 `48/100` 到本轮 `51/100`（仅 gate 信号）。
+   - 判定：`部分生效`。
+2. ANTWar 借鉴点（danger/reserved 预算收敛）：
+   - 证据：危险态预算联动（`max_raw_drop/base_reply_veto_slack/followup_*`）已落地；
+   - 结果：`v70` 仍在 `v66` 对位回退到 `46/100`，且大 swing 未收敛。
+   - 判定：`部分生效但收益不稳定`。
+
+### 99.6 回到生产口径的结论
+
+1. 生产权威 tag=`eval_20260305_032841`，`champion` 仍为 `cpp_v64_generals_rebuild`（本 tag 无切换）。
+2. 本轮结论仅可用作 iter 候选筛选；生产 Elo/晋升结论不应由本轮 iter Elo 直接推出。
+3. 当前标签：`neutral`（非晋升结论）。
+   - 原因：`v70` 对 champion 仅 `51/100`，对 `v66` 为 `46/100`，尚不满足 confirm 或“优于多个老版本”的判优门槛。
+
+### 99.7 风险、下一步与回合末自检
+
+风险：
+
+1. 关键对位未形成稳定优势：`v70-v64=51/100`、`v70-v66=46/100`；
+2. replay 波动上限仍高（`army_swing=1047`，`territory_swing=152`）。
+
+下一步：
+
+1. 做 `v70 vs v64` 与 `v70 vs v66` 的 confirm 复验（各再补 `>=100`，形成 `>=200`）；
+2. 若 `v66` 仍劣势，下轮优先减法：对“高 `enemy_reply` 且高 `raw_drop`”候选提前 veto，避免进入 follow-up；
+3. 评测产物增加 `hard_cutoff_hit` 计数导出，建立复杂度风险可观测闭环。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍使用 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 现有评测产物未导出触发计数，无法在结果文件中直接确认触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best + my_follow` 评估链。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 增加更早 veto（先验拦截高风险低收益候选）；
+   - 将 `hard_cutoff_hit` 暴露到评测摘要，按对手对位定位超时热点。
+
+### 100.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_035840`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v68_overlay_smoothcap -> cpp_v68_overlay_smoothcap`（`promoted=false`）。
+3. `config.pairs` 共 `45` 对，其中包含 champion 的对局 `8` 对。
+4. 必做判读（champion 切换影响）：
+   - 本 tag 内 **无** champion 切换（`old==new`），因此本轮对手池不受“本次切换事件”直接影响；
+   - 但生产在上一 tag（`eval_20260305_035138`）发生过 `v64 -> v68` 切换，gauntlet 对手池口径已变化，跨 tag Elo 绝对值比较属于高风险。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_040307`，mode=`gauntlet`，`matches=600`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_040307_matches.jsonl`（已用于索引原始回放）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 100.2 算法级改动落地（新版本 `v71`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v71/ai_v71.cpp`（旧版本源码未改写）。
+2. 新版本 ID：`cpp_v71_overlay_replyrisk_gate`。
+3. 注册项：`/www/autolab/registry.json`（`exe=/www/ai_cpp/v71/ai_v71`，`src=/www/ai_cpp/v71/ai_v71.cpp`，`notes=unified reply-risk gate + ahead-state budget tightening`）。
+
+本轮改动（简化优先）：
+
+1. 在 `choose_overlay_tuning(...)` 增加领先态连续信号：
+   - `territory_lead/army_lead -> lead_signal -> ahead_signal`；
+   - `ahead_signal` 连续作用于 `base_anchor_penalty/max_raw_drop/base_reply_veto_slack/base_reply_drop_scale`。
+2. 在 `select_best_move_overlay(...)` 合并两条离散 veto：
+   - 原先 `dominated veto + base_reply veto` 两个硬分支；
+   - 改为单一连续 `reply_risk` 闸门（`reply_surplus + 0.45*dominance_surplus - 1.25*threat_credit`），仅保留一条 veto 判定。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin/impact_value` 连续威胁来源。
+   - 本游戏映射：把 reply 风险从双阈值离散分支压成一个连续风险量 `reply_risk`。
+   - 代码落点：`/www/ai_cpp/v71/ai_v71.cpp` 中 `reply_risk` 计算与单闸门判定。
+2. ANTWar 借鉴点：`global_state + reserved`（领先态保守预算）。
+   - 本游戏映射：领先时自动收紧切换预算，减少高波动非必要切换。
+   - 代码落点：`ahead_signal` 对 `max_raw_drop/base_reply_*` 的连续收紧。
+
+### 100.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v71_overlay_replyrisk_gate,cpp_v70_overlay_opening_subpressure,cpp_v68_overlay_smoothcap,cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v71_overlay_replyrisk_gate \
+  --opponents cpp_v70_overlay_opening_subpressure,cpp_v68_overlay_smoothcap,cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260408
+```
+
+结果：`eval_20260305_040307`（每对手 `100` 局，达到两 AI 比较门槛 `>=100`）：
+
+1. `v71 vs v70 = 52/100`
+2. `v71 vs v68(champion) = 48/100`
+3. `v71 vs v66 = 54/100`
+4. `v71 vs v64 = 51/100`
+5. `v71 vs v1 = 79/100`
+6. `v71 vs v2 = 83/100`
+
+口径判读：
+
+1. 当前是 gate，不是 confirm（关键对位尚未达到 `>=200`）；
+2. 不满足“新版本优于多个老版本”的宣称条件；
+3. 仅可作为候选方向信号：`v71` 修复了 `v70-v66` 的劣势（`46/100 -> 54/100`），但对当前生产 champion `v68` 仍 `48/100`。
+
+### 100.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=600`，`analyzed=600`，`missing=0`，`parse_errors=0`。
+2. 关键 pair：
+   - `v71-v70: 52-48`
+   - `v71-v68: 48-52`
+   - `v71-v66: 54-46`
+3. `v71` 聚合：`win_rate=0.6117`，`avg_rounds=125.88`，`no_effect_rate=0.0591`。
+4. 波动上限仍高：`largest_army_swing=1047`（未见明显收敛）。
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. `v71 vs v68` 胜例（seed=`20262340`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_040307/20260305_040523_p0-cpp_v68_overlay_smoothcap_p1-cpp_v71_overlay_replyrisk_gate_seed-20262340_rounds-180.jsonl`
+   - turning point：round `139`（`delta_army_lead_p0=379`，`impact_score=383`）。
+   - 附近动作：`R139 P1 Action [1,7,6,2,1]`、`[1,8,5,2,1]`、`[1,9,8,4,1]`。
+2. `v71 vs v68` 负例（seed=`20261450`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_040307/20260305_040604_p0-cpp_v71_overlay_replyrisk_gate_p1-cpp_v68_overlay_smoothcap_seed-20261450_rounds-180.jsonl`
+   - turning point：round `179`（`delta_army_lead_p0=340`，`impact_score=344`）。
+   - 附近动作：`R179 P0 Action [1,8,14,3,1]`、`R179 P1 Action [1,2,5,3,1]`。
+3. `v71 vs v66` 胜例（seed=`20262442`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_040307/20260305_040701_p0-cpp_v71_overlay_replyrisk_gate_p1-cpp_v66_generals_weapon_econ_seed-20262442_rounds-180.jsonl`
+   - turning point：round `179`（`delta_army_lead_p0=541`，`impact_score=541`）。
+   - 附近动作：`R179 P0 Action [1,2,2,1,1]`、`[1,4,5,2,1]`、`[1,5,6,4,1]`。
+4. `v71 vs v66` 负例（seed=`20262467`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_040307/20260305_040801_p0-cpp_v71_overlay_replyrisk_gate_p1-cpp_v66_generals_weapon_econ_seed-20262467_rounds-180.jsonl`
+   - turning point：round `127`（`delta_army_lead_p0=442`，`impact_score=446`）。
+   - 附近动作：`R127 P0 Action [1,10,1,2,1]`、`[1,11,2,4,1]`，对应 `R127 P1 Action [1,11,7,3,2]`。
+
+replay 结论：
+
+1. 单闸门风险过滤对 `v66` 对位有正向修复（`54/100`）；
+2. 但在当前 champion `v68` 对位仍偏弱（`48/100`），且极端 swing 未收敛，稳定性问题仍在。
+
+### 100.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat-origin）：
+   - 证据：v71 将双阈值 veto 合并为连续 `reply_risk` 单闸门；
+   - 结果：对 `v70`、`v66` 均出现正向（`52/100`、`54/100`）。
+   - 判定：`部分生效`。
+2. ANTWar 借鉴点（领先态 reserved）：
+   - 证据：`ahead_signal` 驱动预算收紧已落地；
+   - 结果：对 `v66` 修复，但对 champion `v68` 仍 `48/100`。
+   - 判定：`部分生效但未达晋级要求`。
+
+### 100.6 回到生产口径的结论
+
+1. 生产权威当前为 `eval_20260305_035840`，champion 为 `cpp_v68_overlay_smoothcap`；
+2. 本轮 iter Elo 仅做筛选，不参与生产绝对结论；
+3. 本轮结论标签：`neutral`。
+   - 原因：虽修复 `v66` 对位，但对当前生产 champion `v68` 仍 `48/100`，且关键对位仍未进入 confirm 样本。
+
+### 100.7 风险、下一步与回合末自检
+
+风险：
+
+1. 当前 champion 对位仍劣：`v71-v68 = 48/100`；
+2. replay 极端波动仍高（`army_swing=1047`）。
+
+下一步：
+
+1. 先做 confirm 复验：`v71 vs v68` 追加 `>=100`（形成 `>=200`）；
+2. 并行补 `v71 vs v66` 追加 `>=100`（确认修复是否稳定）；
+3. 若 `v68` 仍劣，下轮优先继续减法：在 `reply_risk` 前增加更早的低价值候选预筛，减少终盘高 swing 切换。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物未导出 `hard_cutoff_hit` 计数，无法直接统计触发次数。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 中 `enemy_best/my_follow` 的多次 base 评估链。
+3. 若有风险，下轮如何降复杂度或改进剪枝：
+   - 增加 `reply_risk` 前置轻筛（先剔除明显低价值候选）；
+   - 补充评测导出 `hard_cutoff_hit`，形成 CPU 风险可观测闭环。
+
+### 101.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_042619`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v69_overlay_followup_prune -> cpp_v69_overlay_followup_prune`（`promoted=false`）。
+3. `config.pairs` 共 `45` 对。
+4. 必做判读（champion 切换影响）：
+   - 本 tag 内 `old==new`，本轮对手池不受“本次切换事件”直接影响；
+   - 但生产在近邻 tag（`eval_20260305_041953`）发生过 `v68 -> v69` 切换，gauntlet 对手池口径已变化，属于高优先级风险，不能跨 tag 直接比较 Elo 绝对值。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_043217`，mode=`gauntlet`，`matches=700`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_043217_matches.jsonl`（已用于原始回放索引）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 101.2 算法级改动落地（新版本 `v72`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v72/ai_v72.cpp`（未改写旧版本源码）。
+2. 新版本 ID：`cpp_v72_overlay_endgame_lock`。
+3. 注册项：`/www/autolab/registry.json`（`exe=/www/ai_cpp/v72/ai_v72`，`src=/www/ai_cpp/v72/ai_v72.cpp`，`notes=endgame ahead-lock signal + reply-risk lock penalty`）。
+
+改动内容（简化优先）：
+
+1. 在 `choose_overlay_tuning(...)` 新增单一连续信号：
+   - `endgame_lock = ahead_signal * clamp((round-120)/60)`；
+   - 领先且终盘时，统一收紧 `switch_margin/base_anchor_penalty/followup_raw_drop_cap/base_reply_*`。
+2. 在 `select_best_move_overlay(...)` 的单闸门 `reply_risk` 上追加：
+   - `+ 0.60 * lock_penalty`（`lock_penalty=endgame_lock_signal*max(0,raw_drop-2)`）；
+   - 不新增分支状态，只在原连续风险量上叠加终盘领先惩罚。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin/impact_value` 连续威胁建模。
+   - 映射：继续沿用单一连续 `reply_risk` 作为唯一高风险切换闸门。
+   - 代码落点：`select_best_move_overlay(...)` 的 `reply_risk` 公式。
+2. ANTWar 借鉴点：`global_state + reserved` 的领先保守预算。
+   - 映射：领先终盘时自动“锁仓”，降低高波动切换概率。
+   - 代码落点：`choose_overlay_tuning(...)` 的 `endgame_lock_signal` 与预算联动。
+
+### 101.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v72_overlay_endgame_lock,cpp_v71_overlay_replyrisk_gate,cpp_v69_overlay_followup_prune,cpp_v68_overlay_smoothcap,cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v72_overlay_endgame_lock \
+  --opponents cpp_v71_overlay_replyrisk_gate,cpp_v69_overlay_followup_prune,cpp_v68_overlay_smoothcap,cpp_v66_generals_weapon_econ,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260409
+```
+
+结果：`eval_20260305_043217`（每对手 `100` 局，满足两 AI 比较门槛 `>=100`）：
+
+1. `v72 vs v71 = 53/100`
+2. `v72 vs v69(champion) = 49/100`
+3. `v72 vs v68 = 53/100`
+4. `v72 vs v66 = 53/100`
+5. `v72 vs v64 = 45/100`
+6. `v72 vs v1 = 80/100`
+7. `v72 vs v2 = 82/100`
+
+口径判读：
+
+1. 当前是 gate，不是 confirm（关键对位仍未达 `>=200`）。
+2. 对当前生产 champion `v69` 未过线（`49/100`），不能给出晋升结论。
+3. 结构改动对 `v71/v68/v66` 为正向，但对 `v64` 出现明显退化。
+
+### 101.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=700`，`analyzed=700`，`missing=0`，`parse_errors=0`。
+2. `v72` 聚合：`win_rate=0.5929`，`avg_rounds=122.79`，`no_effect_rate=0.0589`。
+3. pair 摘要：
+   - `v72-v71: 53-47`
+   - `v72-v69: 49-51`
+   - `v72-v64: 45-55`
+4. 极端波动仍高：`largest_army_swing=1047`（未见显著收敛）。
+
+原始回放逐帧核对（均来自 `paths.matches` 的 `replay_file`）：
+
+1. `v72 vs v69` 胜例（seed=`20262339`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_043217/20260305_043404_p0-cpp_v69_overlay_followup_prune_p1-cpp_v72_overlay_endgame_lock_seed-20262339_rounds-180.jsonl`
+   - turning point：round `137`（`delta_army_lead_p0=383`，`impact_score=383`）。
+   - 附近动作：`R137 P1 Action [1,11,9,1,1]`、`[1,12,8,3,1]`、`[1,12,11,1,1]`。
+2. `v72 vs v69` 负例（seed=`20261426`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_043217/20260305_043400_p0-cpp_v72_overlay_endgame_lock_p1-cpp_v69_overlay_followup_prune_seed-20261426_rounds-180.jsonl`
+   - turning point：round `130`（`delta_army_lead_p0=-290`，`impact_score=290`）。
+   - 附近动作：`R130 P0 Action [4,17,2,7,5]` 后未止损。
+3. `v72 vs v71` 胜例（seed=`20261343`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_043217/20260305_043248_p0-cpp_v71_overlay_replyrisk_gate_p1-cpp_v72_overlay_endgame_lock_seed-20261343_rounds-180.jsonl`
+   - turning point：round `148`（`delta_army_lead_p0=421`，`impact_score=421`）。
+   - 附近动作：`R148 P1 Action [4,18,2,8,2]` 与连续推进动作同窗出现。
+4. `v72 vs v64` 负例（seed=`20264483`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_043217/20260305_043959_p0-cpp_v72_overlay_endgame_lock_p1-cpp_v64_generals_rebuild_seed-20264483_rounds-180.jsonl`
+   - turning point：round `161`（`delta_army_lead_p0=184`，`impact_score=192`）。
+   - 附近动作：`R161 P0 Action [1,6,12,4,1]`、`[1,8,10,2,1]` 后仍被反压。
+
+replay 结论：
+
+1. 终盘锁定信号在 `v71` 对位上有小幅收益（`53/100`）；
+2. 但对当前 champion `v69` 未形成优势（`49/100`），且对 `v64` 出现回退，说明“锁定强度”可能过度抑制中后盘反击窗口。
+
+### 101.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat-origin）：
+   - 证据：`reply_risk` 单闸门保持，且仅叠加连续 `lock_penalty`；
+   - 结果：`v72-v71=53/100`，正向但幅度有限。
+   - 判定：`部分生效`。
+2. ANTWar 借鉴点（领先态 reserved）：
+   - 证据：`endgame_lock_signal` 已统一作用于多项预算；
+   - 结果：对 `v69` 未过线（`49/100`），并诱发 `v64` 对位退化（`45/100`）。
+   - 判定：`部分生效但存在副作用`。
+
+### 101.6 回到生产口径的结论
+
+1. 生产权威当前是 `eval_20260305_042619`，champion 为 `cpp_v69_overlay_followup_prune`；
+2. iter Elo 仅用于候选筛选，不能直接作为生产结论；
+3. 本轮结论标签：`neutral`。
+   - 原因：对当前 champion `v69` 仅 `49/100`，未达晋升标准，且关键对位未完成 confirm。
+
+### 101.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v72-v69` 未达 50%（`49/100`），当前冠军对位仍不足；
+2. `v72-v64=45/100` 出现明显回退；
+3. replay 极端波动仍高（`largest_army_swing=1047`）。
+
+下一步：
+
+1. 按 confirm 路线补做 `v72 vs v69` 追加 `>=100`（形成 `>=200`）；
+2. 并行做 `v72 vs v64` 追加 `>=100`，确认退化是否稳定；
+3. 若退化确认，下轮减法回调：下调 `endgame_lock_signal` 对 `followup_raw_drop_cap/base_reply_drop_scale` 的抑制斜率。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物仍未导出 `hard_cutoff_hit` 计数，无法直接统计触发频次。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best/my_follow` 多次 base 评估链。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 增加 `reply_risk` 前置轻筛，减少进入深评估的候选；
+   - 在评测摘要中导出 `hard_cutoff_hit`，建立 CPU 风险观测闭环。
+
+### 102.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_045540`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v64_generals_rebuild -> cpp_v64_generals_rebuild`（`promoted=false`）。
+3. `config.pairs` 共 `45` 对，当前 champion 在其中出现 `4` 对。
+4. 必做判读（champion 切换影响）：
+   - 本 tag 内 `old==new`，本轮对手池不受“本次 champion 切换事件”直接影响；
+   - 但生产排名仍以该 tag 的对阵池为准，iter 与生产 Elo 不可跨 scope 比较绝对值。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_050157`，mode=`gauntlet`，`matches=600`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_050157_matches.jsonl`（逐行含 `replay_file`）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 102.2 算法级改动落地（新版本 `v73`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v73/ai_v73.cpp`（未改写旧版本源码快照）。
+2. 新版本 ID：`cpp_v73_overlay_calm_endgame_lock`。
+3. 注册项：`/www/autolab/registry.json`（`exe=/www/ai_cpp/v73/ai_v73`，`src=/www/ai_cpp/v73/ai_v73.cpp`）。
+
+改动内容（简化优先）：
+
+1. 将 `v72` 的终盘锁定信号改为更窄的稳定信号：`endgame_stable_signal = ahead_signal * endgame_signal * calm_signal`，其中 `calm_signal=clamp((0.92-risk_score)/0.50)`；
+2. 仅保留较轻联动：`switch_margin += 0.30*endgame_stable_signal` 与 `base_anchor_penalty += 0.05*endgame_stable_signal`；
+3. `reply_risk` 的终盘附加惩罚降斜率：
+   - `lock_penalty=endgame_stable_signal*max(0,raw_drop-4.0)`；
+   - `reply_risk += 0.35*lock_penalty`（由 `v72` 的 `0.60` 下调）。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin/impact_value` 的连续威胁表达。
+   - 映射：继续使用单一连续 `reply_risk` 闸门，不恢复多分支 veto。
+   - 代码落点：`select_best_move_overlay(...)` 的 `reply_risk` 公式与 `lock_penalty` 融合。
+2. ANTWar 借鉴点：`global_state + reserved` 的危险态保守预算。
+   - 映射：仅在“领先 + 终盘 + 低危险”时触发稳定化预算。
+   - 代码落点：`choose_overlay_tuning(...)` 的 `calm_signal/endgame_stable_signal` 与预算联动。
+
+### 102.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v73_overlay_calm_endgame_lock,cpp_v72_overlay_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v71_overlay_replyrisk_gate,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v73_overlay_calm_endgame_lock \
+  --opponents cpp_v72_overlay_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v71_overlay_replyrisk_gate,cpp_v1_current,cpp_v2_beam \
+  --seed 20260410
+```
+
+结果：`eval_20260305_050157`（每对手 `100` 局，达到两 AI 比较门槛 `>=100`）：
+
+1. `v73 vs v72 = 48/100`
+2. `v73 vs v69 = 48/100`
+3. `v73 vs v64(champion) = 51/100`
+4. `v73 vs v71 = 53/100`
+5. `v73 vs v1 = 78/100`
+6. `v73 vs v2 = 82/100`
+
+口径判读：
+
+1. 该轮是 gate，不是 confirm（关键对位仍未达 `>=200`）；
+2. 无任一关键老版本达到“`>=200` 且 `>55%`”宣称门槛，不能给出“明确优于 k 个老版本”结论；
+3. 相比上一轮 `v72-v64=45/100`，`v73-v64=51/100` 出现回修信号，但对 `v72/v69` 均 `48/100`。
+
+### 102.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=600`，`analyzed=600`，`missing=0`，`parse_errors=0`；
+2. `v73` 聚合：`win_rate=0.6000`，`avg_rounds=124.80`，`no_effect_rate=0.0584`；
+3. pair 摘要（关键对位）：
+   - `v73-v64: 51-49`
+   - `v73-v72: 48-52`
+   - `v73-v69: 48-52`
+4. 极端波动仍高：`largest_army_swing=1047`（未见收敛）。
+
+原始回放逐帧核对（均来自 `paths.matches` 的 `replay_file`）：
+
+1. `v73 vs v64` 胜例（seed=`20263386`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_050157/20260305_050639_p0-cpp_v64_generals_rebuild_p1-cpp_v73_overlay_calm_endgame_lock_seed-20263386_rounds-180.jsonl`
+   - turning point：round `175`（`delta_army_lead_p0=472`，`impact_score=480`）。
+   - 附近动作：`R175 P1 Action [1,4,6,2,2]`、`[1,7,9,3,1]`、`[1,7,11,3,1]`。
+2. `v73 vs v64` 负例（seed=`20262467`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_050157/20260305_050614_p0-cpp_v73_overlay_calm_endgame_lock_p1-cpp_v64_generals_rebuild_seed-20262467_rounds-180.jsonl`
+   - turning point：round `149`（`delta_army_lead_p0=425`，`impact_score=425`）。
+   - 附近动作：`R149 P1 Action [4,24,2,10,1]`、`[1,13,7,3,2]`。
+3. `v73 vs v72` 负例（seed=`20261329`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_050157/20260305_050159_p0-cpp_v72_overlay_endgame_lock_p1-cpp_v73_overlay_calm_endgame_lock_seed-20261329_rounds-180.jsonl`
+   - turning point：round `158`（`delta_army_lead_p0=-662`，`impact_score=662`）。
+   - 附近动作：`R158 P1 Action [1,10,2,3,122]`、`[1,10,2,3,61]`。
+4. `v73 vs v71` 胜例（seed=`20264362`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_050157/20260305_050723_p0-cpp_v71_overlay_replyrisk_gate_p1-cpp_v73_overlay_calm_endgame_lock_seed-20264362_rounds-180.jsonl`
+   - turning point：round `168`（`delta_army_lead_p0=366`，`impact_score=370`）。
+   - 附近动作：`R168 P1 Action [4,21,2,6,6]`、`[1,11,6,2,1]`、`[1,2,1,3,1]`。
+
+replay 结论：
+
+1. `calm_signal` 软化后，对 `v64` 对位从 `45/100` 修复到 `51/100`（方向正确但幅度有限）；
+2. 对 `v72/v69` 仍 `48/100`，说明终盘稳定化仍存在副作用；
+3. 高波动指标未收敛（`largest_army_swing=1047`），结构仍需继续减法。
+
+### 102.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat-origin）：
+   - 证据：维持单一连续 `reply_risk` 闸门，仅调整连续惩罚斜率；
+   - 结果：`v73-v71=53/100`，但 `v73-v72=48/100`、`v73-v69=48/100`。
+   - 判定：`部分生效`（简化保持但强度未稳）。
+2. ANTWar 借鉴点（领先态 reserved）：
+   - 证据：`endgame_stable_signal` 仅在低危险领先终盘触发；
+   - 结果：`v73-v64` 从上一轮 `45/100` 修复到 `51/100`；
+   - 判定：`部分生效但仍有副作用`（关键对位未全面转正）。
+
+### 102.6 回到生产口径的结论
+
+1. 生产权威当前是 `eval_20260305_045540`，champion 为 `cpp_v64_generals_rebuild`；
+2. 本 tag `champion.old==new`，且 mode=`adaptive`，对手池不受“本 tag champion 切换”直接影响；
+3. iter Elo 仅用于候选筛选，不能直接用于生产强度结论；
+4. 本轮结论标签：`neutral`。
+   - 原因：对当前生产 champion `v64` 仅 `51/100`，同时对 `v72/v69` 为 `48/100`，未达判优门槛。
+
+### 102.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v73-v72=48/100`、`v73-v69=48/100`，对近邻强基线仍偏弱；
+2. replay 极端波动仍高（`largest_army_swing=1047`）；
+3. 关键对位仍只有 gate 样本（`100` 局），没有 confirm 稳定性。
+
+下一步：
+
+1. 补 confirm：`v73 vs v64/v69/v72` 各追加 `>=100`（形成每对手 `>=200`）；
+2. 若 `v69/v72` 继续低于 `50%`，继续减法：优先去掉 `reply_risk` 中 `lock_penalty` 项，仅保留 `switch_margin/base_anchor_penalty` 的轻量稳定化；
+3. 补充评测导出 `hard_cutoff_hit` 计数，闭环 CPU 风险观测。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 保底回退；
+   - 当前评测产物未导出 `hard_cutoff_hit` 计数，无法直接统计触发频次。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 中 `enemy_best/my_follow` 的多次 base 评估链。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 减少进入 `my_follow` 深评估的候选规模；
+   - 继续简化终盘稳定化项，避免在 `reply_risk` 叠加过多惩罚分量。
+
+### 103.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_052402`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v70_overlay_opening_subpressure -> cpp_v72_overlay_endgame_lock`（`promoted=true`）。
+3. `config.pairs` 共 `45` 对，当前 champion 在其中出现 `5` 对。
+4. 必做判读（champion 切换影响）：
+   - 本轮生产 tag 发生了 champion 切换（`v70 -> v72`），对手池构成受影响，属于高优先级风险；
+   - 因此不同 tag 的 Elo 绝对值不可直比，结论必须依赖同池 head-to-head 样本。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_053212`，mode=`gauntlet`，`matches=700`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_053212_matches.jsonl`（逐行含 `replay_file`）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 103.2 算法级改动落地（新版本 `v74`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v74/ai_v74.cpp`（未改写旧版本源码快照）。
+2. 新版本 ID：`cpp_v74_overlay_calm_margin_only`。
+3. 注册项：`/www/autolab/registry.json`（`exe=/www/ai_cpp/v74/ai_v74`，`src=/www/ai_cpp/v74/ai_v74.cpp`）。
+
+改动内容（简化优先）：
+
+1. 直接删除 `reply_risk` 中的 `lock_penalty` 分量，保留单一连续风险门：
+   - `reply_risk = reply_surplus + 0.45*dominance_surplus - 1.25*threat_credit`；
+2. 保留 `endgame_stable_signal` 对 `switch_margin/base_anchor_penalty` 的轻量联动，不再在风险闸门重复叠加终盘惩罚；
+3. 未引入新状态机与新搜索层，属于“减法”结构收敛。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin/impact_value` 连续威胁评分。
+   - 映射：维持单一连续 `reply_risk` 门控，去掉额外终盘惩罚分支。
+   - 代码落点：`select_best_move_overlay(...)` 风险闸门公式。
+2. ANTWar 借鉴点：`global_state + reserved` 危险态资源收敛。
+   - 映射：保留“领先+终盘+低风险”的预算收紧，但不再在闸门二次加罚。
+   - 代码落点：`choose_overlay_tuning(...)` 的 `endgame_stable_signal` 预算联动。
+
+### 103.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v72_overlay_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v71_overlay_replyrisk_gate,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v74_overlay_calm_margin_only \
+  --opponents cpp_v73_overlay_calm_endgame_lock,cpp_v72_overlay_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v71_overlay_replyrisk_gate,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260411
+```
+
+结果：`eval_20260305_053212`（每对手 `100` 局，达到两 AI 比较门槛 `>=100`）：
+
+1. `v74 vs v73 = 50/100`
+2. `v74 vs v72(champion) = 49/100`
+3. `v74 vs v69 = 49/100`
+4. `v74 vs v71 = 51/100`
+5. `v74 vs v64 = 44/100`
+6. `v74 vs v1 = 79/100`
+7. `v74 vs v2 = 82/100`
+
+口径判读：
+
+1. 本轮是 gate，不是 confirm（关键对位未达 `>=200`）；
+2. 对当前生产 champion `v72` 仍未过线（`49/100`）；
+3. 相比 `v73`，`v74` 未提升关键对位，且 `v64` 回退到 `44/100`。
+
+### 103.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=700`，`analyzed=700`，`missing=0`，`parse_errors=0`；
+2. `v74` 聚合：`win_rate=0.5771`，`avg_rounds=120.72`，`no_effect_rate=0.0595`；
+3. pair 摘要（关键对位）：
+   - `v74-v72: 49-51`
+   - `v74-v69: 49-51`
+   - `v74-v64: 44-56`
+4. 极端波动仍高：`largest_army_swing=1047`（未见收敛）。
+
+原始回放逐帧核对（均来自 `paths.matches` 的 `replay_file`）：
+
+1. `v74 vs v72` 胜例（seed=`20262340`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_053212/20260305_053357_p0-cpp_v72_overlay_endgame_lock_p1-cpp_v74_overlay_calm_margin_only_seed-20262340_rounds-180.jsonl`
+   - turning point：round `139`（`delta_army_lead_p0=379`，`impact_score=383`）。
+   - 附近动作：`R139 P1 Action [1,7,6,2,1]`、`[1,8,5,2,1]`、`[1,9,8,4,1]`。
+2. `v74 vs v72` 负例（seed=`20261426`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_053212/20260305_053353_p0-cpp_v74_overlay_calm_margin_only_p1-cpp_v72_overlay_endgame_lock_seed-20261426_rounds-180.jsonl`
+   - turning point：round `130`（`delta_army_lead_p0=-290`，`impact_score=290`）。
+   - 附近动作：`R130 P0 Action [4,17,2,7,5]` 后仍被反制。
+3. `v74 vs v64` 负例（seed=`20264483`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_053212/20260305_053939_p0-cpp_v74_overlay_calm_margin_only_p1-cpp_v64_generals_rebuild_seed-20264483_rounds-180.jsonl`
+   - turning point：round `161`（`delta_army_lead_p0=184`，`impact_score=192`）。
+   - 附近动作：`R161 P0 Action [1,8,10,2,1]`、`[1,6,12,4,1]` 后被 `P1` 反压。
+4. `v74 vs v71` 胜例（seed=`20264362`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_053212/20260305_053718_p0-cpp_v71_overlay_replyrisk_gate_p1-cpp_v74_overlay_calm_margin_only_seed-20264362_rounds-180.jsonl`
+   - turning point：round `168`（`delta_army_lead_p0=366`，`impact_score=370`）。
+   - 附近动作：`R168 P1 Action [4,21,2,6,6]`、`[1,11,6,2,1]`、`[1,2,1,3,1]`。
+
+replay 结论：
+
+1. 去掉 `lock_penalty` 后，`v72/v69` 关键对位仍仅 `49/100`；
+2. `v64` 对位明显退化（`44/100`），说明仅删除终盘二次惩罚会放大中后盘风险切换；
+3. 极端波动未下降（`largest_army_swing=1047`）。
+
+### 103.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat-origin）：
+   - 证据：风险闸门维持为单一连续 `reply_risk`，无额外分支；
+   - 结果：结构更简，但对 `v72/v69` 仍 `49/100`。
+   - 判定：`结构生效、强度未生效`。
+2. ANTWar 借鉴点（领先态 reserved）：
+   - 证据：保留低危险领先终盘预算收紧，但去掉闸门二次加罚；
+   - 结果：`v64` 回退到 `44/100`。
+   - 判定：`本轮未生效（回归）`。
+
+### 103.6 回到生产口径的结论
+
+1. 生产权威当前是 `eval_20260305_052402`，champion 已切到 `cpp_v72_overlay_endgame_lock`；
+2. 本轮 iter 仅用于候选筛选，不用于生产 Elo 绝对结论；
+3. 本轮结论标签：`regression`。
+   - 原因：对当前 champion `v72` 未过线（`49/100`），对 `v64` 明显回退（`44/100`）。
+
+### 103.7 风险、下一步与回合末自检
+
+风险：
+
+1. 关键对位 `v74-v72=49/100`、`v74-v69=49/100` 持续未过线；
+2. `v74-v64=44/100` 显著退化；
+3. replay 波动指标未收敛（`largest_army_swing=1047`）。
+
+下一步：
+
+1. 回到“最小回滚”路线：基于 `v73` 新开版本，仅恢复很小权重的 `lock_penalty`（例如 `0.10~0.15`），避免像 `v74` 这样完全移除；
+2. 按 confirm 路线优先补 `vs v72/v69` 各 `>=200`，再决定是否保留终盘锁定项；
+3. 继续推动导出 `hard_cutoff_hit` 计数，建立 CPU 风险观测闭环。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物仍未暴露 `hard_cutoff_hit` 计数，无法直接统计触发频次。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best/my_follow` 多次 base 评估链。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 先减少进入 `my_follow` 的候选规模，再调终盘惩罚斜率；
+   - 优先小幅回调，不再引入新分支或新状态层。
+
+### 104.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_055542`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v72_overlay_endgame_lock -> cpp_v73_overlay_calm_endgame_lock`（`promoted=true`）。
+3. `config.pairs` 共 `45` 对，当前 champion 在其中出现 `6` 对。
+4. 必做判读（champion 切换影响）：
+   - 本 tag 发生 champion 切换（`v72 -> v73`），gauntlet 对手池受影响，属于高优先级风险；
+   - 本轮结论仅在同池 head-to-head 内有效，不能跨 tag 直接比较 Elo 绝对值。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_060150`，mode=`gauntlet`，`matches=700`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_060150_matches.jsonl`（逐行含 `replay_file`）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 104.2 算法级改动落地（新版本 `v75`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v75/ai_v75.cpp`（未改写旧版本源码快照）。
+2. 新版本 ID：`cpp_v75_overlay_calm_micro_lock`。
+3. 注册项：`/www/autolab/registry.json`（`exe=/www/ai_cpp/v75/ai_v75`，`src=/www/ai_cpp/v75/ai_v75.cpp`）。
+
+改动内容（简化优先）：
+
+1. 基于 `v73` 做“最小回滚”：
+   - `lock_penalty` 阈值由 `raw_drop-4.0` 调整为 `raw_drop-5.0`；
+   - 权重由 `0.35` 下调到 `0.15`（微量终盘锁定）。
+2. 保持单一连续 `reply_risk` 闸门结构，不新增分支状态与搜索层；
+3. 保持 `endgame_stable_signal` 的轻量预算联动（`switch_margin/base_anchor_penalty`）。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin/impact_value` 连续威胁评分。
+   - 映射：`reply_risk` 仍为单一连续闸门，只做微量斜率回调。
+   - 代码落点：`select_best_move_overlay(...)` 的 `lock_penalty/reply_risk` 公式。
+2. ANTWar 借鉴点：`global_state + reserved` 危险态保守预算。
+   - 映射：保留“领先+终盘+低风险”预算收紧，并以 micro-lock 方式避免 `v74` 的完全放开。
+   - 代码落点：`choose_overlay_tuning(...)` 的 `endgame_stable_signal` 与风险闸门中的小权重 lock 项。
+
+### 104.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v72_overlay_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v75_overlay_calm_micro_lock \
+  --opponents cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v72_overlay_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260412
+```
+
+结果：`eval_20260305_060150`（每对手 `100` 局，达到两 AI 比较门槛 `>=100`）：
+
+1. `v75 vs v74 = 52/100`
+2. `v75 vs v73(champion) = 49/100`
+3. `v75 vs v72 = 55/100`
+4. `v75 vs v69 = 51/100`
+5. `v75 vs v64 = 45/100`
+6. `v75 vs v1 = 80/100`
+7. `v75 vs v2 = 82/100`
+
+口径判读：
+
+1. 本轮是 gate，不是 confirm（关键对位仍未达 `>=200`）；
+2. 对当前生产 champion `v73` 仍未过线（`49/100`）；
+3. 相比 `v74`，micro-lock 回滚修复了对 `v72/v69` 对位，但 `v64` 仍偏弱（`45/100`）。
+
+### 104.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=700`，`analyzed=700`，`missing=0`，`parse_errors=0`；
+2. `v75` 聚合：`win_rate=0.5914`，`avg_rounds=121.05`，`no_effect_rate=0.0598`；
+3. pair 摘要（关键对位）：
+   - `v75-v73: 49-51`
+   - `v75-v72: 55-45`
+   - `v75-v64: 45-55`
+4. 极端波动仍高：`largest_army_swing=1047`（未见收敛）。
+
+原始回放逐帧核对（均来自 `paths.matches` 的 `replay_file`）：
+
+1. `v75 vs v72` 胜例（seed=`20262442`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_060150/20260305_060503_p0-cpp_v75_overlay_calm_micro_lock_p1-cpp_v72_overlay_endgame_lock_seed-20262442_rounds-180.jsonl`
+   - turning point：round `179`（`delta_army_lead_p0=541`，`impact_score=541`）。
+   - 附近动作：`R179 P0 Action [1,5,6,4,1]`、`[1,2,2,1,1]`、`[1,4,5,2,1]`。
+2. `v75 vs v73` 负例（seed=`20261426`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_060150/20260305_060331_p0-cpp_v75_overlay_calm_micro_lock_p1-cpp_v73_overlay_calm_endgame_lock_seed-20261426_rounds-180.jsonl`
+   - turning point：round `130`（`delta_army_lead_p0=-290`，`impact_score=290`）。
+   - 附近动作：`R130 P0 Action [4,17,2,7,5]` 后仍被反制。
+3. `v75 vs v64` 负例（seed=`20264483`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_060150/20260305_060919_p0-cpp_v75_overlay_calm_micro_lock_p1-cpp_v64_generals_rebuild_seed-20264483_rounds-180.jsonl`
+   - turning point：round `161`（`delta_army_lead_p0=184`，`impact_score=192`）。
+   - 附近动作：`R161 P0 Action [1,8,10,2,1]`、`[1,6,12,4,1]` 后被反压。
+4. `v75 vs v69` 胜例（seed=`20264362`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_060150/20260305_060659_p0-cpp_v69_overlay_followup_prune_p1-cpp_v75_overlay_calm_micro_lock_seed-20264362_rounds-180.jsonl`
+   - turning point：round `168`（`delta_army_lead_p0=366`，`impact_score=370`）。
+   - 附近动作：`R168 P1 Action [4,21,2,6,6]`、`[1,11,6,2,1]`、`[1,2,1,3,1]`。
+
+replay 结论：
+
+1. micro-lock 相比 `v74` 恢复了对 `v72` 的稳定收益（`55/100`）；
+2. 但对当前 champion `v73` 仍 `49/100`，关键对位未过线；
+3. `v64` 对位仍弱（`45/100`），且极端波动未下降。
+
+### 104.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat-origin）：
+   - 证据：保持单一 `reply_risk` 连续闸门，仅做 lock 斜率微调；
+   - 结果：对 `v72/v69` 有修复（`55/100`,`51/100`）。
+   - 判定：`部分生效`。
+2. ANTWar 借鉴点（领先态 reserved）：
+   - 证据：恢复小权重 lock 后，终盘保守预算不再完全失效；
+   - 结果：`v74 -> v75` 对 `v72` 从 `49/100` 提升到 `55/100`，但 `v64` 仍仅 `45/100`。
+   - 判定：`部分生效但仍不稳定`。
+
+### 104.6 回到生产口径的结论
+
+1. 生产权威当前是 `eval_20260305_055542`，champion 为 `cpp_v73_overlay_calm_endgame_lock`；
+2. 本 tag 发生 champion 切换（`v72 -> v73`），对手池口径风险高；
+3. iter Elo 仅用于候选筛选，不能直接作为生产强度结论；
+4. 本轮结论标签：`neutral`。
+   - 原因：`v75` 修复了对 `v72/v69` 的退化，但对当前 champion `v73` 仍 `49/100` 未过线。
+
+### 104.7 风险、下一步与回合末自检
+
+风险：
+
+1. 当前生产 champion 对位仍不足：`v75-v73=49/100`；
+2. `v64` 对位持续弱势：`45/100`；
+3. replay 波动指标未收敛（`largest_army_swing=1047`）。
+
+下一步：
+
+1. 按 confirm 路线补 `v75 vs v73` 追加 `>=100`（形成 `>=200`）；
+2. 并行补 `v75 vs v64` 追加 `>=100`，确认弱势是否稳定；
+3. 若 `v75-v73` 仍<50%，下一轮优先做“前置轻筛”减法（先裁掉高 `raw_drop` 低收益候选，再进入 `my_follow`）。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物仍未导出 `hard_cutoff_hit` 计数，无法统计触发频次。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best/my_follow` 多次 base 评估链。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 对进入 `my_follow` 的候选增加前置轻筛；
+   - 维持“微量回调”策略，不新增状态层与分支链。
+
+### 105.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_062938`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v74_overlay_calm_margin_only -> cpp_v74_overlay_calm_margin_only`（`promoted=false`）。
+3. `config.pairs` 共 `45` 对，当前 champion 在其中出现 `3` 对。
+4. 必做判读（champion 切换影响）：
+   - 本 tag 内 `old==new`，本轮对手池不受“本次 champion 切换事件”直接影响；
+   - 但近期生产 tag 发生过 champion 切换（例如 `v72->v73`），gauntlet 口径仍需谨慎，不能跨 tag 直接比较 Elo 绝对值。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_063214`，mode=`gauntlet`，`matches=700`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_063214_matches.jsonl`（逐行含 `replay_file`）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 105.2 算法级改动落地（新版本 `v76`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v76/ai_v76.cpp`（未改写旧版本源码快照）。
+2. 新版本 ID：`cpp_v76_overlay_prefilter_prune`。
+3. 注册项：`/www/autolab/registry.json`（`exe=/www/ai_cpp/v76/ai_v76`，`src=/www/ai_cpp/v76/ai_v76.cpp`）。
+
+改动内容（简化优先）：
+
+1. 在候选循环新增前置轻筛，提前剪掉高 `raw_drop` 分支，避免其进入 `enemy_best` 深评估链：
+   - `precheck_raw_drop_cap = tuning.followup_raw_drop_cap + 3.0 - 2.0 * tuning.endgame_stable_signal`；
+   - `if (!cand_is_base && raw_drop > precheck_raw_drop_cap) continue;`
+2. 保持 `reply_risk` 单闸门与原有搜索结构，不新增状态机与搜索层级；
+3. 硬截止路径保持不变（`CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + 回退）。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin/impact_value` 连续威胁排序。
+   - 映射：在进入深评估前先按连续风险量做候选剪枝。
+   - 代码落点：`select_best_move_overlay(...)` 的 `precheck_raw_drop_cap` 轻筛。
+2. ANTWar 借鉴点：`global_state + reserved` 的预算收敛。
+   - 映射：在低危险终盘（`endgame_stable_signal` 高）自动收紧分支预算，减少高波动切换。
+   - 代码落点：`precheck_raw_drop_cap` 与 `endgame_stable_signal` 联动。
+
+### 105.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v76_overlay_prefilter_prune \
+  --opponents cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260413
+```
+
+结果：`eval_20260305_063214`（每对手 `100` 局，达到两 AI 比较门槛 `>=100`）：
+
+1. `v76 vs v75 = 53/100`
+2. `v76 vs v74(champion) = 50/100`
+3. `v76 vs v73 = 55/100`
+4. `v76 vs v69 = 50/100`
+5. `v76 vs v64 = 43/100`
+6. `v76 vs v1 = 80/100`
+7. `v76 vs v2 = 82/100`
+
+口径判读：
+
+1. 本轮仍是 gate，不是 confirm（关键对位未达 `>=200`）；
+2. 对当前生产 champion `v74` 仅 `50/100`，未形成优势；
+3. 对 `v64` 退化到 `43/100`，弱点仍明显。
+
+### 105.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=700`，`analyzed=700`，`missing=0`，`parse_errors=0`；
+2. `v76` 聚合：`win_rate=0.5900`，`avg_rounds=122.86`，`no_effect_rate=0.0590`；
+3. pair 摘要（关键对位）：
+   - `v76-v74: 50-50`
+   - `v76-v73: 55-45`
+   - `v76-v64: 43-57`
+4. 极端波动仍高：`largest_army_swing=1047`（未见收敛）。
+
+原始回放逐帧核对（均来自 `paths.matches` 的 `replay_file`）：
+
+1. `v76 vs v74` 胜例（seed=`20262340`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_063214/20260305_063537_p0-cpp_v74_overlay_calm_margin_only_p1-cpp_v76_overlay_prefilter_prune_seed-20262340_rounds-180.jsonl`
+   - turning point：round `139`（`delta_army_lead_p0=379`，`impact_score=383`）。
+   - 附近动作：`R139 P1 Action [1,7,6,2,1]`、`[1,8,5,2,1]`、`[1,9,8,4,1]`。
+2. `v76 vs v74` 负例（seed=`20261426`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_063214/20260305_063533_p0-cpp_v76_overlay_prefilter_prune_p1-cpp_v74_overlay_calm_margin_only_seed-20261426_rounds-180.jsonl`
+   - turning point：round `130`（`delta_army_lead_p0=-290`，`impact_score=290`）。
+   - 附近动作：`R130 P0 Action [4,17,2,7,5]` 后被反制。
+3. `v76 vs v73` 胜例（seed=`20262442`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_063214/20260305_063715_p0-cpp_v76_overlay_prefilter_prune_p1-cpp_v73_overlay_calm_endgame_lock_seed-20262442_rounds-180.jsonl`
+   - turning point：round `179`（`delta_army_lead_p0=541`，`impact_score=541`）。
+   - 附近动作：`R179 P0 Action [1,5,6,4,1]`、`[1,2,2,1,1]`、`[1,4,5,2,1]`。
+4. `v76 vs v64` 负例（seed=`20264483`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_063214/20260305_064151_p0-cpp_v76_overlay_prefilter_prune_p1-cpp_v64_generals_rebuild_seed-20264483_rounds-180.jsonl`
+   - turning point：round `161`（`delta_army_lead_p0=184`，`impact_score=192`）。
+   - 附近动作：`R161 P0 Action [1,8,10,2,1]`、`[1,6,12,4,1]` 后被反压。
+
+replay 结论：
+
+1. 前置轻筛在 `v73` 对位上有效（`55/100`），并保持 `v74` 不掉分（`50/100`）；
+2. 但无法修复 `v64` 弱点（`43/100`）；
+3. 波动指标仍未下降（`largest_army_swing=1047`）。
+
+### 105.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat-origin）：
+   - 证据：新增前置连续轻筛，减少高 drop 分支进入深评估；
+   - 结果：`v76-v73=55/100`、`v76-v75=53/100`；
+   - 判定：`部分生效`。
+2. ANTWar 借鉴点（领先态 reserved）：
+   - 证据：轻筛 cap 与 `endgame_stable_signal` 联动，终盘低风险场景更保守；
+   - 结果：对 `v74` 至少不回退（`50/100`），但 `v64` 仍 `43/100`。
+   - 判定：`部分生效但关键短板未修复`。
+
+### 105.6 回到生产口径的结论
+
+1. 生产权威当前是 `eval_20260305_062938`，champion 为 `cpp_v74_overlay_calm_margin_only`；
+2. 本轮 iter 仅用于候选筛选，不能直接作为生产 Elo 结论；
+3. 本轮结论标签：`regression`。
+   - 原因：对当前 champion 仅 `50/100` 无优势，同时对关键基线 `v64` 退化到 `43/100`。
+
+### 105.7 风险、下一步与回合末自检
+
+风险：
+
+1. 关键对位 `v76-v74` 仅 `50/100`，无晋级证据；
+2. `v76-v64=43/100` 仍显著偏弱；
+3. replay 波动指标未收敛（`largest_army_swing=1047`）。
+
+下一步：
+
+1. 按 confirm 路线补 `v76 vs v74` 与 `v76 vs v64` 各 `>=100`（形成 `>=200`）；
+2. 若 `v64` 仍弱，下轮优先针对 `allowed_enemy_reply` 做小幅斜率回调（增 `base_reply_drop_scale` 的保守度），避免新增状态机；
+3. 推进导出 `hard_cutoff_hit` 计数，形成 CPU 风险观测闭环。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码保持 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 当前评测产物仍未导出 `hard_cutoff_hit` 计数，无法直接统计触发频次。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best/my_follow` 多次 base 评估链，虽有前置轻筛但未完全消除。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 继续加大前置轻筛覆盖（优先不增加新分支状态）；
+   - 保持“单闸门 + 小幅斜率回调”路线，避免补丁层增厚。
+
+### 106.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_065755`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v74_overlay_calm_margin_only -> cpp_v71_overlay_replyrisk_gate`（`promoted=true`）。
+3. `config.pairs` 共 `45` 对，当前 champion 在其中出现 `3` 对。
+4. 必做判读（champion 切换影响）：
+   - 本 tag 发生 champion 切换（`v74 -> v71`），gauntlet 对手池受影响，属于高优先级风险；
+   - 本轮 iter gate 未包含 `v71`，因此对生产当前关键对位缺口明显，不能直接给出晋升结论。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_070231`，mode=`gauntlet`，`matches=800`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_070231_matches.jsonl`（逐行含 `replay_file`）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 106.2 算法级改动落地（新版本 `v77`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v77/ai_v77.cpp`（未改写旧版本源码快照）。
+2. 新版本 ID：`cpp_v77_overlay_source_tighten`。
+3. 注册项：`/www/autolab/registry.json`（`exe=/www/ai_cpp/v77/ai_v77`，`src=/www/ai_cpp/v77/ai_v77.cpp`）。
+
+改动内容（简化优先）：
+
+1. 基于 `v75` 做单点斜率回调（不继承 `v76` 前置轻筛分支）：
+   - `tuning.base_reply_veto_slack -= 2.5 * source_pressure`；
+   - `tuning.base_reply_drop_scale -= 0.10 * source_pressure`。
+2. 保持 `reply_risk` 单闸门结构，不新增状态机；
+3. 保持 CPU 硬截止与回退路径不变（`CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit`）。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin/impact_value` 连续威胁源。
+   - 映射：威胁源越多（`source_pressure` 越高），越收紧 `allowed_enemy_reply` 预算。
+   - 代码落点：`choose_overlay_tuning(...)` 内 `base_reply_veto_slack` 的 source-pressure 回调。
+2. ANTWar 借鉴点：`global_state + reserved` 危险态保守预算。
+   - 映射：在 danger 态（高 `source_pressure`）缩小 `base_reply_drop_scale`，降低高 drop 切换放行。
+   - 代码落点：`choose_overlay_tuning(...)` 内 `base_reply_drop_scale` 的 source-pressure 回调。
+
+### 106.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v77_overlay_source_tighten,cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v77_overlay_source_tighten \
+  --opponents cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260414
+```
+
+结果：`eval_20260305_070231`（每对手 `100` 局，达到两 AI 比较门槛 `>=100`）：
+
+1. `v77 vs v76 = 53/100`
+2. `v77 vs v75 = 51/100`
+3. `v77 vs v74 = 53/100`
+4. `v77 vs v73 = 51/100`
+5. `v77 vs v69 = 41/100`
+6. `v77 vs v64 = 51/100`
+7. `v77 vs v1 = 82/100`
+8. `v77 vs v2 = 79/100`
+
+口径判读：
+
+1. 本轮是 gate，不是 confirm（关键对位未达 `>=200`）；
+2. 对 `v74/v64` 有修复信号，但对 `v69` 出现显著回归（`41/100`）；
+3. 且生产 champion 已切到 `v71`，本轮缺少 `v77-v71` 对位，无法用于生产判优。
+
+### 106.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=800`，`analyzed=800`，`missing=0`，`parse_errors=0`；
+2. `v77` 聚合：`win_rate=0.5763`，`avg_rounds=117.01`，`no_effect_rate=0.0595`；
+3. pair 摘要（关键对位）：
+   - `v77-v74: 53-47`
+   - `v77-v64: 51-49`
+   - `v77-v69: 41-59`
+4. 极端波动仍高：`largest_army_swing=1047`（未见收敛）。
+
+原始回放逐帧核对（均来自 `paths.matches` 的 `replay_file`）：
+
+1. `v77 vs v74` 胜例（seed=`20262442`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_070231/20260305_070643_p0-cpp_v77_overlay_source_tighten_p1-cpp_v74_overlay_calm_margin_only_seed-20262442_rounds-180.jsonl`
+   - turning point：round `179`（`delta_army_lead_p0=541`，`impact_score=541`）。
+   - 附近动作：`R179 P0 Action [1,5,6,4,1]`、`[1,2,2,1,1]`、`[1,4,5,2,1]`。
+2. `v77 vs v74` 负例（seed=`20262467`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_070231/20260305_070745_p0-cpp_v77_overlay_source_tighten_p1-cpp_v74_overlay_calm_margin_only_seed-20262467_rounds-180.jsonl`
+   - turning point：round `127`（`delta_army_lead_p0=442`，`impact_score=446`）。
+   - 附近动作：`R127 P0 Action [1,12,6,1,1]`、`[1,11,2,4,1]` 后被 `P1` 反制。
+3. `v77 vs v69` 负例（seed=`20264455`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_070231/20260305_071022_p0-cpp_v77_overlay_source_tighten_p1-cpp_v69_overlay_followup_prune_seed-20264455_rounds-180.jsonl`
+   - turning point：round `156`（`delta_army_lead_p0=-469`，`impact_score=473`）。
+   - 附近动作：`R156 P1 Action [7,6,8]`、`[1,6,10,1,1]`。
+4. `v77 vs v64` 胜例（seed=`20266406`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_070231/20260305_071310_p0-cpp_v64_generals_rebuild_p1-cpp_v77_overlay_source_tighten_seed-20266406_rounds-180.jsonl`
+   - turning point：round `166`（`delta_army_lead_p0=-507`，`impact_score=507`）。
+   - 附近动作：`R166 P1 Action [1,9,5,4,3]`、`[1,1,6,1,1]`、`[1,1,7,2,1]`。
+
+replay 结论：
+
+1. source-pressure 收紧确实修复了 `v64` 对位（`43/100 -> 51/100`）并提升 `v74` 对位（`50/100 -> 53/100`）；
+2. 但对 `v69` 出现明显回归（`50/100 -> 41/100`）；
+3. 总体仍不稳定，且未覆盖当前生产 champion `v71`。
+
+### 106.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat-origin）：
+   - 证据：按 `source_pressure` 连续收紧 reply slack；
+   - 结果：`v77-v74=53/100`、`v77-v64=51/100`。
+   - 判定：`部分生效`。
+2. ANTWar 借鉴点（danger/reserved）：
+   - 证据：danger 态下收紧 `base_reply_drop_scale`；
+   - 结果：修复 `v64`，但导致 `v69` 回归到 `41/100`。
+   - 判定：`部分生效但副作用显著`。
+
+### 106.6 回到生产口径的结论
+
+1. 生产权威当前是 `eval_20260305_065755`，champion 为 `cpp_v71_overlay_replyrisk_gate`；
+2. 本 tag 发生 champion 切换（`v74 -> v71`），对手池口径风险高；
+3. 本轮 iter 未包含 `v71` 对位，不能用于生产判优；
+4. 本轮结论标签：`neutral`。
+   - 原因：虽修复 `v74/v64`，但 `v69` 回归显著且缺少对现 champion 的直接证据。
+
+### 106.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v77-v69=41/100` 明显回归；
+2. 当前生产 champion `v71` 缺少 head-to-head 样本；
+3. replay 波动指标未收敛（`largest_army_swing=1047`）。
+
+下一步：
+
+1. 优先补 gate/confirm：`v77 vs v71` 至少 `100`，建议直接补到 `200`；
+2. 并行补 `v77 vs v69` 追加 `>=100`，确认回归稳定性；
+3. 若 `v69` 回归稳定，下轮回调 source-pressure 斜率（先减 `drop_scale` 回调幅度），保持单闸门结构不加新状态。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍为 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退；
+   - 评测产物仍未导出 `hard_cutoff_hit` 计数，无法统计触发频次。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best/my_follow` 多次 base 评估链。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 继续压缩进入深评估的候选数量，但只做斜率回调，不新增状态机；
+   - 推动 `hard_cutoff_hit` 指标落盘，避免 CPU 风险不可观测。
+
+### 107.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_072341`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v71_overlay_replyrisk_gate -> cpp_v73_overlay_calm_endgame_lock`（`promoted=true`）。
+3. `config.pairs` 共 `45` 对；旧 champion `v71` 在 pairs 中出现 `5` 次，新 champion `v73` 出现 `1` 次。
+4. 必做判读（champion 切换影响）：
+   - 本 tag 发生 champion 切换，且 `pairs` 中 old/new 暴露频次差异明显（`5 -> 1`）；
+   - 在 gauntlet 口径下属于高优先级池变化风险，不能把跨 tag Elo 绝对值直接当作可比强度。
+
+迭代口径（仅用于候选筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_073355`，mode=`gauntlet`，`matches=1000`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_073355_matches.jsonl`（逐行含 `replay_file`）。
+3. replay 分析已自动生成并同步：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 107.2 算法级改动落地（新版本 `v78`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v78/ai_v78.cpp`（未改写旧版本快照）。
+2. 新版本 ID：`cpp_v78_overlay_source_reserve_release`。
+3. 可执行文件：`/www/ai_cpp/v78/ai_v78`。
+4. 注册项：`/www/autolab/registry.json`（notes: `source reserve_signal ... behind-state releases reserve`）。
+
+改动内容（简化优先）：
+
+1. 基于 `v77`，把 `source_pressure` 的收紧汇总为单一连续量 `reserve_signal`：
+   - `reserve_signal = source_pressure * (0.30 + 0.70 * ahead_signal)`；
+   - `reserve_signal *= (1.0 - 0.85 * behind_signal)`。
+2. 将收紧仅作用于 `base_reply_veto_slack`：
+   - `tuning.base_reply_veto_slack -= 2.2 * reserve_signal`。
+3. 删除 `v77` 中“source 直接收紧 `base_reply_drop_scale`”这条强约束，减少对反打分支的过抑制。
+4. 继续保持单闸门 `reply_risk` 结构，不新增状态机/补丁分支。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin_cnt / threat_value / impact_value` 连续威胁源。
+   - 映射：`source_pressure -> reserve_signal` 连续收紧敌方回复预算。
+   - 代码落点：`choose_overlay_tuning(...)` 的 `reserve_signal` 与 `base_reply_veto_slack`。
+2. ANTWar 借鉴点：`global_state + reserved + safe_coin`。
+   - 映射：领先态保留预算；落后态释放 reserved 以保留反打。
+   - 代码落点：`behind_signal` 对 `reserve_signal` 的释放因子。
+
+CPU 硬约束：
+
+1. 搜索硬截止与回退路径保持：`CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` fallback。
+
+### 107.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v78_overlay_source_reserve_release,cpp_v77_overlay_source_tighten,cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v71_overlay_replyrisk_gate,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v78_overlay_source_reserve_release \
+  --opponents cpp_v77_overlay_source_tighten,cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v71_overlay_replyrisk_gate,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260415
+```
+
+结果：`eval_20260305_073355`（每对手 `100` 局，满足两版本比较门槛 `>=100`）：
+
+1. `v78 vs v77 = 52/100`
+2. `v78 vs v76 = 50/100`
+3. `v78 vs v75 = 54/100`
+4. `v78 vs v74 = 50/100`
+5. `v78 vs v73 = 40/100`
+6. `v78 vs v71 = 52/100`
+7. `v78 vs v69 = 53/100`
+8. `v78 vs v64 = 52/100`
+9. `v78 vs v1 = 80/100`
+10. `v78 vs v2 = 81/100`
+
+口径判读：
+
+1. 本轮为 gate（对每关键对手达到 `100`，但未达 confirm 的 `200`）；
+2. `v69` 对位从上轮 `v77` 的 `41/100` 修复到 `53/100`；
+3. 但当前生产 champion `v73` 对位退化到 `40/100`，为主阻断项。
+
+### 107.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=1000`，`analyzed=1000`，`missing=0`，`parse_errors=0`；
+2. `v78` 聚合：`win_rate=0.5640`，`avg_rounds=113.32`，`no_effect_rate=0.0607`；
+3. pair 摘要：`v78-v69=53-47`，`v78-v71=52-48`，`v78-v73=40-60`；
+4. 极端波动仍高：`largest_army_swing=1062`（未收敛）。
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. `v78 vs v69` 负例（seed=`20266518`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_073355/20260305_074508_p0-cpp_v78_overlay_source_reserve_release_p1-cpp_v69_overlay_followup_prune_seed-20266518_rounds-180.jsonl`
+   - turning point：round `139`，`impact_score=320`（`delta_army_lead_p0=-320`）。
+   - 该回合动作：`P0 [1,1,4,2,1]`、`[1,0,5,3,1]`；`P1 [1,5,3,4,1]`、`[1,6,6,2,1]`、`[1,7,2,3,1]`。
+2. `v78 vs v69` 胜例（seed=`20267422`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_073355/20260305_074458_p0-cpp_v69_overlay_followup_prune_p1-cpp_v78_overlay_source_reserve_release_seed-20267422_rounds-180.jsonl`
+   - turning point：round `95`，`impact_score=215`（`delta_army_lead_p0=215`）。
+   - 该回合动作：`P0 [4,14,2,4,7]`、`[1,2,5,1,1]`；`P1 [1,6,9,3,1]`、`[1,0,11,4,1]`。
+3. `v78 vs v73` 负例（seed=`20264455`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_073355/20260305_074044_p0-cpp_v78_overlay_source_reserve_release_p1-cpp_v73_overlay_calm_endgame_lock_seed-20264455_rounds-180.jsonl`
+   - turning point：round `156`，`impact_score=473`（`delta_army_lead_p0=-469`）。
+   - 该回合动作：`P1 [7,6,8]`、`[1,6,10,1,1]`、`[1,1,11,4,1]`。
+4. `v78 vs v71` 胜例（seed=`20265476`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_073355/20260305_074236_p0-cpp_v78_overlay_source_reserve_release_p1-cpp_v71_overlay_replyrisk_gate_seed-20265476_rounds-180.jsonl`
+   - turning point：round `149`，`impact_score=188`。
+   - 该回合动作：`P0 [4,18,2,2,10]`、`[1,5,12,1,1]`、`[1,7,11,1,1]`。
+5. `v78 vs v64` 胜例（seed=`20268419`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_073355/20260305_074624_p0-cpp_v64_generals_rebuild_p1-cpp_v78_overlay_source_reserve_release_seed-20268419_rounds-180.jsonl`
+   - turning point：round `161`，`impact_score=455`。
+   - 该回合动作：`P1 [4,24,2,8,8]`、`[1,9,7,2,1]`、`[1,8,6,3,2]`。
+
+replay 结论：
+
+1. `v69` 对位已从 `v77` 的明显回归（`41/100`）修复到 `53/100`；
+2. 但对当前生产 champion `v73` 出现稳定负差（`40/100`），且高冲击回合仍频繁；
+3. 波动指标 `largest_army_swing=1062` 说明结构稳定性未收敛。
+
+### 107.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（threat-origin 连续压力）：
+   - 证据：`reserve_signal` 将 source 压力连续注入 reply slack；
+   - 结果：`v78-v69=53/100`（对 `v77` 的 `41/100` 明显修复）。
+   - 判定：`生效`。
+2. ANTWar 借鉴点（global_state/reserved，落后释放）：
+   - 证据：`behind_signal` 释放 reserve，降低落后时过保守；
+   - 结果：`v78-v71=52/100`、`v78-v64=52/100`，但 `v78-v73=40/100`。
+   - 判定：`部分生效，且对现 champion 出现副作用`。
+
+### 107.6 回到生产口径的结论
+
+1. 生产唯一权威仍是 `/www/autolab/runtime/latest.json`（`eval_20260305_072341`，champion=`v73`）；
+2. iter Elo 仅用于筛选，不能与生产 Elo 跨 scope 直接比较绝对值；
+3. 本轮虽然修复 `v69`，但对当前生产 champion `v73` 为 `40/100`（`>=100` 样本）；
+4. 本轮结论标签：`regression`（相对生产关键对手口径不满足晋级条件）。
+
+### 107.7 风险、下一步与回合末自检
+
+风险：
+
+1. 当前主阻断是 `v78-v73=40/100`；
+2. replay 显示高冲击波动仍未收敛（`largest_army_swing=1062`）；
+3. champion 切换导致 gauntlet 池口径变化，不能用单轮名次替代 head-to-head 结论。
+
+下一步：
+
+1. 下轮优先对 `v73` 定向修复并保持 `v69` 不回退，继续走“单闸门 + 连续信号”减法路线；
+2. gate/confirm 路径建议：`v79 vs v73/v69/v71` 各补到 `>=200`；
+3. 若 `v73` 仍弱，优先减少 `ahead/endgame` 侧额外惩罚耦合，避免再叠新分支。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍具备 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + fallback；
+   - 评测产物未导出 `hard_cutoff_hit` 计数，无法统计触发频次。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 中 `enemy_best/my_follow` 的重复 base 评估链。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 继续压缩深评估触发面（优先调连续系数，不加状态机）；
+   - 推进导出 `hard_cutoff_hit` 指标，形成 CPU 风险可观测闭环。
+
+### 108.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_075833`，mode=`adaptive`。
+2. `champion.old/new`=`cpp_v73_overlay_calm_endgame_lock -> cpp_v75_overlay_calm_micro_lock`（`promoted=true`）。
+3. `config.pairs` 共 `45` 对；old/new 在 pairs 中出现次数分别为 `7/4`。
+4. 必做判读（champion 切换影响）：
+   - 本回合生产口径发生 champion 切换（`v73 -> v75`），gauntlet 对手池已变化；
+   - 在该口径下 Elo 绝对值不可与旧 tag 或 iter 直接横比，属于高优先级风险。
+
+迭代口径（仅用于筛选）：
+
+1. `iter/latest.json`=`/www/autolab/runtime/scopes/iter/latest.json`，tag=`eval_20260305_080229`，mode=`gauntlet`，`matches=1100`。
+2. `paths.matches`=`/www/autolab/runtime/scopes/iter/eval_20260305_080229_matches.jsonl`（逐行含 `replay_file`）。
+3. replay 分析已自动生成：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+
+### 108.2 算法级改动落地（新版本 `v79`）
+
+新版本与注册信息：
+
+1. 新目录：`/www/ai_cpp/v79/ai_v79.cpp`（未改写既有版本快照）。
+2. 新版本 ID：`cpp_v79_overlay_risk_weighted_release`。
+3. 可执行文件：`/www/ai_cpp/v79/ai_v79`。
+4. 注册项：`/www/autolab/registry.json`（notes: `behind release is risk-weighted...`）。
+
+改动内容（简化优先）：
+
+1. 基于 `v78`，保留单一 `reserve_signal` 主线，不新增离散状态；
+2. 将“落后态释放 reserve”改为风险加权释放（高风险少释放）：
+   - `release_signal = 0.85 * behind_signal * (0.35 + 0.65 * (1.0 - risk_alpha))`；
+   - `reserve_signal *= (1.0 - clamp(release_signal, 0.0, 0.90))`。
+3. 保持 `reply_risk` 单闸门与原搜索框架，不新增状态机分支。
+
+旧 AI 借鉴链路（可验证）：
+
+1. Generals 借鉴点：`threat_origin_cnt/impact_value` 连续威胁压力。
+   - 映射：`source_pressure -> reserve_signal` 连续调节敌方回复预算。
+   - 代码落点：`choose_overlay_tuning(...)` 中 `reserve_signal`。
+2. ANTWar 借鉴点：`global_state + reserved + danger`。
+   - 映射：落后可释放 reserve，但 danger 高时保留预算（风险加权释放）。
+   - 代码落点：`release_signal` 对 `reserve_signal` 的衰减。
+
+CPU 硬约束：
+
+1. 继续保留 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + `hard_cutoff_hit` 回退路径。
+
+### 108.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核，隔离 scope）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v79_overlay_risk_weighted_release,cpp_v78_overlay_source_reserve_release,cpp_v77_overlay_source_tighten,cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v71_overlay_replyrisk_gate,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v79_overlay_risk_weighted_release \
+  --opponents cpp_v78_overlay_source_reserve_release,cpp_v77_overlay_source_tighten,cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v71_overlay_replyrisk_gate,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260416
+```
+
+结果：`eval_20260305_080229`（每对手 `100` 局，达到两版本比较门槛 `>=100`）：
+
+1. `v79 vs v78 = 54/100`
+2. `v79 vs v77 = 51/100`
+3. `v79 vs v76 = 54/100`
+4. `v79 vs v75 = 50/100`
+5. `v79 vs v74 = 40/100`
+6. `v79 vs v73 = 53/100`
+7. `v79 vs v71 = 54/100`
+8. `v79 vs v69 = 56/100`
+9. `v79 vs v64 = 56/100`
+10. `v79 vs v1 = 83/100`
+11. `v79 vs v2 = 77/100`
+
+口径判读：
+
+1. 本轮为 gate（`>=100`），不是 confirm（关键对位尚未 `>=200`）；
+2. 相对 `v78`，`v73` 对位从 `40/100` 修复到 `53/100`，`v69` 从 `53/100` 提升到 `56/100`；
+3. 但 `v74` 对位明显退化到 `40/100`，结构稳定性仍有 trade-off。
+
+### 108.4 Replay 分析与原始回放核对
+
+replay 汇总（`iter_latest.md` / `latest.json`）：
+
+1. `rows=1100`，`analyzed=1100`，`missing=0`，`parse_errors=0`；
+2. `v79` 聚合：`win_rate=0.5709`，`avg_rounds=113.57`，`no_effect_rate=0.0615`；
+3. 关键 pair：`v79-v73=53-47`、`v79-v69=56-44`、`v79-v71=54-46`、`v79-v75=50-50`；
+4. 极端波动仍高：`largest_army_swing=1062`。
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. `v79 vs v73` 胜例（seed=`20265501`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_080229/20260305_081253_p0-cpp_v79_overlay_risk_weighted_release_p1-cpp_v73_overlay_calm_endgame_lock_seed-20265501_rounds-180.jsonl`
+   - turning point：round `95`，`impact_score=171`（`delta_army_lead_p0=167`）。
+   - 该回合动作：`P0 [1,11,9,2,1]`、`[1,11,9,4,1]`；`P1 [4,16,2,10,3]`。
+2. `v79 vs v73` 负例（seed=`20266392`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_080229/20260305_081224_p0-cpp_v73_overlay_calm_endgame_lock_p1-cpp_v79_overlay_risk_weighted_release_seed-20266392_rounds-180.jsonl`
+   - turning point：round `148`，`impact_score=354`（`delta_army_lead_p0=-354`）。
+   - 该回合动作：`P0 [4,18,2,2,12]`、`[1,5,10,3,1]`；`P1 [1,4,12,4,2]`。
+3. `v79 vs v69` 胜例（seed=`20268419`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_080229/20260305_081553_p0-cpp_v69_overlay_followup_prune_p1-cpp_v79_overlay_risk_weighted_release_seed-20268419_rounds-180.jsonl`
+   - turning point：round `157`，`impact_score=603`（`delta_army_lead_p0=603`）。
+   - 该回合动作：`P0 [1,7,8,2,90]`、`[1,7,8,2,45]`；`P1 [1,11,7,2,1]`。
+4. `v79 vs v69` 负例（seed=`20267520`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_080229/20260305_081624_p0-cpp_v79_overlay_risk_weighted_release_p1-cpp_v69_overlay_followup_prune_seed-20267520_rounds-180.jsonl`
+   - turning point：round `177`，`impact_score=428`（`delta_army_lead_p0=-424`）。
+   - 该回合动作：`P0 [4,17,2,1,5]`、`[1,3,6,4,1]`；`P1 [1,4,5,3,1]`。
+5. `v79 vs v71` 胜例（seed=`20267422`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_080229/20260305_081436_p0-cpp_v71_overlay_replyrisk_gate_p1-cpp_v79_overlay_risk_weighted_release_seed-20267422_rounds-180.jsonl`
+   - turning point：round `95`，`impact_score=215`。
+   - 该回合动作：`P0 [4,14,2,4,7]`；`P1 [1,6,9,3,1]`、`[1,0,11,4,1]`。
+
+replay 结论：
+
+1. 风险加权释放修复了 `v78` 的主阻断（对 `v73` 从 `40/100` 回到 `53/100`）；
+2. 对 `v69/v71/v64` 同时保持正差（`56/54/56`）；
+3. 但 `v74` 对位回退到 `40/100`，且高波动仍未收敛（`largest_army_swing=1062`）。
+
+### 108.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（threat-origin 连续压力）：
+   - 证据：`reserve_signal` 仍为单连续量，并通过 `risk_alpha` 加权释放；
+   - 结果：`v79-v73=53/100`、`v79-v69=56/100`。
+   - 判定：`生效`。
+2. ANTWar 借鉴点（global_state/reserved/danger）：
+   - 证据：behind 释放在高 danger 下被抑制（保留 reserve）；
+   - 结果：修复了 `v73` 回归，但 `v74` 出现 `40/100` 副作用。
+   - 判定：`部分生效（有副作用）`。
+
+### 108.6 回到生产口径的结论
+
+1. 生产权威当前为 `eval_20260305_075833`，champion=`cpp_v75_overlay_calm_micro_lock`；
+2. 本轮迭代结果仅作筛选，不可与生产 Elo 绝对值跨 scope 比较；
+3. `v79` 对当前生产 champion `v75` 仅 `50/100`（`>=100` 样本），暂无优势结论；
+4. 本轮结论标签：`neutral`。
+   - 原因：修复了 `v73` 并提升 `v69/v71/v64`，但对 `v75` 无增益、对 `v74` 明显退化。
+
+### 108.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v79-v74=40/100` 显示 trade-off 明显；
+2. replay 的极端波动仍高（`largest_army_swing=1062`）；
+3. 生产 champion 切换（`v73->v75`）导致 gauntlet 口径变化，结论必须以 head-to-head 补样确认。
+
+下一步：
+
+1. 进入 confirm：优先补 `v79 vs v75/v73/v69` 各 `+100`（累计到 `>=200`）；
+2. 若 `v74` 回退持续，优先回调 `release_signal` 的上限（连续系数微调）而不新增新状态；
+3. 同步推进 `hard_cutoff_hit` 计数落盘，建立 CPU 风险可观测闭环。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码保持 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + fallback；
+   - 评测产物仍无 `hard_cutoff_hit` 计数，触发频次不可观测。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best/my_follow` 重复评估链。
+3. 若有风险，下一轮如何降复杂度或改进剪枝：
+   - 优先压缩深评估触发面（调连续系数），保持单闸门结构；
+   - 导出截止触发统计，避免 CPU 风险盲区。
+
+### 109.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，当前 tag=`eval_20260305_082908`。
+2. `champion.old/new`=`cpp_v75_overlay_calm_micro_lock -> cpp_v70_overlay_opening_subpressure`（`promoted=true`）。
+3. `config.pairs` 共 `45` 对；old/new 在 pairs 中出现次数分别为 `6/3`。
+4. 必做判读（champion 切换影响）：
+   - 本轮生产口径发生 champion 切换（`v75 -> v70`），gauntlet 对手池已变化；
+   - 该变化会直接影响单轮 Elo 与名次解释，属于高优先级风险；
+   - 生产 Elo 仍是唯一权威，iter Elo 仅用于候选筛选，禁止跨 scope 比较 Elo 绝对值。
+
+迭代口径（隔离，仅筛选）：
+
+1. 第一轮 gate：`eval_20260305_083630`（`1200` 局，12 对手 x 100）。
+2. 因生产 champion 在本轮切换，补做 head-to-head gate：`eval_20260305_090453`（`400` 局，4 对手 x 100）。
+3. 当前 iter latest：`/www/autolab/runtime/scopes/iter/latest.json` -> tag=`eval_20260305_090453`。
+4. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_090453_matches.jsonl`（逐行含 `replay_file`）。
+5. replay 分析：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+   - latest 汇总：`rows_in_matches_file=400`、`analyzed_matches=400`、`missing_replay=0`、`replay_parse_errors=0`。
+
+旧 AI 参考（本轮显式提取）：
+
+1. Generals-AI：`threat_origin_cnt/impact_value` 连续威胁建模（`/www/past_AIs/Generals-AI/main.cpp`，如 `185-189`, `983-985`）。
+2. ANTWar-AI：`global_state + reserved + safe_coin` 的全局态保留/释放机制（`/www/past_AIs/ANTWar-AI/main.cpp`，如 `31`, `38`, `165`, `1530-1538`, `1656`）。
+
+### 109.2 算法级改动落地（新版本 `v80`）
+
+新版本与注册信息（未改写旧快照）：
+
+1. 新目录：`/www/ai_cpp/v80/ai_v80.cpp`。
+2. 新版本 ID：`cpp_v80_overlay_release_time_decay`。
+3. 可执行文件：`/www/ai_cpp/v80/ai_v80`。
+4. 注册位置：`/www/autolab/registry.json`（notes: `behind reserve release decays by round...`）。
+
+本轮策略改动（相对 `v79`，简化优先）：
+
+1. 保留单主线 `reserve_signal`，不新增离散状态机；
+2. 将 behind 释放加入回合衰减窗：
+   - 新增 `release_window = 0.20 + 0.80 * (1.0 - endgame_signal)`；
+   - `release_signal = 0.85 * behind_signal * (0.35 + 0.65 * (1.0 - risk_alpha)) * release_window`；
+   - 仍通过 `reserve_signal *= (1.0 - clamp(release_signal, 0.0, 0.90))` 生效。
+
+可验证链路（旧 AI 借鉴点 -> 本游戏映射 -> 代码落点）：
+
+1. Generals 借鉴点（threat-origin 连续压力）
+   - 映射：把 threat-source 压力折叠成单连续 `reserve_signal`，不引入额外分支；
+   - 代码落点：`choose_overlay_tuning(...)` 中 `reserve_signal` 构造与 `base_reply_veto_slack` 调节。
+2. ANTWar 借鉴点（global_state/reserved + late policy）
+   - 映射：落后可释放 reserve，但进入后期逐步收紧释放窗口，避免后期过激反打；
+   - 代码落点：`release_window` 与 `release_signal`。
+
+CPU 硬约束：
+
+1. 版本继续保留 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + fallback（`hard_cutoff_hit` 早停回退）。
+
+### 109.3 可复现实验（规定脚本，iter 隔离）
+
+实验 A（广谱 gate，12 对手）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v80_overlay_release_time_decay,cpp_v79_overlay_risk_weighted_release,cpp_v78_overlay_source_reserve_release,cpp_v77_overlay_source_tighten,cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v71_overlay_replyrisk_gate,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v80_overlay_release_time_decay \
+  --opponents cpp_v79_overlay_risk_weighted_release,cpp_v78_overlay_source_reserve_release,cpp_v77_overlay_source_tighten,cpp_v76_overlay_prefilter_prune,cpp_v75_overlay_calm_micro_lock,cpp_v74_overlay_calm_margin_only,cpp_v73_overlay_calm_endgame_lock,cpp_v71_overlay_replyrisk_gate,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260417
+```
+
+结果（`eval_20260305_083630`，每对手 `100` 局）：
+
+1. `v80 vs v79 = 54/100`
+2. `v80 vs v78 = 51/100`
+3. `v80 vs v77 = 53/100`
+4. `v80 vs v76 = 50/100`
+5. `v80 vs v75 = 39/100`
+6. `v80 vs v74 = 53/100`
+7. `v80 vs v73 = 55/100`
+8. `v80 vs v71 = 56/100`
+9. `v80 vs v69 = 51/100`
+10. `v80 vs v64 = 50/100`
+11. `v80 vs v1 = 78/100`
+12. `v80 vs v2 = 76/100`
+
+实验 B（生产切换后补做 h2h gate）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v80_overlay_release_time_decay,cpp_v70_overlay_opening_subpressure,cpp_v75_overlay_calm_micro_lock,cpp_v73_overlay_calm_endgame_lock,cpp_v79_overlay_risk_weighted_release,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v80_overlay_release_time_decay \
+  --opponents cpp_v70_overlay_opening_subpressure,cpp_v75_overlay_calm_micro_lock,cpp_v73_overlay_calm_endgame_lock,cpp_v79_overlay_risk_weighted_release \
+  --seed 20260418
+```
+
+结果（`eval_20260305_090453`，每对手 `100` 局）：
+
+1. `v80 vs v70(当前生产 champion) = 54/100`
+2. `v80 vs v75 = 53/100`
+3. `v80 vs v73 = 55/100`
+4. `v80 vs v79 = 52/100`
+
+门槛判读：
+
+1. 上述均为 pairwise `>=100`，可用于 gate 级方向判断；
+2. 仍未达到 confirm（关键对位 `>=200`）门槛；
+3. 不能据此宣称“明确优于多个老版本”（尚未满足 `>=200` 且全部 `>55%`）。
+
+### 109.4 Replay 分析与原始回放核对
+
+最新 replay 汇总（`eval_20260305_090453`）：
+
+1. `rows_in_matches_file=400`，`analyzed_matches=400`，`missing_replay=0`，`replay_parse_errors=0`；
+2. `v80` 聚合：`win_rate=0.535`，`avg_rounds=106.28`，`no_effect_rate=0.0616`；
+3. 关键 pair：`v80-v70=54-46`、`v80-v75=53-47`、`v80-v73=55-45`、`v80-v79=52-48`；
+4. 极端波动仍高：`largest_army_swing=1047`（`v80-v70`）。
+
+原始回放逐帧核对（来自 `paths.matches` 的 `replay_file`）：
+
+1. `v80 vs v70` 胜例（seed=`20261340`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_090453/20260305_090511_p0-cpp_v70_overlay_opening_subpressure_p1-cpp_v80_overlay_release_time_decay_seed-20261340_rounds-180.jsonl`
+   - turning point：round `116`，`impact_score=115`（`delta_army_lead_p0=-107`）。
+   - 该回合动作：`P0 [1,10,12,3,3]`、`[1,12,11,1,1]`；`P1 [1,13,8,4,1]`、`[1,6,11,4,1]`。
+2. `v80 vs v70` 负例（seed=`20260464`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_090453/20260305_090624_p0-cpp_v80_overlay_release_time_decay_p1-cpp_v70_overlay_opening_subpressure_seed-20260464_rounds-180.jsonl`
+   - turning point：round `150`，`impact_score=61`（`delta_army_lead_p0=61`）。
+   - 该回合动作：`P0 [1,1,4,1,2]`、`[1,0,0,2,1]`；`P1 [1,1,11,3,1]`、`[1,3,10,3,1]`。
+3. `v80 vs v75` 胜例（seed=`20261471`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_090453/20260305_090756_p0-cpp_v80_overlay_release_time_decay_p1-cpp_v75_overlay_calm_micro_lock_seed-20261471_rounds-180.jsonl`
+   - turning point：round `143`，`impact_score=253`（`delta_army_lead_p0=249`）。
+   - 该回合动作：`P0 [3,5,1]`、`[1,3,10,3,1]`；`P1 [1,4,6,1,1]`、`[1,1,7,3,1]`。
+4. `v80 vs v75` 负例（seed=`20261457`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_090453/20260305_090727_p0-cpp_v80_overlay_release_time_decay_p1-cpp_v75_overlay_calm_micro_lock_seed-20261457_rounds-180.jsonl`
+   - turning point：round `130`，`impact_score=133`（`delta_army_lead_p0=-129`）。
+   - 该回合动作：`P0 [1,8,2,1,1]`、`[1,11,1,1,1]`；`P1 [1,9,5,3,1]`、`[1,9,9,4,1]`。
+5. `v80 vs v73` 胜例（seed=`20263388`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_090453/20260305_090938_p0-cpp_v73_overlay_calm_endgame_lock_p1-cpp_v80_overlay_release_time_decay_seed-20263388_rounds-180.jsonl`
+   - turning point：round `129`，`impact_score=91`（`delta_army_lead_p0=-75`）。
+   - 该回合动作：`P0 [1,10,0,1,2]`、`[1,10,0,2,2]`；`P1 [1,10,3,1,1]`、`[1,10,2,3,1]`。
+6. `v80 vs v79` 负例（seed=`20263452`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_090453/20260305_091016_p0-cpp_v80_overlay_release_time_decay_p1-cpp_v79_overlay_risk_weighted_release_seed-20263452_rounds-180.jsonl`
+   - turning point：round `59`，`impact_score=47`（`delta_army_lead_p0=-47`）。
+   - 该回合动作：`P1 [1,10,5,4,1]`、`[1,10,7,1,1]`（该回合 `P0` 无非终局动作）。
+
+replay 结论：
+
+1. `v80` 在 `v70/v75/v73` 对位均能打出长局后期翻转样本（多局 `max_round=180`）；
+2. 但大波动仍突出（`largest_army_swing=1047`），说明“后期释放衰减”未根治震荡；
+3. 与实验 A（`083630`）相比，`v75` 对位从 `39/100` 到补测 `53/100`，样本方差/种子敏感性明显。
+
+### 109.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat-origin 压力）
+   - 证据：`reserve_signal` 仍作为单连续量主导预算调节，无新增状态机；
+   - 结果：在补测 `090453` 中，对 `v70/v73/v79` 为 `54/55/52`；
+   - 判定：`生效`。
+2. ANTWar 借鉴点（global_state/reserved + late-round policy）
+   - 证据：`release_window` 将落后释放随 `endgame_signal` 衰减；
+   - 结果：`v74` 回退在实验 A 修复（`53/100`），补测里 `v75` 从负差（A）回到正差（B）；
+   - 判定：`部分生效，但稳定性不足`。
+
+### 109.6 回到生产口径的结论
+
+1. 生产唯一权威为 `eval_20260305_082908`，当前 champion=`cpp_v70_overlay_opening_subpressure`；
+2. 本轮已按要求在 champion 切换后补做 h2h gate（`v80 vs v70`，`100` 局）；
+3. `v80` 对当前生产 champion `v70` 为 `54/100`（gate 正向但未达 `>55%`）；
+4. 结合实验 A/B 的冲突（尤其 `v75` 对位 `39 -> 53`），本轮只可给出筛选级信号，不能下“明确更强”结论；
+5. 本轮结论标签：`neutral`。
+
+### 109.7 风险、下一步与回合末自检
+
+风险：
+
+1. 跨 seed 波动较大（`v80-v75` 在两轮 gate 出现 `39/100` 与 `53/100` 分歧）；
+2. replay 显示极端兵力波动仍高（`largest_army_swing=1047`）；
+3. gauntlet 口径受生产 champion 切换影响显著，单轮名次不可替代大样本 h2h。
+
+下一步：
+
+1. 进入 confirm：对 `v80 vs v70/v75/v73/v79` 各补 `+100`（累计到 `>=200`），优先固定对手池+多 seed；
+2. 若波动仍高，优先继续“减法”：限制高风险高回合的 follow-up 扩张，不新增新状态层；
+3. 推进把 `hard_cutoff_hit` 计数写入评测产物，形成 CPU 截止可观测闭环。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码路径保持 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + fallback；
+   - 当前评测报告仍未导出 `hard_cutoff_hit`，触发频次不可直接统计。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 仍存在于 overlay 的 `enemy_best/my_follow` 重复评估链（长局高波动对局更敏感）。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 保持单闸门结构，优先收紧深评估触发面与候选池；
+   - 补齐截止计数落盘后，再按热点回放定向减枝。
+
+### 110.1 最新状态读取（强制项）
+
+已读取并遵守：`/www/docs/codex_objective_fixed.md`。
+
+生产口径（唯一权威）：
+
+1. `latest.json`=`/www/autolab/runtime/latest.json`，tag=`eval_20260305_092145`。
+2. `champion.old/new`=`cpp_v72_overlay_endgame_lock -> cpp_v69_overlay_followup_prune`（`promoted=true`）。
+3. `config.pairs` 共 `45` 对；old/new 在 pairs 中出现次数分别为 `3/4`。
+4. 必做判读（champion 切换影响）：
+   - 本轮生产口径发生 champion 切换（`v72 -> v69`），gauntlet 对手池受影响，属高优先级风险；
+   - 单轮 gauntlet Elo 绝对值不可跨 tag 或跨 scope 直接比较。
+
+迭代口径（隔离，仅筛选）：
+
+1. `iter/latest.json` 当前为 `eval_20260305_093220`（`matches=1000`）。
+2. `paths.matches`：`/www/autolab/runtime/scopes/iter/eval_20260305_093220_matches.jsonl`。
+3. replay 分析：
+   - `/www/autolab/runtime/scopes/iter/replay_analysis/latest.json`
+   - `/www/docs/replay_analysis/iter_latest.md`
+   - 汇总：`rows_in_matches_file=1000`、`analyzed_matches=1000`、`missing_replay=0`、`replay_parse_errors=0`。
+
+旧 AI 借鉴点（本轮显式提取）：
+
+1. Generals-AI：`threat_origin_cnt/impact_value`（连续威胁与影响值，`/www/past_AIs/Generals-AI/main.cpp`）。
+2. ANTWar-AI：`global_state + reserved + safe_coin`（全局态预算保留/释放，`/www/past_AIs/ANTWar-AI/main.cpp`）。
+
+### 110.2 算法级改动（新版本 `v81`）
+
+新版本与注册信息（未改写旧快照）：
+
+1. 新目录：`/www/ai_cpp/v81/ai_v81.cpp`。
+2. 新版本 ID：`cpp_v81_overlay_deficit_late_release`。
+3. 可执行：`/www/ai_cpp/v81/ai_v81`。
+4. 注册：`/www/autolab/registry.json`（notes: `from v80: ... behind-state release floor ...`）。
+
+改动（相对 `v80`，减法 + 连续信号）：
+
+1. 保留 `v80` 的后期释放衰减主线；
+2. 新增“落后态后期释放底线”（无新状态机）：
+   - `late_release_floor = 0.20 + 0.45 * behind_signal`
+   - `release_window = max(0.20 + 0.80*(1-endgame_signal), late_release_floor)`
+3. 保持 `release_signal` 单式：
+   - `release_signal = 0.85 * behind_signal * (0.35 + 0.65*(1-risk_alpha)) * release_window`。
+
+可验证链路（旧 AI 借鉴点 -> 映射 -> 代码落点）：
+
+1. Generals 借鉴点（连续 threat/impact）：
+   - 映射：继续用单连续 `reserve_signal` 承载 threat-source 压力；
+   - 代码落点：`choose_overlay_tuning(...)` 中 `reserve_signal` 与 `base_reply_veto_slack`。
+2. ANTWar 借鉴点（global_state/reserved）：
+   - 映射：后期默认收紧释放，但在落后态保留最小释放预算，避免彻底“锁死”反打；
+   - 代码落点：`late_release_floor` 与 `release_window`。
+
+CPU 硬约束：
+
+1. 维持 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + fallback 回退路径。
+
+### 110.3 可复现实验（规定脚本，iter gate）
+
+执行命令（14 核、iter 隔离）：
+
+```bash
+EXPERIMENT_RUNTIME_SCOPE=iter \
+EXPERIMENT_GAMES_PER_PAIR=50 \
+EXPERIMENT_MAX_ROUNDS=180 \
+EXPERIMENT_JOBS=14 \
+EXPERIMENT_CPU_POLICY=all \
+/www/scripts/autolab_eval_experiment_once.sh \
+  --versions cpp_v81_overlay_deficit_late_release,cpp_v80_overlay_release_time_decay,cpp_v79_overlay_risk_weighted_release,cpp_v75_overlay_calm_micro_lock,cpp_v73_overlay_calm_endgame_lock,cpp_v72_overlay_endgame_lock,cpp_v70_overlay_opening_subpressure,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --challengers cpp_v81_overlay_deficit_late_release \
+  --opponents cpp_v80_overlay_release_time_decay,cpp_v79_overlay_risk_weighted_release,cpp_v75_overlay_calm_micro_lock,cpp_v73_overlay_calm_endgame_lock,cpp_v72_overlay_endgame_lock,cpp_v70_overlay_opening_subpressure,cpp_v69_overlay_followup_prune,cpp_v64_generals_rebuild,cpp_v1_current,cpp_v2_beam \
+  --seed 20260419
+```
+
+结果：`eval_20260305_093220`（每对手 `100` 局，gate 门槛达标）：
+
+1. `v81 vs v80 = 56/100`
+2. `v81 vs v79 = 54/100`
+3. `v81 vs v75 = 53/100`
+4. `v81 vs v73 = 52/100`
+5. `v81 vs v72 = 39/100`
+6. `v81 vs v70 = 54/100`
+7. `v81 vs v69(当前生产 champion) = 55/100`
+8. `v81 vs v64 = 53/100`
+9. `v81 vs v1 = 79/100`
+10. `v81 vs v2 = 81/100`
+
+门槛判读：
+
+1. pairwise 均 `>=100`，可做 gate 判断；
+2. 尚未到 confirm（关键对位 `>=200`）阶段；
+3. 不能宣称“新版本已明确优于多个老版本”。
+
+### 110.4 Replay 分析与原始回放核对
+
+replay 汇总（`eval_20260305_093220`）：
+
+1. `rows=1000`、`analyzed=1000`、`missing=0`、`parse_errors=0`；
+2. `v81` 聚合：`win_rate=0.576`、`avg_rounds=115.71`、`no_effect_rate=0.0602`；
+3. 关键 pair：`v81-v69=55-45`、`v81-v70=54-46`、`v81-v72=39-61`、`v81-v80=56-44`；
+4. 极端波动仍高：`largest_army_swing=1062`。
+
+原始回放逐帧核对（来自 `paths.matches`）：
+
+1. `v81 vs v69` 胜例（seed=`20267422`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_093220/20260305_094502_p0-cpp_v69_overlay_followup_prune_p1-cpp_v81_overlay_deficit_late_release_seed-20267422_rounds-180.jsonl`
+   - turning point：round `95`，`impact_score=215`（`delta_army_lead_p0=215`）。
+   - 该回合动作：`P0 [4,14,2,4,7]`；`P1 [1,6,9,3,1]`、`[1,0,11,4,1]`。
+2. `v81 vs v69` 负例（seed=`20267433`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_093220/20260305_094527_p0-cpp_v69_overlay_followup_prune_p1-cpp_v81_overlay_deficit_late_release_seed-20267433_rounds-180.jsonl`
+   - turning point：round `130`，`impact_score=331`（`delta_army_lead_p0=327`）。
+   - 该回合动作：`P0 [1,1,9,2,3]`、`[1,7,9,1,1]`；`P1 [1,2,10,3,2]`。
+3. `v81 vs v70` 胜例（seed=`20266423`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_093220/20260305_094345_p0-cpp_v70_overlay_opening_subpressure_p1-cpp_v81_overlay_deficit_late_release_seed-20266423_rounds-180.jsonl`
+   - turning point：round `143`，`impact_score=192`（`delta_army_lead_p0=-192`）。
+   - 该回合动作：`P0 [4,18,2,13,10]`；`P1 [1,1,3,3,1]`、`[1,4,0,1,1]`。
+4. `v81 vs v72` 负例（seed=`20264455`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_093220/20260305_094043_p0-cpp_v81_overlay_deficit_late_release_p1-cpp_v72_overlay_endgame_lock_seed-20264455_rounds-180.jsonl`
+   - turning point：round `156`，`impact_score=473`（`delta_army_lead_p0=-469`）。
+   - 该回合动作：`P0 [1,6,6,1,1]`；`P1 [7,6,8]`、`[1,6,10,1,1]`。
+5. `v81 vs v80` 胜例（seed=`20261343`）：
+   - `/www/autolab/runtime/scopes/iter/replays/eval_20260305_093220/20260305_093323_p0-cpp_v80_overlay_release_time_decay_p1-cpp_v81_overlay_deficit_late_release_seed-20261343_rounds-180.jsonl`
+   - turning point：round `148`，`impact_score=421`（`delta_army_lead_p0=421`）。
+   - 该回合动作：`P0 [1,5,2,3,1]`；`P1 [4,18,2,8,2]`、`[1,10,7,1,1]`。
+
+replay 结论：
+
+1. `v81` 对当前 champion `v69` 提升到 `55/100`，目标对位方向生效；
+2. 但 `v72` 对位显著回退（`39/100`），说明“落后态底线释放”对旧终盘锁定型对手副作用明显；
+3. 波动上界仍高（`1062`），稳定性问题仍未收敛。
+
+### 110.5 借鉴点是否生效（本轮证据）
+
+1. Generals 借鉴点（连续 threat/impact 主干）：
+   - 证据：仍使用单连续 `reserve_signal`，不新增状态机；
+   - 结果：`v81-v80=56/100`，对 `v69/v70` 为 `55/54`；
+   - 判定：`生效`。
+2. ANTWar 借鉴点（global_state/reserved）：
+   - 证据：后期衰减 + 落后底线释放（`release_window`）直接作用预算；
+   - 结果：修复了 `v69` 对位（相较 `v80` 的 `51/100` 到 `55/100`），但 `v72` 出现 `39/100`；
+   - 判定：`部分生效（有明显副作用）`。
+
+### 110.6 回到生产口径的结论
+
+1. 生产唯一权威在回合末为 `eval_20260305_092917`，champion=`cpp_v79_overlay_risk_weighted_release`（由 `v69 -> v79` 切换）；
+2. 本轮已覆盖对当前 champion 的 `>=100` h2h gate：`v81-v79=54/100`；
+3. 同轮也覆盖了上一任 champion `v69`（`v81-v69=55/100`）与 `v72`（`v81-v72=39/100`）；
+4. 由于对 `v72` 明显负差且关键对位尚未 `>=200` confirm，本轮仅可作为候选筛选信号；
+5. 本轮结论标签维持：`neutral`。
+
+### 110.7 风险、下一步与回合末自检
+
+风险：
+
+1. `v81-v72=39/100` 为当前主要阻断；
+2. replay `largest_army_swing=1062`，高波动问题仍在；
+3. 本轮内生产 champion 连续切换（`v72 -> v69 -> v79`），gauntlet 口径存在高敏感风险。
+
+下一步：
+
+1. 按 confirm 路径补样：`v81 vs v69/v70/v72/v80` 各 `+100`（累计 `>=200`）；
+2. 若 `v72` 持续弱势，优先减法修正：仅对“ahead+late”场景压低 `late_release_floor`，避免全面回滚；
+3. 推进将 `hard_cutoff_hit` 计数写入评测产物，完成 CPU 截止可观测闭环。
+
+回合末自检：
+
+1. 本轮是否触发搜索时间硬截止：
+   - 代码仍具备 `CLOCK_THREAD_CPUTIME_ID` + `kSearchStepBudgetMs=200` + fallback；
+   - 评测产物未导出 `hard_cutoff_hit` 次数，触发频率暂不可观测。
+2. 是否存在超过 `200ms` 的单步 CPU 风险点：
+   - 风险点仍在 overlay 的 `enemy_best/my_follow` 重复评估链。
+3. 若有风险，下一轮如何降复杂度/改进剪枝：
+   - 继续收紧 follow-up 触发面并保持单闸门结构；
+   - 优先补齐截止计数，再按热点回放定向减枝。
+
+### 110.8 回合末口径刷新（生产 latest 复读）
+
+1. 回合收尾复读生产 `latest.json`：tag 已推进到 `eval_20260305_092917`；
+2. `champion.old/new` 进一步切换为 `cpp_v69_overlay_followup_prune -> cpp_v79_overlay_risk_weighted_release`（`promoted=true`）；
+3. `config.pairs=45`，old/new 在 pairs 中暴露 `5/6`，再次确认 gauntlet 对手池受 champion 切换影响（高优先级风险）；
+4. 针对“当前最新 champion=`v79`”的本轮 h2h gate 结果：`v81-v79=54/100`（`>=100`，但未达 `>55%`）；
+5. 因本轮内生产口径发生连续切换（`v72->v69->v79`），本回合结论维持 `neutral`，并继续按 confirm 样本推进。

@@ -1,0 +1,25 @@
+image: registry.secoder.net/tool/deployer
+
+stages:
+  - build
+  - test
+
+build:
+  stage: build
+  script:
+    - export BUILD_IMAGE_NAME=$CI_REGISTRY_IMAGE
+    - export BUILD_IMAGE_TAG=$CI_COMMIT_REF_SLUG
+    - export BUILD_IMAGE_USERNAME=$CI_REGISTRY_USER
+    - export BUILD_IMAGE_PASSWORD=$CI_REGISTRY_PASSWORD
+    - deployer build
+  only:
+    - master
+
+unit-test:
+  image: 
+    python:3.9
+  stage: test
+  before_script:
+    - pip install coverage -i https://pypi.tuna.tsinghua.edu.cn/simple/
+  script:
+    - sh test.sh  

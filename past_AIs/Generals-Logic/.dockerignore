@@ -1,0 +1,13 @@
+README.md
+.git
+.gitignore
+
+**/__pycache__
+.pytest_cache
+
+
+.coverage
+coverage-reports
+xunit-reports
+
+.DS_Store

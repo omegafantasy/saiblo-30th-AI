@@ -1,0 +1,703 @@
+import json
+import struct
+import sys
+import time
+
+from logic.constant import *
+from logic.execute import execute_single_command
+from logic.gamedata import MainGenerals
+from logic.gamestate import GameState, init_generals, update_round
+from logic.generate_round_replay import get_single_round_replay
+from old_main import show_state
+
+error_map = ["RE", "TLE", "OLE"]
+
+
+# 发送数据包给 Judger
+def send_to_judger(data, target=-1):
+    length = len(data)
+    header = struct.pack(">Ii", length, target)
+    sys.stdout.buffer.write(header)
+    sys.stdout.buffer.write(data)
+    sys.stdout.flush()
+
+
+# 接收judger发来的数据包
+def receive_from_judger():
+    header = sys.stdin.buffer.read(4)
+    length = struct.unpack(">I", header)[0]
+    data = sys.stdin.buffer.read(length)
+    sys.stdin.buffer.flush()
+    return data
+
+
+# judger 向逻辑发送初始化信息
+def receive_init_info():
+    # 接收来自 Judger 的字节流数据
+    init_info_bytes = receive_from_judger()
+    # 将字节流解码成字符串
+    init_info_str = init_info_bytes.decode("utf-8")
+    # 将JSON格式的字符串解析为 python 数据类型
+    init_info = json.loads(init_info_str)
+    return init_info
+
+
+# 逻辑向judger发送回合配置信息
+def send_round_config(time: int, length: int):
+    round_config = {"state": 0, "time": time, "length": length}
+    round_config_str = json.dumps(round_config)
+    round_config_bytes = round_config_str.encode("utf-8")
+    send_to_judger(round_config_bytes)
+
+
+# 逻辑向judger发生地图信息
+def send_map_info(state: int, content: list[str]):
+    round_info = {"state": state, "listen": [], "player": [0, 1], "content": content}
+    round_info_bytes = json.dumps(round_info).encode("utf-8")
+    send_to_judger(round_info_bytes)
+
+
+# 逻辑向 judger 发送正常回合消息
+def send_round_info(
+    state: int, listen: list[int], player: list[int], content: list[str]
+):
+    round_info = {
+        "state": state,
+        "listen": listen,
+        "player": player,
+        "content": content,
+    }
+
+    round_info_bytes = json.dumps(round_info).encode("utf-8")
+    send_to_judger(round_info_bytes)
+
+
+# 逻辑向 judger 发送观战消息
+def send_watch_info(watch: str):
+    watch_info = {"watch": watch}
+    watch_info_bytes = json.dumps(watch_info).encode("utf-8")
+    send_to_judger(watch_info_bytes)
+
+
+# judger 向逻辑发送 AI 正常或异常消息
+def receive_ai_info():
+    ai_info_bytes = receive_from_judger()
+    ai_info_str = ai_info_bytes.decode("utf-8")
+    ai_info = json.loads(ai_info_str)
+    return ai_info
+
+
+# 逻辑表示对局已结束，向 judger 请求 AI 结束状态
+def request_ai_end_state():
+    request_end = {"action": "request_end_state"}
+    request_end_bytes = json.dumps(request_end).encode("utf-8")
+    send_to_judger(request_end_bytes)
+
+
+# judger 向逻辑回复 AI 结束状态
+def receive_ai_end_state():
+    ai_end_state_bytes = receive_from_judger()
+    ai_end_state_str = ai_end_state_bytes.decode("utf-8")
+    ai_end_state = json.loads(ai_end_state_str)
+    return ai_end_state
+
+
+# 逻辑向judger发送游戏结束信息
+def send_game_end_info(end_info: str, end_state: str):
+    game_end_info = {"state": -1, "end_info": end_info, "end_state": end_state}
+    game_end_info_bytes = json.dumps(game_end_info).encode("utf-8")
+    send_to_judger(game_end_info_bytes)
+
+
+# 判断游戏是否结束
+def is_game_over(gamestate: GameState) -> int:
+    is_general0_alive, is_general1_alive = 0, 0
+    for general in gamestate.generals:
+        if isinstance(general, MainGenerals):
+            if general.player == 0:
+                is_general0_alive = 1
+            elif general.player == 1:
+                is_general1_alive = 1
+    if is_general1_alive == 0:
+        return 0
+    elif is_general0_alive == 0:
+        return 1
+    else:
+        if gamestate.round <= 500:
+            return -1
+    if gamestate.round > 500:
+        army0_num, army1_num = 0, 0
+        cell0_num, cell1_num = 0, 0
+        for i in range(row):
+            for j in range(col):
+                if gamestate.board[i][j].player == 0:
+                    army0_num += gamestate.board[i][j].army
+                    cell0_num += 1
+                elif gamestate.board[i][j].player == 1:
+                    army1_num += gamestate.board[i][j].army
+                    cell1_num += 1
+        if army0_num > army1_num:
+            return 0
+        elif army1_num > army0_num:
+            return 1
+        else:
+            if cell0_num > cell1_num:
+                return 0
+            elif cell1_num > cell0_num:
+                return 1
+            else:
+                if gamestate.coin[0] > gamestate.coin[1]:
+                    return 0
+                elif gamestate.coin[1] > gamestate.coin[0]:
+                    return 1
+        return 0
+
+
+def convert_command_list_str(command_list_str: str):
+    res: list[list[int]] = []
+    with open("command_list_str.txt", "w") as f:
+        f.write(command_list_str)
+    for command_str in command_list_str.split("\n"):
+        command = command_str.split()
+        command = [int(num) for num in command]
+        res.append(command)
+    return res
+
+
+def quit_running(er):
+    with open(gamestate.replay_file, "a") as f:
+        f.write(er + "\n")
+    f.close()
+    end_state = json.dumps(["RE", "RE"])
+    end_info = {"0": 0, "1": 0}
+    send_game_end_info(json.dumps(end_info), end_state)
+
+
+def write_debug_into_replay(gamestate, message):
+    with open(gamestate.replay_file, "a") as f:
+        f.write(message + "\n")
+    f.close()
+
+
+def write_end_info(gamestate, message):
+    with open(gamestate.replay_file, "a") as f:
+        f.write(
+            str(
+                {
+                    "Round": gamestate.round,
+                    "Player": gamestate.winner,
+                    "Action": [9],
+                    "Content": message,
+                }
+            ).replace("'", '"')
+            + "\n"
+        )
+    f.close()
+
+
+def read_human_information_and_apply(gamestate: GameState, player, enemy_human):
+    command_list_str = ""
+    while 1:
+        # 持续收消息
+        ai_info = receive_ai_info()
+        while ai_info["player"] != -1 and ai_info["player"] != player:
+            ai_info = receive_ai_info()
+
+        # 出现错误，退出游戏
+        if ai_info["player"] == -1:
+            gamestate.winner = 1 - player
+            write_end_info(gamestate, "player quit unexpectedly")
+            time.sleep(sleep_time)
+            send_to_judger(
+                (
+                    open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                ).encode("utf-8"),
+                player,
+            )
+            if enemy_human:
+                # 如果对方是播放器，同时向对方转发结果
+                # time.sleep(0.5)
+                send_to_judger(
+                    (
+                        open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                    ).encode("utf-8"),
+                    1 - player,
+                )
+            end_list = ["OK", "OK"]
+            end_list[json.loads(ai_info["content"])["player"]] = error_map[
+                json.loads(ai_info["content"])["error"]
+            ]
+            end_info = {
+                "0": json.loads(ai_info["content"])["player"],
+                "1": 1 - json.loads(ai_info["content"])["player"],
+            }
+            send_game_end_info(json.dumps(end_info), json.dumps(end_list))
+            return False, ""
+
+        if ai_info["content"] == "8\n":
+            # 操作结束，停止接收消息
+            command_list_str += "8\n"
+            break
+        elif ai_info["content"] == "9\n":
+            gamestate.winner = 1 - player
+            write_end_info(gamestate, "give up")
+            time.sleep(sleep_time)
+            send_to_judger(
+                (
+                    open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                ).encode("utf-8"),
+                player,
+            )
+            if enemy_human:
+                # 如果对方是播放器，同时向对方转发结果
+                # time.sleep(sleep_time)
+                send_to_judger(
+                    (
+                        open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                    ).encode("utf-8"),
+                    1 - player,
+                )
+            end_state = json.dumps(["OK", "OK"])
+            end_info = {"0": 1 - gamestate.winner, "1": gamestate.winner}
+            send_game_end_info(json.dumps(end_info), end_state)
+            return False, ""
+        elif ai_info["content"] == "10\n":
+            gamestate.coin[player] += 999
+        else:
+            # 执行操作
+            command = ai_info["content"][:-1].split()
+            command = [int(i) for i in command]
+            single_str = ""
+            for i in command:
+                single_str += str(i) + " "
+            success = execute_single_command(player, gamestate, command[0], command[1:])
+            if success:
+                # 操作成功，返回操作结果
+                command_list_str += single_str[:-1] + "\n"
+                # time.sleep(0.5)
+                send_to_judger(
+                    (
+                        open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                    ).encode("utf-8"),
+                    player,
+                )
+                if enemy_human:
+                    # 如果对方是播放器，同时向对方转发结果
+                    # time.sleep(0.5)
+                    send_to_judger(
+                        (
+                            open(gamestate.replay_file, "r").readlines()[-1].strip()
+                            + "\n"
+                        ).encode("utf-8"),
+                        1 - player,
+                    )
+                # time.sleep(0.5)
+                # 检查游戏是否结束，如果结束则停止操作
+                gamestate.winner = is_game_over(gamestate)
+                if gamestate.winner != -1:
+                    break
+            else:
+                # 操作不成功，通知播放器
+                # time.sleep(0.5)
+                send_to_judger(
+                    str(get_single_round_replay(gamestate, [], player, [-1])).encode(
+                        "utf-8"
+                    ),
+                    player,
+                )
+                # time.sleep(0.5)
+
+    # 玩家操作结束后，判断游戏是否结束
+    if gamestate.winner != -1:
+        write_end_info(gamestate, "game end normally")
+        time.sleep(sleep_time)
+        send_to_judger(
+            (open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n").encode(
+                "utf-8"
+            ),
+            player,
+        )
+        if enemy_human:
+            # time.sleep(0.5)
+            # 如果对方是播放器，同时向对方转发结果
+            send_to_judger(
+                (
+                    open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                ).encode("utf-8"),
+                1 - player,
+            )
+        # time.sleep(0.5)
+        end_state = json.dumps(["OK", "OK"])
+        end_info = {"0": 1 - gamestate.winner, "1": gamestate.winner}
+        send_game_end_info(json.dumps(end_info), end_state)
+        return False, ""
+
+    if player == 0:
+        # time.sleep(0.5)
+        send_to_judger(
+            (
+                str(get_single_round_replay(gamestate, [], player, [8])).replace(
+                    "'", '"'
+                )
+                + "\n"
+            ).encode("utf-8"),
+            player,
+        )
+        if enemy_human:
+            # 如果对方是播放器，同时向对方转发结果
+            # time.sleep(0.5)
+            send_to_judger(
+                (
+                    str(get_single_round_replay(gamestate, [], player, [8])).replace(
+                        "'", '"'
+                    )
+                    + "\n"
+                ).encode("utf-8"),
+                1 - player,
+            )
+        # time.sleep(0.5)
+    else:
+        # 如果是后手，更新回合
+        update_round(gamestate)
+        # 向播放器发送回合更新信息
+        update_info = json.loads(
+            open(gamestate.replay_file, "r").readlines()[-1].strip()
+        )
+        update_info["Player"] = player
+        # time.sleep(0.5)
+        send_to_judger(
+            (str(update_info).replace("'", '"') + "\n").encode("utf-8"),
+            player,
+        )
+        if enemy_human:
+            # 如果对方是播放器，同时向对方转发结果
+            # time.sleep(0.5)
+            send_to_judger(
+                (str(update_info).replace("'", '"') + "\n").encode("utf-8"),
+                1 - player,
+            )
+        # time.sleep(0.5)
+        # 判断游戏是否结束
+        gamestate.winner = is_game_over(gamestate)
+        if gamestate.winner != -1:
+            write_end_info(gamestate, "game end normally")
+            if enemy_human:
+                time.sleep(sleep_time)
+                send_to_judger(
+                    (
+                        open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                    ).encode("utf-8"),
+                    player,
+                )
+            end_state = json.dumps(["OK", "OK"])
+            end_info = {"0": 1 - gamestate.winner, "1": gamestate.winner}
+            send_game_end_info(json.dumps(end_info), end_state)
+            return False, ""
+    return True, command_list_str
+
+
+def read_ai_information_and_apply(gamestate: GameState, player, enemy_human):
+    ai_info = receive_ai_info()
+    while ai_info["player"] != -1 and ai_info["player"] != player:
+        ai_info = receive_ai_info()
+    if ai_info["player"] == -1:
+        # 如果信息异常，胜负已分，游戏结束
+        info = json.loads(ai_info["content"])
+        gamestate.winner = 1 - info["player"]
+        write_end_info(gamestate, "ai " + str(info["player"]) + " quit unexpectedly")
+        if enemy_human:
+            time.sleep(sleep_time)
+            send_to_judger(
+                (
+                    open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                ).encode("utf-8"),
+                player,
+            )
+        end_list = ["OK", "OK"]
+        end_list[json.loads(ai_info["content"])["player"]] = error_map[
+            json.loads(ai_info["content"])["error"]
+        ]
+        end_info = {
+            "0": json.loads(ai_info["content"])["player"],
+            "1": 1 - json.loads(ai_info["content"])["player"],
+        }
+        send_game_end_info(json.dumps(end_info), json.dumps(end_list))
+        return False, ""
+
+    # 进行操作
+    command_list_str = ai_info["content"]
+    try:
+        command_list = convert_command_list_str(command_list_str)
+    except Exception:
+        command_list_str = ai_info["content"]
+        gamestate.winner = 1 - player
+        write_end_info(gamestate, command_list_str)
+        if enemy_human:
+            time.sleep(sleep_time)
+            send_to_judger(
+                (
+                    open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                ).encode("utf-8"),
+                player,
+            )
+        end_list = ["OK", "OK"]
+        end_list[player] = "IA"
+        end_info = {"0": player, "1": 1 - player}
+        send_game_end_info(json.dumps(end_info), json.dumps(end_list))
+        return False, ""
+
+    success = True
+    command_list_str = ""
+    for command in command_list:
+        if command[0] == 8:
+            command_list_str += "8\n"
+            break
+        if command[0] != 8:
+            try:
+                success = execute_single_command(
+                    player, gamestate, command[0], command[1:]
+                )
+            except Exception:
+                success = False
+            # 如果操作失败，胜负已分
+            if not success:
+                gamestate.winner = 1 - player
+                break
+            # 如果对方是播放器，向对方发送操作结果
+            single_str = ""
+            for i in command:
+                single_str += str(i) + " "
+            command_list_str += single_str[:-1] + "\n"
+            if enemy_human:
+                time.sleep(sleep_time)
+                send_to_judger(
+                    (
+                        open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                    ).encode("utf-8"),
+                    1 - player,
+                )
+            # 如果满足条件，胜负已分
+            gamestate.winner = is_game_over(gamestate)  # isgameover返回-1代表没结束
+            if gamestate.winner != -1:
+                break
+
+    # 玩家0的操作回合结束后，判断游戏是否结束
+    if gamestate.winner != -1:
+        if success:
+            write_end_info(gamestate, "game end normally")
+        else:
+            write_end_info(
+                gamestate,
+                "ai "
+                + str(player)
+                + " IA, operation "
+                + ai_info["content"].replace("\n", "|"),
+            )
+        if enemy_human:
+            time.sleep(sleep_time)
+            send_to_judger(
+                (
+                    open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                ).encode("utf-8"),
+                1 - player,
+            )
+        end_list = ["OK", "OK"]
+        if not success:
+            end_list[player] = "IA"
+        end_info = {"0": 1 - gamestate.winner, "1": gamestate.winner}
+        send_game_end_info(json.dumps(end_info), json.dumps(end_list))
+        return False, ""
+
+    # 发送正常回合消息
+    # quit_running("before send round info")
+    if player == 0:
+        if enemy_human:
+            # time.sleep(sleep_time)
+            # 如果对方是播放器，同时向对方转发结果
+            time.sleep(sleep_time)
+            send_to_judger(
+                (
+                    str(get_single_round_replay(gamestate, [], player, [8])).replace(
+                        "'", '"'
+                    )
+                    + "\n"
+                ).encode("utf-8"),
+                1 - player,
+            )
+    elif player == 1:
+        update_round(gamestate)
+        update_info = json.loads(
+            open(gamestate.replay_file, "r").readlines()[-1].strip()
+        )
+        update_info["Player"] = player
+        if enemy_human:
+            # time.sleep(0.5)
+            # 如果对方是播放器，同时向对方转发结果
+            time.sleep(sleep_time)
+            send_to_judger(
+                (str(update_info).replace("'", '"') + "\n").encode("utf-8"),
+                1 - player,
+            )
+
+        # 判断游戏是否结束
+        gamestate.winner = is_game_over(gamestate)
+        if gamestate.winner != -1:
+            write_end_info(gamestate, "game end normally")
+            if enemy_human:
+                time.sleep(sleep_time)
+                send_to_judger(
+                    (
+                        open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                    ).encode("utf-8"),
+                    1 - player,
+                )
+            end_state = json.dumps(["OK", "OK"])
+            end_info = {"0": 1 - gamestate.winner, "1": gamestate.winner}
+            send_game_end_info(json.dumps(end_info), end_state)
+            return False, ""
+
+    return True, command_list_str
+
+
+def count_surroundings(map, i, j, landtype):
+    count = 0
+    for dx in [-1, 0, 1]:
+        for dy in [-1, 0, 1]:
+            if dx == 0 and dy == 0:
+                continue
+            ni = i + dx
+            nj = j + dy
+            if ni >= 0 and ni < row and nj >= 0 and nj < col:
+                if map[ni][nj].type in landtype:
+                    count += 1
+    return count
+
+
+def update_map(gamestate: GameState):
+    for row in gamestate.board:
+        for cell in row:
+            if cell.type == 2:
+                sur_num = count_surroundings(
+                    gamestate.board, cell.position[0], cell.position[1], [2]
+                )
+                if sur_num < 3:
+                    cell.type = 0
+
+    for row in gamestate.board:
+        for cell in row:
+            if cell.type in [0, 1]:
+                sur_num = count_surroundings(
+                    gamestate.board, cell.position[0], cell.position[1], [0, 1]
+                )
+                if sur_num < 4:
+                    cell.type = 2
+
+
+if __name__ == "__main__":
+    import random
+    import traceback
+
+    try:
+        # 接收judger的初始化信息
+        init_info = receive_init_info()
+        # 设置随机种子
+        random.seed(init_info["config"]["random_seed"])
+
+        gamestate = GameState()
+        # 每局游戏唯一的游戏状态类，所有的修改应该在此对象中进行
+        update_map(gamestate)
+        init_generals(gamestate)
+        gamestate.coin = [40, 40]
+
+        gamestate.replay_file = init_info["replay"]
+        player_type = init_info["player_list"]
+
+        if player_type[0] == 0 or player_type[1] == 0:
+            write_end_info(gamestate, "ai fail to start")
+            if player_type[1] == 2:
+                time.sleep(sleep_time)
+                send_to_judger(
+                    (
+                        open(gamestate.replay_file, "r").readlines()[-1].strip() + "\n"
+                    ).encode("utf-8"),
+                    1,
+                )
+            end_state = json.dumps(
+                ["OK" if player_type[0] else "RE", "OK" if player_type[1] else "RE"]
+            )
+            end_info = {
+                "0": 1 if player_type[0] else 0,
+                "1": 1 if player_type[1] else 0,
+            }
+            send_game_end_info(json.dumps(end_info), end_state)
+
+        state = 0
+
+        # 写入初始化json
+        init_json = gamestate.trans_state_to_init_json(-1)
+        init_json["Round"] = 0
+        with open(gamestate.replay_file, "w") as f:
+            f.write(str(init_json).replace("'", '"') + "\n")
+        f.close()
+
+        state += 1
+
+        if player_type[0] == 1:
+            send_round_config(1, 1024)
+        elif player_type[0] == 2:
+            send_round_config(180, 1024)
+
+        # 向双方AI发送初始化信息
+        json0 = gamestate.trans_state_to_init_json(0)
+        json0["Round"] = 0
+        json1 = gamestate.trans_state_to_init_json(1)
+        json1["Round"] = 0
+        send_round_info(
+            state,
+            [0],
+            [0, 1],
+            [
+                str(json0).replace("'", '"') + "\n",
+                str(json1).replace("'", '"') + "\n",
+            ],
+        )
+        # state += 1
+
+        player = 0
+        game_continue = True
+        while game_continue:
+            # send_round_config(state, 1, 1024)
+            if player_type[player] == 1:
+                game_continue, operation_string = read_ai_information_and_apply(
+                    gamestate, player, player_type[1 - player] == 2
+                )
+            elif player_type[player] == 2:
+                game_continue, operation_string = read_human_information_and_apply(
+                    gamestate, player, player_type[1 - player] == 2
+                )
+
+            if not game_continue:
+                break
+            player = 1 - player
+            state += 1
+            if player_type[player] == 1:
+                send_round_config(1, 1024)
+                send_round_info(
+                    state,
+                    [player],
+                    [player],
+                    [operation_string],
+                )
+            elif player_type[player] == 2:
+                send_round_config(180, 1024)
+                send_round_info(
+                    state,
+                    [player],
+                    [],
+                    [],
+                )
+    except Exception as e:
+        errorFile = open(gamestate.replay_file, "a")
+        errorFile.write(traceback.format_exc())
+        errorFile.close()
+        quit_running("")
