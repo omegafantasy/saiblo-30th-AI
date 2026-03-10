@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="/www"
+source "$ROOT_DIR/scripts/automation_pause.sh"
 PROMPT_FILE="$ROOT_DIR/docs/codex_iteration_prompt.md"
 OBJECTIVE_FILE="$ROOT_DIR/docs/codex_objective_fixed.md"
 LOG_DIR="$ROOT_DIR/autolab/runtime"
@@ -17,6 +18,11 @@ TIMEOUT_SEC="${CODEX_ITER_TIMEOUT_SEC:-0}"
 TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"
 
 mkdir -p "$LOG_DIR"
+
+if automation_is_paused; then
+  echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | PAUSED by $(automation_pause_file)" >> "$LOG_FILE"
+  exit 0
+fi
 
 if [[ -f "$PAUSE_FILE" ]]; then
   echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | PAUSED by $PAUSE_FILE" >> "$LOG_FILE"

@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 from autolab.evaluator import run_from_args
+
+
+DEFAULT_MAX_JOBS_CAP = 8
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -15,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--opponents", default="", help="comma-separated opponent ids (gauntlet)")
     p.add_argument("--games-per-pair", type=int, default=20, help="seeds per pair; each seed runs both seats")
     p.add_argument("--max-rounds", type=int, default=160)
-    p.add_argument("--jobs", type=int, default=14)
+    p.add_argument("--jobs", type=int, default=8)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--k-factor", type=float, default=20.0)
     p.add_argument("--base-rating", type=float, default=1500.0)
@@ -50,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    try:
+        jobs_cap = int(os.environ.get("AUTOMATION_MAX_JOBS_CAP", str(DEFAULT_MAX_JOBS_CAP)))
+    except ValueError:
+        jobs_cap = DEFAULT_MAX_JOBS_CAP
+    args.jobs = max(1, min(int(args.jobs), jobs_cap))
     result = run_from_args(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

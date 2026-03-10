@@ -1,0 +1,6 @@
+*/10 * * * * /usr/bin/flock -n /tmp/codex-quota-guard.lock /root/.openclaw/workspace/scripts/codex-quota-guard.sh >/dev/null 2>&1
+* * * * * /usr/bin/flock -n /tmp/elo-web-ensure.lock /www/scripts/elo_web_ensure.sh >/dev/null 2>&1
+@reboot /usr/bin/flock -n /tmp/elo-web-start.lock /www/scripts/elo_web_start.sh >/dev/null 2>&1
+*/15 * * * * /usr/bin/flock -n /tmp/codex-iterate.lock /www/scripts/codex_iterate_once.sh >/dev/null 2>&1
+7,22,37,52 * * * * /usr/bin/flock -n /tmp/codex-saiblo-iterate.lock /www/scripts/codex_saiblo_iterate_once.sh >/dev/null 2>&1
+*/10 * * * * /usr/bin/flock -n /tmp/autolab-runtime-gc.lock /www/scripts/autolab_runtime_gc.sh >/dev/null 2>&1

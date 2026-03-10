@@ -1,5 +1,5 @@
 [Unit]
-Description=Autolab idle evaluator loop (up to 14 CPUs)
+Description=Autolab idle evaluator loop (up to 8 CPUs)
 After=network-online.target
 Wants=network-online.target
 

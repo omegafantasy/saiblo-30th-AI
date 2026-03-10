@@ -4,10 +4,10 @@
     "bearer": ""
   },
   "cpp_ai": {
-    "exe": "/www/ai_cpp/v1/ai_v1",
+    "exe": "/www/Game1/antgame_ai_cpp/v1/ai_v1",
     "seed": 0
   },
   "paths": {
-    "ant_game_dir": "/www/Ant-Game"
+    "ant_game_dir": "/www/Game1/Ant-Game"
   }
 }

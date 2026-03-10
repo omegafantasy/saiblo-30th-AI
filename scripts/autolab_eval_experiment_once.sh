@@ -2,15 +2,26 @@
 set -euo pipefail
 
 ROOT_DIR="/www"
+source "$ROOT_DIR/scripts/automation_pause.sh"
 PY_BIN="${PY_BIN:-$(command -v python3 || command -v python || true)}"
 EVAL_SCRIPT="$ROOT_DIR/autolab_eval.py"
 REPLAY_ANALYZE_SCRIPT="$ROOT_DIR/autolab_replay_analyze.py"
 DOC_OUT="${EXPERIMENT_DOC_OUT:-$ROOT_DIR/docs/iter_eval_latest.md}"
 RUNTIME_SCOPE="${EXPERIMENT_RUNTIME_SCOPE:-iter}"
-JOBS="${EXPERIMENT_JOBS:-14}"
+JOBS="${EXPERIMENT_JOBS:-8}"
+JOBS_CAP="${AUTOMATION_MAX_JOBS_CAP:-8}"
 CPU_POLICY="${EXPERIMENT_CPU_POLICY:-all}"
 ALLOW_ARG_OVERRIDE="${EXPERIMENT_ALLOW_ARG_OVERRIDE:-0}"
 REPLAY_ANALYZE="${EXPERIMENT_REPLAY_ANALYZE:-1}"
+
+if automation_is_paused; then
+  echo "experiment eval paused by $(automation_pause_file)" >&2
+  exit 0
+fi
+
+if [[ "$JOBS" =~ ^[0-9]+$ ]] && [[ "$JOBS_CAP" =~ ^[0-9]+$ ]] && [[ "$JOBS" -gt "$JOBS_CAP" ]]; then
+  JOBS="$JOBS_CAP"
+fi
 
 if [[ -z "$PY_BIN" || ! -x "$PY_BIN" ]]; then
   echo "missing python interpreter" >&2

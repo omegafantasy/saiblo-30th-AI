@@ -25,6 +25,10 @@ ai_cpp/v*/ai_v[0-9]*
 !ai_cpp/v*/ai_v*.cpp
 !ai_cpp/v*/ai_v*.hpp
 !ai_cpp/v*/ai_v*.h
+Game1/antgame_ai_cpp/v*/ai_v[0-9]*
+!Game1/antgame_ai_cpp/v*/ai_v*.cpp
+!Game1/antgame_ai_cpp/v*/ai_v*.hpp
+!Game1/antgame_ai_cpp/v*/ai_v*.h
 
 # Runtime outputs
 replays/
@@ -40,7 +44,8 @@ past_AIs/zdata.py
 config.local.json
 config.json
 
-# Nested upstream repository (managed independently)
+# Nested upstream repositories (managed independently)
 Ant-Game/
+Game1/Ant-Game/.git/
 past_AIs/ANTWar-AI/
 past_AIs/Generals-AI/

@@ -22,9 +22,8 @@ PARSED_DIR = DOCS_DIR / "mhtml_parsed"
 ASSET_ROOT = DOCS_DIR / "mhtml_assets"
 
 TARGETS = [
-    ("ANTWar - Saiblo.mhtml", "antwar_game22"),
-    ("Generals - Saiblo.mhtml", "generals_game35"),
-    ("蚁洋陷役2 - Saiblo.mhtml", "antwar2_game48"),
+    ("蚁洋陷役2 - Saiblo.mhtml", "antgame2_game48"),
+    ("头号侦探 - Saiblo.mhtml", "deepclue_game"),
 ]
 
 EXT_BY_MIME = {

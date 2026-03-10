@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/automation_pause.sh"
 RUNTIME_DIR="${RUNTIME_DIR:-$ROOT_DIR/autolab/runtime}"
 REPLAYS_DIR="${REPLAYS_DIR:-$RUNTIME_DIR/replays}"
 THRESHOLD_GB="${THRESHOLD_GB:-50}"
@@ -38,6 +39,11 @@ fi
 
 mkdir -p "$RUNTIME_DIR"
 touch "$LOG_FILE"
+
+if automation_is_paused; then
+  log "paused by $(automation_pause_file)"
+  exit 0
+fi
 
 if [ ! -d "$REPLAYS_DIR" ]; then
   log "replays dir missing: $REPLAYS_DIR"

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="/www"
+source "$ROOT_DIR/scripts/automation_pause.sh"
 RUNTIME_DIR="$ROOT_DIR/autolab/runtime"
 PID_FILE="$RUNTIME_DIR/elo_web.pid"
 LOG_FILE="$RUNTIME_DIR/elo_web.log"
@@ -9,6 +10,11 @@ HOST="${ELO_WEB_HOST:-0.0.0.0}"
 PORT="${ELO_WEB_PORT:-8000}"
 
 mkdir -p "$RUNTIME_DIR"
+
+if automation_is_paused; then
+  echo "elo-web start paused by $(automation_pause_file)"
+  exit 0
+fi
 
 if [[ -s "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" || true)"

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="/www"
+source "$ROOT_DIR/scripts/automation_pause.sh"
 EVAL_SCRIPT="$ROOT_DIR/autolab_eval.py"
 LOG_DIR="$ROOT_DIR/autolab/runtime"
 LOG_FILE="$LOG_DIR/idle_eval_loop.log"
@@ -9,7 +10,8 @@ PY_BIN="${PY_BIN:-$(command -v python3 || command -v python || true)}"
 ITER_LOCK_FILE="${ITER_LOCK_FILE:-/tmp/codex-iterate.lock}"
 
 EVAL_MODE="${AUTO_EVAL_MODE:-adaptive}"
-MAX_JOBS="${AUTO_EVAL_MAX_JOBS:-14}"
+MAX_JOBS="${AUTO_EVAL_MAX_JOBS:-8}"
+MAX_JOBS_CAP="${AUTOMATION_MAX_JOBS_CAP:-8}"
 GAMES_PER_PAIR="${AUTO_EVAL_GAMES_PER_PAIR:-6}"
 ANCHOR_GAMES_PER_PAIR="${AUTO_EVAL_ANCHOR_GAMES_PER_PAIR:-1}"
 ADAPTIVE_PAIR_COUNT="${AUTO_EVAL_ADAPTIVE_PAIR_COUNT:-45}"
@@ -23,6 +25,10 @@ IDLE_SAMPLE_SEC="${AUTO_EVAL_IDLE_SAMPLE_SEC:-0.8}"
 SLEEP_OK="${AUTO_EVAL_SLEEP_OK:-20}"
 SLEEP_FAIL="${AUTO_EVAL_SLEEP_FAIL:-20}"
 SLEEP_ITER_ACTIVE="${AUTO_EVAL_SLEEP_ITER_ACTIVE:-30}"
+
+if [[ "$MAX_JOBS" =~ ^[0-9]+$ ]] && [[ "$MAX_JOBS_CAP" =~ ^[0-9]+$ ]] && [[ "$MAX_JOBS" -gt "$MAX_JOBS_CAP" ]]; then
+  MAX_JOBS="$MAX_JOBS_CAP"
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -46,6 +52,12 @@ fi
 log "START autolab idle loop python=$PY_BIN mode=$EVAL_MODE max_jobs=$MAX_JOBS games_per_pair=$GAMES_PER_PAIR anchor_games_per_pair=$ANCHOR_GAMES_PER_PAIR adaptive_pair_count=$ADAPTIVE_PAIR_COUNT max_rounds=$MAX_ROUNDS"
 
 while true; do
+  if automation_is_paused; then
+    log "PAUSED by $(automation_pause_file) sleep=${SLEEP_FAIL}s"
+    sleep "$SLEEP_FAIL"
+    continue
+  fi
+
   # Priority policy: when codex iterate holds its lock, pause production eval.
   exec {iter_lock_fd}> "$ITER_LOCK_FILE"
   if ! flock -n "$iter_lock_fd"; then
