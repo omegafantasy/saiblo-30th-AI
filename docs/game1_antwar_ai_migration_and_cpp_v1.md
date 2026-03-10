@@ -113,3 +113,7 @@
 2. 单独分析 13 号塔、Pulse、Deflector/Evasion 的真实收益。
 3. 把 replay 分析改造成面向 `Game1` 的格式，再做批量定位。
 4. 最后才是迁移 autolab / Elo / Saiblo 上传流水线。
+
+补充：
+
+- 关于“当前到底复刻了旧 ANTWar-AI 哪些部分、还缺哪些”，见 `docs/game1_antwar_ai_coverage_check.md`。

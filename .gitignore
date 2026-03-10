@@ -37,6 +37,7 @@ replays/
 result.txt
 autolab/runtime/
 autolab/versions/
+docs/generated/
 
 # Secrets / local credentials
 past_AIs/zdata.py

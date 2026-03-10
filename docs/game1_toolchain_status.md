@@ -1,143 +1,115 @@
 # Game1 当前工具链状态
 
-## 1. 当前可用的链路
+## 1. 当前可信的本地链路
 
-### 1.1 MHTML 与规则文档
+已经可视为可信的部分：
 
-当前已经可用：
+- 规则页解析：
+  - `docs/mhtml_parsed/antgame2_game48.md`
+  - `docs/game1_antgame2_code_truth_and_antwar_diff.md`
+- 本地 AI：
+  - `Game1/antgame_ai_cpp/v1/ai_v1.cpp`
+  - `Game1/Ant-Game/AI/ai_cpp_v1.py`
+- 本地单局对战：
+  - `Game1/Ant-Game/tools/run_local_match.py`
+- 本地批评测 / Elo：
+  - `autolab/game1_match_runner.py`
+  - `autolab/evaluator.py`
+  - `autolab/registry.json`
+- Saiblo HTTP 工具：
+  - `saiblo_tools.py`
 
-- `docs/mhtml_parsed/antgame2_game48.md`
-- `docs/mhtml_parsed/deepclue_game.md`
-- `docs/game1_antgame2_code_truth_and_antwar_diff.md`
-- `docs/game1_antwar_ai_migration_and_cpp_v1.md`
+## 2. 这次已经完成的迁移
 
-其中：
+### 2.1 Autolab
 
-- `mhtml_parsed/*` 负责复刻页面内容。
-- `game1_antgame2_code_truth_and_antwar_diff.md` 负责把规则页和代码真值拉开。
+已完成：
 
-### 1.2 Game1 本地对局
+- `ANT_GAME_DIR` 迁到 `Game1/Ant-Game`
+- 评测不再依赖旧 Python 逻辑 runner
+- 改为真实打包 AI + `game/output/main` 对战
+- replay 分析器改为 `Game1` 实际 JSON 数组格式
+- 版本注册表清空旧 `/www/ai_cpp/v*` 残留
 
-当前已经实测跑通：
+### 2.2 docs
 
-- 构建：`/www/Game1/antgame_ai_cpp/v1/Makefile`
-- 打包：`/www/Game1/Ant-Game/AI/package_ai.sh cpp_v1`
-- 对局：`/www/Game1/Ant-Game/tools/run_local_match.py --ai0 cpp_v1 --ai1 example|random`
+已完成：
 
-也就是说，“新版目录结构 + C++ AI + Python 桥接 + Game1 游戏内核”这条链已经有效。
+- 删除旧 round2 / old replay / old Saiblo 逐轮文档
+- 删除 `Generals` 旧文档
+- 重新抽出仍有价值的：
+  - Codex 迭代约束
+  - Saiblo API 工作流
+  - Autolab / Elo 说明
 
-## 2. 当前仍然有效但需要重新接线的部分
-
-### 2.1 Saiblo HTTP API 工具
-
-`/www/saiblo_tools.py` 目前仍然是可复用的。
-
-原因：
-
-- 它主要处理 HTTP 层接口：
-  - 列实体
-  - 创建实体
-  - 上传代码
-  - 激活版本
-  - 发起房间对局
-  - 下载对局详情和回放
-- 这些接口与本地目录结构关系不大。
-
-因此对 Game1 来说，`saiblo_tools.py` 的主体不需要推倒重写。
-
-真正需要改的是“传什么源文件上去”：
-
-- 旧时代脚本默认围绕 `/www/ai_cpp/...`。
-- 现在 Game1 正确源应当来自 `/www/Game1/antgame_ai_cpp/...`，并通过 `Game1/Ant-Game/AI/package_ai.sh` 产出上传包。
-
-### 2.2 cron 任务
+### 2.3 任务恢复但暂停
 
 已确认：
 
-- root `crontab` 已根据备份恢复。
-- 全部自动化入口都加了全局暂停文件判断。
-- 当前暂停文件：`/www/autolab/runtime/automation.paused`
+- cron 任务定义仍在备份基础上保留
+- 自动化暂停文件仍生效：`/www/autolab/runtime/automation.paused`
+- 也就是说“定义存在，但当前不会自动跑”
 
-因此现在的状态是：
+## 3. 当前 AI 状态
 
-- 任务定义已恢复；
-- 但默认不会真的运行。
-
-这符合“先恢复但保持暂停”的要求。
-
-## 3. 当前明确失效 / 过时的部分
-
-### 3.1 Autolab / Elo 主链路还没有适配 Game1
-
-目前这些文件仍然明显指向旧根目录结构：
-
-- `autolab/common.py`
-  - 仍把 `ANT_GAME_DIR` 写成 `/www/Ant-Game`
-- `autolab/registry.py`
-  - 默认 champion 仍是 `/www/ai_cpp/v1/ai_v1`
-- `autolab/registry.json`
-  - 绝大多数版本仍指向旧 `/www/ai_cpp/v*/...`
-- `ai_cpp_policy.py`
-  - 仍默认读取 `/www/Ant-Game` 和 `/www/ai_cpp/v1/ai_v1`
-- `eval_cpp_local.py`
-  - 仍默认读取旧路径
-- `autolab/README.md`
-  - 示例命令仍围绕旧目录和旧版本体系
+### 3.1 `cpp_v1_current`
 
 结论：
 
-- 这些 Elo / 批评测工具当前不能视为“Game1 已适配完成”。
-- 现在如果直接跑，会指向错误目录，或者引用已经删除的旧版本文件。
+- 这是当前最可信、可直接接入本地 Elo 的版本
+- 本地已经验证至少能稳定跑通 `example/random` 级别对手
+- 它保留了旧 `ANTWar-AI` 的核心高层思路：
+  - 固定槽位
+  - 攻守切换
+  - 留钱防 EMP
+  - 建塔/升级/基地升级的统一决策
 
-### 3.2 旧文档里的 Elo / 版本结论整体失效
+### 3.2 `cpp_v2_antwar_structured`
 
-`docs/` 下大量历史文档仍在讨论：
+结论：
 
-- `/www/ai_cpp/v*`
-- 旧生产 Elo / 迭代 Elo
-- 旧版 `cpp_v1_current` 及后续迭代
+- 已做了一版结构性增强实验
+- 当前不进入主链，注册表中默认 `enabled=false`
+- 原因：实验冒烟中已经出现对 `example` 的退化，说明还不能拿来当生产候选
 
-这些文档对“Game1 新规则”已经不再成立，只能保留作“旧方法学参考”，不能继续当作当前版本状态。
+## 4. Elo / Autolab 的当前判断
 
-## 4. 对 Saiblo 与 Elo 的实际判断
+当前可以认为已经跑通的是：
 
-### 4.1 Saiblo
+- 版本注册
+- 本地真实对局批评测
+- 累计 Elo 计算
+- replay 保存
+- replay 解析
+- Elo Web 读取 `latest.json`
 
-- API 层脚本仍可复用。
-- 上传/测试动作的本地源文件路径需要迁移到 `Game1`。
-- 由于当前还没开始 Game1 的线上上传实测，本轮只能判定为“接口工具可用，Game1 适配未完成”。
+仍需额外注意的是：
 
-### 4.2 Elo / 自动评测
+- `Game1` 对局天然是完整回合制，`max_rounds` 现在只是保留参数，不等于旧逻辑里那种硬截断控制
+- `cpp_v1` 是桥接形态，因此“本地最强”不自动等价于“可直接 Saiblo 上传的纯 C++ 版本”
 
-- 生产 Elo、实验 Elo、版本注册表目前仍是旧工程状态。
-- 它们的脚本入口虽然被恢复且暂停，但并没有完成 Game1 迁移。
-- 所以本轮不能把当前 Elo 数据视为任何有意义的 Game1 强度指标。
+## 5. Saiblo 的当前判断
 
-## 5. Game1 真正要迁移的最小清单
+已确认仍然有效：
 
-后续如果要让 Elo / Saiblo / 本地批评测恢复可用，最小迁移项是：
+- 认证
+- 实体查询
+- 排行榜查询
+- 房间开局
+- 对局详情下载
+- 回放下载
+- 上传接口本身
 
-1. `autolab/common.py`
-   - 改成指向 `Game1/Ant-Game`。
-2. `autolab/registry.py` 和 `autolab/registry.json`
-   - 清空旧 `/www/ai_cpp/*` 版本，换成 `Game1/antgame_ai_cpp/*`。
-3. `policy_adapters.py` / `eval_cpp_local.py` / `ai_cpp_policy.py`
-   - 全部改成使用 Game1 的桥接与打包逻辑。
-4. 基线对手列表
-   - 旧 `random_safe` 已不适用；Game1 目前是 `random / example / greedy / mcts / cpp_v1`。
-5. Saiblo 上传脚本
-   - 把本地上传源从旧单文件 C++，改成 Game1 的打包产物。
+当前尚未完全打通的关键点：
 
-## 6. 当前建议
+- 本地最强 `cpp_v1` 不是纯单文件 C++ 参赛入口
+- 因此要真正把“当前最强本地 AI”上传到 Saiblo，还需要一版独立的线上 C++ 入口
 
-在完成上述迁移前，当前应当只使用这条“可信链”：
+## 6. 当前最小建议
 
-- `Game1/antgame_ai_cpp/v1`
-- `Game1/Ant-Game/AI/package_ai.sh cpp_v1`
-- `Game1/Ant-Game/tools/run_local_match.py`
+如果现在继续做 Game1：
 
-也就是说：
-
-- 先用 Game1 内部 runner 验证策略与协议；
-- 暂时不要相信旧 autolab / 旧 Elo / 旧 root 评测脚本；
-- 等 Game1 目录和桥接稳定后，再迁移批评测和 Saiblo 自动化。
+1. 本地强度判断只信 `autolab/runtime/latest.json`
+2. 本地实验只信 `autolab/runtime/scopes/iter/latest.json`
+3. 线上 Saiblo 先把 API 链路和回放下载链路当作已打通
+4. 真正的 Saiblo 强 AI 上传，等独立纯 C++ 入口完成后再做

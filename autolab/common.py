@@ -5,12 +5,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from config_runtime import get_cfg
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 AUTO_DIR = ROOT_DIR / "autolab"
 RUNTIME_DIR = AUTO_DIR / "runtime"
 VERSIONS_DIR = AUTO_DIR / "versions"
 REGISTRY_FILE = AUTO_DIR / "registry.json"
-ANT_GAME_DIR = ROOT_DIR / "Ant-Game"
+_DEFAULT_ANT_GAME_DIR = (ROOT_DIR / "Game1" / "Ant-Game").resolve()
+_CFG_ANT_GAME_DIR = Path(str(get_cfg("paths.ant_game_dir", str(_DEFAULT_ANT_GAME_DIR)))).resolve()
+ANT_GAME_DIR = _CFG_ANT_GAME_DIR if _CFG_ANT_GAME_DIR.is_dir() else _DEFAULT_ANT_GAME_DIR
 
 
 def ensure_dirs() -> None:
@@ -38,4 +42,3 @@ def read_json(path: Path, default: Dict[str, Any] | None = None) -> Dict[str, An
 def write_json(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-

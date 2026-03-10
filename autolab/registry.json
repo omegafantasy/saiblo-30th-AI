@@ -1,14 +1,23 @@
 {
-  "champion": "cpp_v76_overlay_prefilter_prune",
+  "champion": "cpp_v1_current",
   "versions": [
     {
       "id": "cpp_v1_current",
       "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v1/ai_v1",
-      "src": "/www/ai_cpp/v1/ai_v1.cpp",
+      "exe": "/www/Game1/antgame_ai_cpp/v1/ai_v1",
+      "src": "/www/Game1/antgame_ai_cpp/v1/ai_v1.cpp",
       "enabled": true,
       "anchor": false,
-      "notes": "Current root C++ AI"
+      "notes": "Game1 current C++ bridge AI"
+    },
+    {
+      "id": "cpp_v2_antwar_structured",
+      "kind": "cpp_exe",
+      "exe": "/www/Game1/antgame_ai_cpp/v2/ai_v2",
+      "src": "/www/Game1/antgame_ai_cpp/v2/ai_v2.cpp",
+      "enabled": false,
+      "anchor": false,
+      "notes": "Experimental structured ANTWar-style successor; currently not promoted"
     },
     {
       "id": "greedy",
@@ -16,285 +25,23 @@
       "name": "greedy",
       "enabled": true,
       "anchor": true,
-      "notes": "Ant-Game built-in greedy baseline"
+      "notes": "Game1 built-in greedy baseline"
     },
     {
-      "id": "random_safe",
+      "id": "random",
       "kind": "antgame_py",
-      "name": "random_safe",
+      "name": "random",
       "enabled": true,
       "anchor": true,
-      "notes": "Ant-Game built-in random_safe baseline"
+      "notes": "Game1 built-in random baseline"
     },
     {
-      "id": "cpp_v2_beam",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v2/ai_v2",
-      "src": "/www/ai_cpp/v2/ai_v2.cpp",
+      "id": "example",
+      "kind": "antgame_py",
+      "name": "example",
       "enabled": true,
       "anchor": false,
-      "notes": "beam search sequence planning"
-    },
-    {
-      "id": "cpp_v1_r2_baseline",
-      "kind": "cpp_exe",
-      "exe": "/www/autolab/versions/cpp_v1_r2_baseline/bin/ai_v1",
-      "src": "/www/autolab/versions/cpp_v1_r2_baseline/src/ai_v1.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "round2 baseline before beam-search candidate"
-    },
-    {
-      "id": "cpp_v3_hybrid",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v3/ai_v3",
-      "src": "/www/ai_cpp/v3/ai_v3.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "hybrid beam+greedy arbitration"
-    },
-    {
-      "id": "cpp_v4_counterfactual",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v4/ai_v4",
-      "src": "/www/ai_cpp/v4/ai_v4.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "counterfactual opening + robust arbitration"
-    },
-    {
-      "id": "cpp_v5_counterfactual_2ply",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v5/ai_v5",
-      "src": "/www/ai_cpp/v5/ai_v5.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "selective 2-ply counterfactual planner"
-    },
-    {
-      "id": "cpp_v6_adaptive_2ply",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v6/ai_v6",
-      "src": "/www/ai_cpp/v6/ai_v6.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "adaptive 2-ply width + main-ring breach evaluation"
-    },
-    {
-      "id": "cpp_v8_mode_hysteresis",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v8/ai_v8",
-      "src": "/www/ai_cpp/v8/ai_v8.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "mode hysteresis + offense safety gate"
-    },
-    {
-      "id": "cpp_v17_family_state_exchange_guard",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v17/ai_v17",
-      "src": "/www/ai_cpp/v17/ai_v17.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "family-state hysteresis + first-step safety exchange guard"
-    },
-    {
-      "id": "cpp_v19_rebound_shellfloor_guard",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v19/ai_v19",
-      "src": "/www/ai_cpp/v19/ai_v19.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "rebound suppression gate + shell safety floor hard reject"
-    },
-    {
-      "id": "cpp_v29_layered_counterline_rebound",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v29/ai_v29",
-      "src": "/www/ai_cpp/v29/ai_v29.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "layered counterline guard + v19 rebound lane"
-    },
-    {
-      "id": "cpp_v33_v32_hardline_recovery_lane",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v33/ai_v33",
-      "src": "/www/ai_cpp/v33/ai_v33.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "v32 + hardline recovery lane outside narrow v2 burst"
-    },
-    {
-      "id": "cpp_v47_v46_v27_safeguard_mutex",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v47/ai_v47",
-      "src": "/www/ai_cpp/v47/ai_v47.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "v46 + v27 safeguard floors + v10 counter mutex whitelist"
-    },
-    {
-      "id": "cpp_v53_overlay_countercheck",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v53/ai_v53",
-      "src": "/www/ai_cpp/v53/ai_v53.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "v1 core + overlay counter-check (candidate pool with enemy one-step penalty)"
-    },
-    {
-      "id": "cpp_v64_generals_rebuild",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v64/ai_v64",
-      "src": "/www/ai_cpp/v64/ai_v64.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "Generals-style rebuild: kill-sequence beam, skills (rout/command/defence/weaken), main-general reposition + 200ms CPU hard cutoff"
-    },
-    {
-      "id": "cpp_v66_generals_weapon_econ",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v66/ai_v66",
-      "src": "/www/ai_cpp/v66/ai_v66.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "v64 + Generals-style weapon policy (nuclear boom) + safe sub-general production upgrades"
-    },
-    {
-      "id": "cpp_v68_overlay_smoothcap",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v68/ai_v68",
-      "src": "/www/ai_cpp/v68/ai_v68.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "smooth overlay pool cap + danger-weighted early-stop"
-    },
-    {
-      "id": "cpp_v69_overlay_followup_prune",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v69/ai_v69",
-      "src": "/www/ai_cpp/v69/ai_v69.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "overlay follow-up pruning by raw-drop risk"
-    },
-    {
-      "id": "cpp_v70_overlay_opening_subpressure",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v70/ai_v70",
-      "src": "/www/ai_cpp/v70/ai_v70.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "opening sub-gap pressure in overlay tuning"
-    },
-    {
-      "id": "cpp_v71_overlay_replyrisk_gate",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v71/ai_v71",
-      "src": "/www/ai_cpp/v71/ai_v71.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "unified reply-risk gate + ahead-state budget tightening"
-    },
-    {
-      "id": "cpp_v72_overlay_endgame_lock",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v72/ai_v72",
-      "src": "/www/ai_cpp/v72/ai_v72.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "endgame ahead-lock signal + reply-risk lock penalty"
-    },
-    {
-      "id": "cpp_v73_overlay_calm_endgame_lock",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v73/ai_v73",
-      "src": "/www/ai_cpp/v73/ai_v73.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "calm endgame lock signal with lighter reply-risk penalty"
-    },
-    {
-      "id": "cpp_v74_overlay_calm_margin_only",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v74/ai_v74",
-      "src": "/www/ai_cpp/v74/ai_v74.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "remove reply-risk lock-penalty branch; keep calm endgame margin-only"
-    },
-    {
-      "id": "cpp_v75_overlay_calm_micro_lock",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v75/ai_v75",
-      "src": "/www/ai_cpp/v75/ai_v75.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "micro lock-penalty rollback (0.15 weight, raw_drop-5) from v73"
-    },
-    {
-      "id": "cpp_v76_overlay_prefilter_prune",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v76/ai_v76",
-      "src": "/www/ai_cpp/v76/ai_v76.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "pre-reply raw_drop prune before enemy_best eval; calm-endgame tighter cap"
-    },
-    {
-      "id": "cpp_v77_overlay_source_tighten",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v77/ai_v77",
-      "src": "/www/ai_cpp/v77/ai_v77.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "from v75: tighten reply slack/scale by source_pressure; no extra prefilter branch"
-    },
-    {
-      "id": "cpp_v78_overlay_source_reserve_release",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v78/ai_v78",
-      "src": "/www/ai_cpp/v78/ai_v78.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "from v77: source reserve_signal tightens slack; behind-state releases reserve and removes source drop-scale tightening"
-    },
-    {
-      "id": "cpp_v79_overlay_risk_weighted_release",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v79/ai_v79",
-      "src": "/www/ai_cpp/v79/ai_v79.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "from v78: behind release is risk-weighted so high danger retains reserve budget"
-    },
-    {
-      "id": "cpp_v80_overlay_release_time_decay",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v80/ai_v80",
-      "src": "/www/ai_cpp/v80/ai_v80.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "from v79: behind reserve release decays by round to reduce late-game over-release swings"
-    },
-    {
-      "id": "cpp_v81_overlay_deficit_late_release",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v81/ai_v81",
-      "src": "/www/ai_cpp/v81/ai_v81.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "from v80: keep late release decay but add behind-state release floor for comeback stability"
-    },
-    {
-      "id": "cpp_v82_overlay_deficit_floor_taper",
-      "kind": "cpp_exe",
-      "exe": "/www/ai_cpp/v82/ai_v82",
-      "src": "/www/ai_cpp/v82/ai_v82.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "from v81: taper deficit release floor by endgame and risk to reduce late over-release"
+      "notes": "Game1 example baseline"
     }
   ]
 }

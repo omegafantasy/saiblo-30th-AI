@@ -14,11 +14,20 @@ def _default_registry() -> Dict[str, Any]:
             {
                 "id": "cpp_v1_current",
                 "kind": "cpp_exe",
-                "exe": str(ROOT_DIR / "ai_cpp/v1" / "ai_v1"),
-                "src": str(ROOT_DIR / "ai_cpp/v1" / "ai_v1.cpp"),
+                "exe": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v1" / "ai_v1"),
+                "src": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v1" / "ai_v1.cpp"),
                 "enabled": True,
                 "anchor": False,
-                "notes": "Current root C++ AI",
+                "notes": "Game1 current C++ bridge AI",
+            },
+            {
+                "id": "cpp_v2_antwar_structured",
+                "kind": "cpp_exe",
+                "exe": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v2" / "ai_v2"),
+                "src": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v2" / "ai_v2.cpp"),
+                "enabled": True,
+                "anchor": False,
+                "notes": "Game1 structured ANTWar-style successor",
             },
             {
                 "id": "greedy",
@@ -29,12 +38,20 @@ def _default_registry() -> Dict[str, Any]:
                 "notes": "Ant-Game built-in greedy baseline",
             },
             {
-                "id": "random_safe",
+                "id": "random",
                 "kind": "antgame_py",
-                "name": "random_safe",
+                "name": "random",
                 "enabled": True,
                 "anchor": True,
-                "notes": "Ant-Game built-in random_safe baseline",
+                "notes": "Ant-Game built-in random baseline",
+            },
+            {
+                "id": "example",
+                "kind": "antgame_py",
+                "name": "example",
+                "enabled": True,
+                "anchor": False,
+                "notes": "Ant-Game example baseline",
             },
         ],
     }
@@ -143,4 +160,3 @@ def snapshot_cpp_version(
     }
     upsert_version(entry)
     return entry
-

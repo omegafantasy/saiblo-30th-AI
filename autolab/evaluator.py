@@ -11,9 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-from .common import ANT_GAME_DIR, RUNTIME_DIR, ROOT_DIR, ensure_dirs, now_ts, write_json
+from .common import ANT_GAME_DIR, RUNTIME_DIR, ensure_dirs, now_ts, write_json
 from .elo import compute_elo
-from .policy_adapters import close_policy, make_policy
+from .game1_match_runner import ensure_game_bin, run_match_task, stage_version
 from .registry import get_version, load_registry, set_champion
 
 MAX_PARALLEL_JOBS = 16
@@ -248,76 +248,7 @@ def _build_adaptive_pairs(
 
 
 def _single_match(task: Dict[str, Any]) -> Dict[str, Any]:
-    import random
-    import sys
-    from pathlib import Path
-
-    ant_dir = Path(task["ant_game_dir"])
-    if str(ant_dir) not in sys.path:
-        sys.path.insert(0, str(ant_dir))
-
-    from logic.runner import run_match
-
-    a = task["a"]
-    b = task["b"]
-    a_spec = task["a_spec"]
-    b_spec = task["b_spec"]
-    seed = int(task["seed"])
-    max_rounds = int(task["max_rounds"])
-    a_on_seat0 = bool(task["a_on_seat0"])
-    replay_dir = str(task["replay_dir"])
-    keep_replay = bool(task.get("keep_replay", True))
-
-    random.seed(seed)
-
-    pa = make_policy(a_spec, base_seed=seed * 17 + 101)
-    pb = make_policy(b_spec, base_seed=seed * 17 + 307)
-
-    try:
-        if a_on_seat0:
-            winner, state = run_match(
-                pa,
-                pb,
-                seed=seed,
-                max_rounds=max_rounds,
-                replay_dir=replay_dir,
-                p0_name=a,
-                p1_name=b,
-            )
-            score_a = 1.0 if winner == 0 else 0.0 if winner == 1 else 0.5
-            a_seat = 0
-        else:
-            winner, state = run_match(
-                pb,
-                pa,
-                seed=seed,
-                max_rounds=max_rounds,
-                replay_dir=replay_dir,
-                p0_name=b,
-                p1_name=a,
-            )
-            score_a = 1.0 if winner == 1 else 0.0 if winner == 0 else 0.5
-            a_seat = 1
-
-        replay_file = str(getattr(state, "replay_file", "") or "")
-        if replay_file and (not keep_replay) and os.path.isfile(replay_file):
-            try:
-                os.remove(replay_file)
-            except Exception:
-                pass
-            replay_file = ""
-        return {
-            "a": a,
-            "b": b,
-            "seed": seed,
-            "a_seat": a_seat,
-            "score_a": score_a,
-            "winner_seat": winner,
-            "replay_file": replay_file,
-        }
-    finally:
-        close_policy(pa)
-        close_policy(pb)
+    return run_match_task(task)
 
 
 def _read_cpu_stat() -> Dict[int, tuple[int, int]]:
@@ -462,6 +393,16 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
 
     ts = now_ts()
     tag = f"eval_{ts}"
+    game_bin = ensure_game_bin(ANT_GAME_DIR)
+    package_root = runtime_dir / "packages" / tag
+    package_root.mkdir(parents=True, exist_ok=True)
+    packaged_dirs: Dict[str, str] = {}
+    for version in all_versions:
+        vid = str(version.get("id", "")).strip()
+        if vid not in selected_ids:
+            continue
+        packaged_dirs[vid] = str(stage_version(ANT_GAME_DIR, version, package_root / vid))
+
     tasks: List[Dict[str, Any]] = []
     seed_base = int(cfg.seed)
     if bool(cfg.save_replays):
@@ -484,32 +425,40 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
             pair_games = int(cfg.anchor_games_per_pair)
         for g in range(pair_games):
             s = seed_base + serial * 1009 + g
+            p0_name = a
+            p1_name = b
+            replay_path = replay_dir / f"{tag}_p0-{p0_name}_p1-{p1_name}_seed-{s}.json"
+            work_dir = runtime_dir / "match_work" / tag / f"p0-{p0_name}_p1-{p1_name}_seed-{s}"
             tasks.append(
                 {
                     "a": a,
                     "b": b,
-                    "a_spec": a_spec,
-                    "b_spec": b_spec,
                     "seed": s,
                     "max_rounds": cfg.max_rounds,
                     "a_on_seat0": True,
-                    "replay_dir": str(replay_dir),
-                    "keep_replay": bool(cfg.save_replays),
-                    "ant_game_dir": str(ANT_GAME_DIR),
+                    "ai0_dir": packaged_dirs[a],
+                    "ai1_dir": packaged_dirs[b],
+                    "game_bin": str(game_bin),
+                    "work_dir": str(work_dir),
+                    "replay_file": str(replay_path),
                 }
             )
+            p0_name = b
+            p1_name = a
+            replay_path = replay_dir / f"{tag}_p0-{p0_name}_p1-{p1_name}_seed-{s + 911}.json"
+            work_dir = runtime_dir / "match_work" / tag / f"p0-{p0_name}_p1-{p1_name}_seed-{s + 911}"
             tasks.append(
                 {
                     "a": a,
                     "b": b,
-                    "a_spec": a_spec,
-                    "b_spec": b_spec,
                     "seed": s + 911,
                     "max_rounds": cfg.max_rounds,
                     "a_on_seat0": False,
-                    "replay_dir": str(replay_dir),
-                    "keep_replay": bool(cfg.save_replays),
-                    "ant_game_dir": str(ANT_GAME_DIR),
+                    "ai0_dir": packaged_dirs[b],
+                    "ai1_dir": packaged_dirs[a],
+                    "game_bin": str(game_bin),
+                    "work_dir": str(work_dir),
+                    "replay_file": str(replay_path),
                 }
             )
         serial += 1

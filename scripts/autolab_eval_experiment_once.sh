@@ -6,7 +6,7 @@ source "$ROOT_DIR/scripts/automation_pause.sh"
 PY_BIN="${PY_BIN:-$(command -v python3 || command -v python || true)}"
 EVAL_SCRIPT="$ROOT_DIR/autolab_eval.py"
 REPLAY_ANALYZE_SCRIPT="$ROOT_DIR/autolab_replay_analyze.py"
-DOC_OUT="${EXPERIMENT_DOC_OUT:-$ROOT_DIR/docs/iter_eval_latest.md}"
+DOC_OUT="${EXPERIMENT_DOC_OUT:-$ROOT_DIR/docs/generated/iter_eval_latest.md}"
 RUNTIME_SCOPE="${EXPERIMENT_RUNTIME_SCOPE:-iter}"
 JOBS="${EXPERIMENT_JOBS:-8}"
 JOBS_CAP="${AUTOMATION_MAX_JOBS_CAP:-8}"
@@ -89,7 +89,7 @@ if [[ "$REPLAY_ANALYZE" == "1" ]]; then
     RUNTIME_DIR="$RUNTIME_DIR/scopes/$RUNTIME_SCOPE"
   fi
   REPORT_DIR="$RUNTIME_DIR/replay_analysis"
-  DOC_REPLAY_DIR="$ROOT_DIR/docs/replay_analysis"
+  DOC_REPLAY_DIR="$ROOT_DIR/docs/generated/replay_analysis"
   mkdir -p "$REPORT_DIR" "$DOC_REPLAY_DIR"
   "$PY_BIN" "$REPLAY_ANALYZE_SCRIPT" \
     --scope "$RUNTIME_SCOPE" \

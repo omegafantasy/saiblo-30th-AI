@@ -1,5 +1,0 @@
-# Generated replay analysis artifacts
-*.json
-*.md
-!README.md
-!.gitignore

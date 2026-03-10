@@ -86,7 +86,7 @@ while true; do
     --idle-sample-sec "$IDLE_SAMPLE_SEC" \
     --pin-cpu \
     --auto-promote \
-    --doc-out "$ROOT_DIR/docs/idle_eval_latest.md" \
+    --doc-out "$ROOT_DIR/docs/generated/idle_eval_latest.md" \
     >> "$LOG_FILE" 2>&1
   rc=$?
   set -e
