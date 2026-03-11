@@ -9,7 +9,9 @@
   - `docs/game1_antgame2_code_truth_and_antwar_diff.md`
 - 本地 AI：
   - `Game1/antgame_ai_cpp/v1/ai_v1.cpp`
+  - `Game1/antgame_ai_cpp/v3/ai_v3.cpp`
   - `Game1/Ant-Game/AI/ai_cpp_v1.py`
+  - `Game1/Ant-Game/AI/ai_cpp_direct.py`
 - 本地单局对战：
   - `Game1/Ant-Game/tools/run_local_match.py`
 - 本地批评测 / Elo：
@@ -72,6 +74,15 @@
 - 当前不进入主链，注册表中默认 `enabled=false`
 - 原因：实验冒烟中已经出现对 `example` 的退化，说明还不能拿来当生产候选
 
+### 3.3 `cpp_v3_unified_online`
+
+结论：
+
+- 这是当前用于“统一本地与 Saiblo 入口”的纯 C++ 版本
+- 已经本地跑通并接入 Elo
+- 已经实际上传 Saiblo、编译成功并完成对局
+- 但当前强度仍弱于 `cpp_v1_current`，也弱于 `example`
+
 ## 4. Elo / Autolab 的当前判断
 
 当前可以认为已经跑通的是：
@@ -100,10 +111,15 @@
 - 回放下载
 - 上传接口本身
 
-当前尚未完全打通的关键点：
+当前已经打通的新增关键点：
 
-- 本地最强 `cpp_v1` 不是纯单文件 C++ 参赛入口
-- 因此要真正把“当前最强本地 AI”上传到 Saiblo，还需要一版独立的线上 C++ 入口
+- 纯单文件 C++ 线上入口已经落地为 `cpp_v3`
+- 可以直接上传、激活、开局并下载回放
+
+当前仍未完成的关键点：
+
+- `cpp_v3` 还没有追上 `cpp_v1_current` 的本地强度
+- 因此“最强本地 AI”和“最强线上纯 C++ AI”暂时还不是同一个版本
 
 ## 6. 当前最小建议
 

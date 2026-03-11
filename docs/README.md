@@ -12,10 +12,13 @@
 - `game1_antgame2_code_truth_and_antwar_diff.md`
 - `game1_antwar_ai_migration_and_cpp_v1.md`
 - `game1_antwar_ai_coverage_check.md`
+- `game1_cpp_v3_unified_status.md`
 - `game1_toolchain_status.md`
 - `game1_autolab_and_elo.md`
 - `game1_saiblo_api_and_workflow.md`
 - `game1_codex_iteration_constraints.md`
+- `game2_deepclue_rules_and_sdk_analysis.md`
+- `game2_saiblo_status.md`
 - `reference_antwar_game22.md`
 - `mhtml_parsed/antgame2_game48.md`
 - `mhtml_parsed/deepclue_game.md`

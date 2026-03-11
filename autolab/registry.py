@@ -25,9 +25,17 @@ def _default_registry() -> Dict[str, Any]:
                 "kind": "cpp_exe",
                 "exe": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v2" / "ai_v2"),
                 "src": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v2" / "ai_v2.cpp"),
+                "enabled": False,
+                "anchor": False,
+                "notes": "Game1 structured ANTWar-style successor; currently not promoted",
+            },
+            {
+                "id": "cpp_v3_unified_online",
+                "kind": "antgame_py",
+                "name": "cpp_v3",
                 "enabled": True,
                 "anchor": False,
-                "notes": "Game1 structured ANTWar-style successor",
+                "notes": "Unified pure C++ protocol AI for both local Elo and Saiblo upload",
             },
             {
                 "id": "greedy",

@@ -20,6 +20,14 @@
       "notes": "Experimental structured ANTWar-style successor; currently not promoted"
     },
     {
+      "id": "cpp_v3_unified_online",
+      "kind": "antgame_py",
+      "name": "cpp_v3",
+      "enabled": true,
+      "anchor": false,
+      "notes": "Unified pure C++ protocol AI for both local Elo and Saiblo upload"
+    },
+    {
       "id": "greedy",
       "kind": "antgame_py",
       "name": "greedy",
