@@ -36,6 +36,7 @@ Game1 仍保留以下主文档：
 - `game1_simulation_randomness_analysis.md`
 - `game1_simulation_perf_and_behavior_report.md`
 - `game1_expectedfront_discussion_20260311.md`
+- `game1_cpp_v4_rollout_status.md`
 - `game1_cpp_v3_unified_status.md`
 - `game1_toolchain_status.md`
 - `game1_autolab_and_elo.md`
@@ -73,3 +74,9 @@ Game2 当前已经明确写入文档的事实包括：
 - 高分对手 `admin` 的问题更短、更直接
 - 平台在 `stage >= 8` 后继续 `chat` 存在已确认后端异常
 - 当前已启动 `v2` 对 `admin` 的受控复测 batch `75665`
+
+- [game2_case0_admin_path.md](/www/docs/generated/game2_case0_admin_path.md)
+
+- [game2_run_comparison_v13.md](/www/docs/generated/game2_run_comparison_v13.md)
+
+- [game2_case1_variance.md](/www/docs/generated/game2_case1_variance.md)

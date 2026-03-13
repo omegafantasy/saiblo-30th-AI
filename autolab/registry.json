@@ -28,6 +28,15 @@
       "notes": "Unified pure C++ protocol AI for both local Elo and Saiblo upload"
     },
     {
+      "id": "cpp_v4_rollout_defense",
+      "kind": "cpp_exe",
+      "exe": "/www/Game1/antgame_ai_cpp/v4/ai_v4",
+      "src": "/www/Game1/antgame_ai_cpp/v4/ai_v4.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "Rollout-based defense-first Game1 C++ AI; ignores teleport and focuses on sparse conservative actions"
+    },
+    {
       "id": "greedy",
       "kind": "antgame_py",
       "name": "greedy",
