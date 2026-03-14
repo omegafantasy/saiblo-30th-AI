@@ -1,0 +1,200 @@
+{
+  "iteration": 4,
+  "code_id": "412ce368e2e348b6b6cbf16ee10170b5",
+  "version": 5,
+  "batch_id": 75845,
+  "entity_name": "g2auto",
+  "timestamp": "2026-03-13T16:38:04Z",
+  "batch_overview": {
+    "opponent_count": 1,
+    "rows": [
+      {
+        "opponent_code_id": "99302dd9-ff4a-4e11-a390-74caf45136e1",
+        "opponent_user": "admin",
+        "opponent_entity": "跑通测试",
+        "my_match_id": 7436587,
+        "my_score": 1307,
+        "opp_match_id": 7436588,
+        "opp_score": 2357,
+        "games": [
+          {
+            "match_id": 7436588,
+            "state": "评测成功"
+          },
+          {
+            "match_id": 7436587,
+            "state": "评测成功"
+          }
+        ]
+      }
+    ],
+    "my_scores": [
+      1307
+    ],
+    "opp_scores": [
+      2357
+    ]
+  },
+  "cases": [
+    {
+      "match_id": 7436588,
+      "case_id": "0",
+      "step_count": 42,
+      "final_stage": 6,
+      "final_result": {
+        "murderer": true,
+        "motivation": true,
+        "method": true
+      },
+      "final_answer": "提交最终答案: 凶手: 崔安彦, 动机: 崔安彦误认为邓达岭对Rose有意，为扫清障碍、独占邓达岭而谋划除掉Rose。, 手法: 崔安彦利用家族药材生意获取毒药，趁18:40左右在准备室中将毒药投入Rose的蜂蜜水杯中，Rose饮水后中毒身亡。",
+      "npc_question_counts": {
+        "YeWenXiao": 8,
+        "FanMinMin": 8,
+        "DengDaLing": 7,
+        "BaiJingTing": 6,
+        "CuiAnYan": 6,
+        "XiaoDingAng": 5,
+        "XiaoDingGang": 1,
+        "SYSTEM": 1
+      },
+      "evidence_submission_counts": {
+        "111": 1,
+        "112": 1
+      },
+      "correct_dimensions": {
+        "murderer": true,
+        "motivation": true,
+        "method": true
+      },
+      "incorrect_dimensions": {},
+      "total_correct": 3,
+      "total_incorrect": 0
+    },
+    {
+      "match_id": 7436588,
+      "case_id": "1",
+      "step_count": 41,
+      "final_stage": 8,
+      "final_result": {
+        "murderer": true,
+        "motivation": true,
+        "method": true
+      },
+      "final_answer": "提交最终答案: 凶手: E, 动机: E发现F就是高中时在表白墙造谣诬陷自己出轨的人，又发现F向Z的家长告密导致Z被迫逃离学校。新仇旧恨交织，E决定杀害F。, 手法: E尾随F到小树林埋伏处守株待兔，在F回来回收分尸工具时伏击打晕了她，用偷来的C的水果刀按照C的小说手法破坏了F的面部，然后将尸体埋在F自己挖的坑中。",
+      "npc_question_counts": {
+        "NPC_C": 10,
+        "NPC_D": 9,
+        "NPC_A": 8,
+        "NPC_B": 7,
+        "NPC_E": 6,
+        "SYSTEM": 1
+      },
+      "evidence_submission_counts": {
+        "313": 6,
+        "315": 1,
+        "311": 1
+      },
+      "correct_dimensions": {
+        "murderer": true,
+        "motivation": true,
+        "method": true
+      },
+      "incorrect_dimensions": {},
+      "total_correct": 3,
+      "total_incorrect": 0
+    },
+    {
+      "match_id": 7436587,
+      "case_id": "0",
+      "step_count": 4,
+      "final_stage": 1,
+      "final_result": {
+        "murderer": true,
+        "motivation": true,
+        "method": true
+      },
+      "final_answer": "提交最终答案: 凶手: 崔安彦, 动机: 误以为邓达岭对Rose有意，为扫清障碍并稳住婚约与家族利益而杀害Rose, 手法: 利用家族渠道获得毒药，趁18:40前后将毒下进Rose演出前要喝的蜂蜜水中，待其饮下后中毒倒地",
+      "npc_question_counts": {
+        "CuiAnYan": 2,
+        "DengDaLing": 1,
+        "SYSTEM": 1
+      },
+      "evidence_submission_counts": {},
+      "correct_dimensions": {
+        "murderer": true,
+        "motivation": true,
+        "method": true
+      },
+      "incorrect_dimensions": {},
+      "total_correct": 3,
+      "total_incorrect": 0
+    },
+    {
+      "match_id": 7436587,
+      "case_id": "1",
+      "step_count": 4,
+      "final_stage": 1,
+      "final_result": {
+        "murderer": true,
+        "motivation": true,
+        "method": true
+      },
+      "final_answer": "提交最终答案: 凶手: NPC_E, 动机: E发现F就是高中时在表白墙造谣诬陷自己出轨的人，又发现F向Z的家长告密导致Z被迫逃离学校。新仇旧恨交织，E决定杀害F。, 手法: E尾随F到小树林埋伏处守株待兔，在F回来回收分尸工具时伏击打晕了她，用偷来的C的水果刀按照C的小说手法破坏了F的面部，然后将尸体埋在F自己挖的坑中。",
+      "npc_question_counts": {
+        "NPC_E": 2,
+        "NPC_C": 1,
+        "SYSTEM": 1
+      },
+      "evidence_submission_counts": {},
+      "correct_dimensions": {
+        "murderer": true,
+        "motivation": true,
+        "method": true
+      },
+      "incorrect_dimensions": {},
+      "total_correct": 3,
+      "total_incorrect": 0
+    }
+  ],
+  "question_pattern_sample": [
+    "Rose是怎样的人？",
+    "Rose是怎样的人？",
+    "Rose是怎样的人？",
+    "Rose是怎样的人？",
+    "Rose是个怎样的人？",
+    "你今晚在做什么？",
+    "你今晚在做什么？",
+    "你今晚在干什么？",
+    "你知道Z失踪了吗？",
+    "你知道Z失踪了吗？",
+    "你了解平时的Z吗？",
+    "你知道Z失踪了吗？",
+    "你了解平时的Z吗？",
+    "你知道Z失踪了吗？",
+    "你了解平时的Z吗？",
+    "你了解平时的Z吗？",
+    "你今晚在干什么？",
+    "你和Rose好上了？",
+    "18:40你在哪里？",
+    "你和F是什么关系？",
+    "你的水果刀在哪里？",
+    "F是不是在表白墙造过谣？"
+  ],
+  "match_reports_summary": [
+    {
+      "match_id": 7436588,
+      "case_count": 2,
+      "my_score": 2357,
+      "has_trace": true,
+      "error": ""
+    },
+    {
+      "match_id": 7436587,
+      "case_count": 2,
+      "my_score": 1307,
+      "has_trace": true,
+      "error": ""
+    }
+  ],
+  "comparison_with_previous": null
+}

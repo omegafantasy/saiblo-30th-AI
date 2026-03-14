@@ -1,0 +1,212 @@
+{
+  "scores": {
+    "score_rows": [
+      {
+        "match_id": 7437067,
+        "my_user": "admin",
+        "my_score": 2357,
+        "opp_user": "theend",
+        "opp_score": 0,
+        "state": "评测成功"
+      }
+    ]
+  },
+  "correctness": {
+    "total_cases": 2,
+    "fully_correct": 2,
+    "partially_correct": 0,
+    "all_wrong": 0,
+    "no_answer": 0,
+    "per_dimension_accuracy": {
+      "murderer": "2/2",
+      "motivation": "2/2",
+      "method": "2/2"
+    },
+    "per_dimension_correct": {
+      "murderer": 2,
+      "motivation": 2,
+      "method": 2
+    },
+    "per_dimension_incorrect": {}
+  },
+  "npc_patterns": {
+    "npc_total_questions": {
+      "NPC_C": 10,
+      "NPC_D": 9,
+      "YeWenXiao": 8,
+      "FanMinMin": 8,
+      "NPC_A": 8,
+      "DengDaLing": 7,
+      "NPC_B": 7,
+      "BaiJingTing": 6,
+      "CuiAnYan": 6,
+      "NPC_E": 6,
+      "XiaoDingAng": 5,
+      "SYSTEM": 2,
+      "XiaoDingGang": 1
+    },
+    "npc_case_frequency": {
+      "NPC_C": 1,
+      "NPC_D": 1,
+      "YeWenXiao": 1,
+      "FanMinMin": 1,
+      "NPC_A": 1,
+      "DengDaLing": 1,
+      "NPC_B": 1,
+      "BaiJingTing": 1,
+      "CuiAnYan": 1,
+      "NPC_E": 1,
+      "XiaoDingAng": 1,
+      "SYSTEM": 2,
+      "XiaoDingGang": 1
+    },
+    "npc_avg_per_case": {
+      "NPC_C": 10.0,
+      "NPC_D": 9.0,
+      "YeWenXiao": 8.0,
+      "FanMinMin": 8.0,
+      "NPC_A": 8.0,
+      "DengDaLing": 7.0,
+      "NPC_B": 7.0,
+      "BaiJingTing": 6.0,
+      "CuiAnYan": 6.0,
+      "NPC_E": 6.0,
+      "XiaoDingAng": 5.0,
+      "SYSTEM": 1.0,
+      "XiaoDingGang": 1.0
+    }
+  },
+  "question_patterns": {
+    "total_questions": 24,
+    "unique_questions": 14,
+    "top_questions": [
+      {
+        "question": "Rose是怎样的人？",
+        "count": 4
+      },
+      {
+        "question": "你知道Z失踪了吗？",
+        "count": 4
+      },
+      {
+        "question": "你了解平时的Z吗？",
+        "count": 4
+      },
+      {
+        "question": "你今晚在做什么？",
+        "count": 2
+      },
+      {
+        "question": "Rose是个怎样的人？",
+        "count": 1
+      },
+      {
+        "question": "你今晚在干什么？",
+        "count": 1
+      },
+      {
+        "question": "你今天是不是和邓达岭见面了？",
+        "count": 1
+      },
+      {
+        "question": "18:40你在哪里？",
+        "count": 1
+      },
+      {
+        "question": "你让白井霆去安慰Rose是什么意思？",
+        "count": 1
+      },
+      {
+        "question": "Rose是不是威胁你？",
+        "count": 1
+      },
+      {
+        "question": "你为什么装病？",
+        "count": 1
+      },
+      {
+        "question": "你电脑上的杀人计划书是怎么回事？",
+        "count": 1
+      },
+      {
+        "question": "为什么杀人计划书里面都是同学的名字？",
+        "count": 1
+      },
+      {
+        "question": "你是不是准备杀A？",
+        "count": 1
+      }
+    ],
+    "categories": {
+      "other": 23,
+      "location_related": 1
+    }
+  },
+  "stage_progression": {
+    "final_stage_distribution": {
+      "6": 1,
+      "8": 1
+    },
+    "avg_steps_by_final_stage": {
+      "6": 42.0,
+      "8": 41.0
+    }
+  },
+  "suggestions": [
+    "No evidence-related questions detected. Consider adding questions that specifically ask about evidence or clues.",
+    "Average step count is high (42). Consider more targeted questioning to reduce unnecessary steps."
+  ],
+  "comparison": {
+    "score_change": {
+      "previous_avg": 2357.0,
+      "current_avg": 2357.0,
+      "delta": 0.0,
+      "previous_scores": [
+        2357
+      ],
+      "current_scores": [
+        2357
+      ]
+    },
+    "correctness_change": {
+      "previous": {
+        "total_cases": 2,
+        "fully_correct": 2,
+        "partially_correct": 0,
+        "all_wrong": 0,
+        "no_answer": 0,
+        "per_dimension_accuracy": {
+          "murderer": "2/2",
+          "motivation": "2/2",
+          "method": "2/2"
+        },
+        "per_dimension_correct": {
+          "murderer": 2,
+          "motivation": 2,
+          "method": 2
+        },
+        "per_dimension_incorrect": {}
+      },
+      "current": {
+        "total_cases": 2,
+        "fully_correct": 2,
+        "partially_correct": 0,
+        "all_wrong": 0,
+        "no_answer": 0,
+        "per_dimension_accuracy": {
+          "murderer": "2/2",
+          "motivation": "2/2",
+          "method": "2/2"
+        },
+        "per_dimension_correct": {
+          "murderer": 2,
+          "motivation": 2,
+          "method": 2
+        },
+        "per_dimension_incorrect": {}
+      },
+      "fully_correct_delta": 0,
+      "all_wrong_delta": 0
+    }
+  }
+}
