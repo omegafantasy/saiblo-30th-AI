@@ -1,8 +1,0 @@
-{
-    "player_list": [1, 1],
-    "player_num": 2,
-    "config": {
-        "random_seed":5
-    },
-    "replay": "replay.json"
-}
