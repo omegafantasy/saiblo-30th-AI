@@ -1,0 +1,117 @@
+{
+  "matches": [
+    [
+      {
+        "id": 7437449,
+        "create_time": "2026-03-14T12:01:27.052369",
+        "state": "评测成功",
+        "info": [
+          {
+            "end_state": "OK",
+            "rank": 1,
+            "score": 2357,
+            "user": {
+              "username": "admin",
+              "id": 1
+            },
+            "code": {
+              "entity": {
+                "name": "跑通测试",
+                "language": "auto"
+              },
+              "remark": "",
+              "commit_id": "",
+              "version": 1,
+              "id": "99302dd9-ff4a-4e11-a390-74caf45136e1"
+            }
+          },
+          {
+            "end_state": "OK",
+            "rank": 2,
+            "score": 0,
+            "user": {
+              "username": "theend",
+              "id": 2636
+            },
+            "code": {
+              "entity": {
+                "name": "g2auto",
+                "language": "python"
+              },
+              "remark": "auto iteration 15",
+              "commit_id": "",
+              "version": 16,
+              "id": "4a4cb6c2-71c6-42c8-ba35-eea4b03884f0"
+            }
+          }
+        ]
+      },
+      {
+        "id": 7437448,
+        "create_time": "2026-03-14T12:01:27.026039",
+        "state": "评测中",
+        "info": [
+          {
+            "end_state": null,
+            "rank": 0,
+            "score": 0,
+            "user": {
+              "username": "theend",
+              "id": 2636
+            },
+            "code": {
+              "entity": {
+                "name": "g2auto",
+                "language": "python"
+              },
+              "remark": "auto iteration 15",
+              "commit_id": "",
+              "version": 16,
+              "id": "4a4cb6c2-71c6-42c8-ba35-eea4b03884f0"
+            }
+          },
+          {
+            "end_state": null,
+            "rank": 0,
+            "score": 0,
+            "user": {
+              "username": "admin",
+              "id": 1
+            },
+            "code": {
+              "entity": {
+                "name": "跑通测试",
+                "language": "auto"
+              },
+              "remark": "",
+              "commit_id": "",
+              "version": 1,
+              "id": "99302dd9-ff4a-4e11-a390-74caf45136e1"
+            }
+          }
+        ]
+      }
+    ]
+  ],
+  "create_time": "Sat, 14 Mar 2026 12:01:27 +0800",
+  "user": {
+    "username": "theend",
+    "email_md5": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "id": 75864,
+  "code": {
+    "id": "4a4cb6c2-71c6-42c8-ba35-eea4b03884f0",
+    "entity": "g2auto",
+    "remark": "auto iteration 15",
+    "commit_id": "",
+    "version": 16
+  },
+  "remote": null,
+  "game": {
+    "name": "DeepClue",
+    "alias": "头号侦探",
+    "id": 53,
+    "allow_watch": false
+  },
+  "contest": null
+}

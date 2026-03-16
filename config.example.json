@@ -1,0 +1,13 @@
+{
+  "saiblo": {
+    "api_base": "https://api.saiblo.net",
+    "bearer": ""
+  },
+  "cpp_ai": {
+    "exe": "/www/Game1/antgame_ai_cpp/v1/ai_v1",
+    "seed": 0
+  },
+  "paths": {
+    "ant_game_dir": "/www/Game1/Ant-Game"
+  }
+}

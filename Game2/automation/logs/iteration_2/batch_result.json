@@ -1,0 +1,209 @@
+{
+  "matches": [
+    [
+      {
+        "id": 7436469,
+        "create_time": "2026-03-13T23:49:59.068428",
+        "state": "评测失败",
+        "info": [
+          {
+            "end_state": "UE",
+            "rank": 1,
+            "score": 0,
+            "user": {
+              "username": "zhangs24",
+              "id": 7058
+            },
+            "code": {
+              "entity": {
+                "name": "1112",
+                "language": "python_zip"
+              },
+              "remark": "",
+              "commit_id": "",
+              "version": 1,
+              "id": "209cba3c-6d4c-4b96-bfeb-1fadde616ffb"
+            }
+          },
+          {
+            "end_state": "UE",
+            "rank": 2,
+            "score": 0,
+            "user": {
+              "username": "theend",
+              "id": 2636
+            },
+            "code": {
+              "entity": {
+                "name": "g2auto",
+                "language": "python"
+              },
+              "remark": "auto iteration 2",
+              "commit_id": "",
+              "version": 2,
+              "id": "3009c01b-b743-4cb6-aea9-5c5837b9b0a0"
+            }
+          }
+        ]
+      },
+      {
+        "id": 7436468,
+        "create_time": "2026-03-13T23:49:59.024551",
+        "state": "评测失败",
+        "info": [
+          {
+            "end_state": "UE",
+            "rank": 1,
+            "score": 0,
+            "user": {
+              "username": "theend",
+              "id": 2636
+            },
+            "code": {
+              "entity": {
+                "name": "g2auto",
+                "language": "python"
+              },
+              "remark": "auto iteration 2",
+              "commit_id": "",
+              "version": 2,
+              "id": "3009c01b-b743-4cb6-aea9-5c5837b9b0a0"
+            }
+          },
+          {
+            "end_state": "UE",
+            "rank": 2,
+            "score": 0,
+            "user": {
+              "username": "zhangs24",
+              "id": 7058
+            },
+            "code": {
+              "entity": {
+                "name": "1112",
+                "language": "python_zip"
+              },
+              "remark": "",
+              "commit_id": "",
+              "version": 1,
+              "id": "209cba3c-6d4c-4b96-bfeb-1fadde616ffb"
+            }
+          }
+        ]
+      }
+    ],
+    [
+      {
+        "id": 7436467,
+        "create_time": "2026-03-13T23:49:59.021417",
+        "state": "评测失败",
+        "info": [
+          {
+            "end_state": "UE",
+            "rank": 1,
+            "score": 0,
+            "user": {
+              "username": "admin",
+              "id": 1
+            },
+            "code": {
+              "entity": {
+                "name": "跑通测试",
+                "language": "auto"
+              },
+              "remark": "",
+              "commit_id": "",
+              "version": 1,
+              "id": "99302dd9-ff4a-4e11-a390-74caf45136e1"
+            }
+          },
+          {
+            "end_state": "UE",
+            "rank": 2,
+            "score": 0,
+            "user": {
+              "username": "theend",
+              "id": 2636
+            },
+            "code": {
+              "entity": {
+                "name": "g2auto",
+                "language": "python"
+              },
+              "remark": "auto iteration 2",
+              "commit_id": "",
+              "version": 2,
+              "id": "3009c01b-b743-4cb6-aea9-5c5837b9b0a0"
+            }
+          }
+        ]
+      },
+      {
+        "id": 7436466,
+        "create_time": "2026-03-13T23:49:58.993475",
+        "state": "评测中",
+        "info": [
+          {
+            "end_state": null,
+            "rank": 0,
+            "score": 0,
+            "user": {
+              "username": "theend",
+              "id": 2636
+            },
+            "code": {
+              "entity": {
+                "name": "g2auto",
+                "language": "python"
+              },
+              "remark": "auto iteration 2",
+              "commit_id": "",
+              "version": 2,
+              "id": "3009c01b-b743-4cb6-aea9-5c5837b9b0a0"
+            }
+          },
+          {
+            "end_state": null,
+            "rank": 0,
+            "score": 0,
+            "user": {
+              "username": "admin",
+              "id": 1
+            },
+            "code": {
+              "entity": {
+                "name": "跑通测试",
+                "language": "auto"
+              },
+              "remark": "",
+              "commit_id": "",
+              "version": 1,
+              "id": "99302dd9-ff4a-4e11-a390-74caf45136e1"
+            }
+          }
+        ]
+      }
+    ]
+  ],
+  "create_time": "Fri, 13 Mar 2026 23:49:58 +0800",
+  "user": {
+    "username": "theend",
+    "email_md5": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "id": 75843,
+  "code": {
+    "id": "3009c01b-b743-4cb6-aea9-5c5837b9b0a0",
+    "entity": "g2auto",
+    "remark": "auto iteration 2",
+    "commit_id": "",
+    "version": 2
+  },
+  "remote": null,
+  "game": {
+    "name": "DeepClue",
+    "alias": "头号侦探",
+    "id": 53,
+    "allow_watch": false
+  },
+  "contest": null
+}
