@@ -6,6 +6,10 @@
 #include <iostream>
 #include <stdio.h>
 #include <vector>
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#endif
 
 Game game;
 
@@ -24,6 +28,10 @@ void set_signal() {
 }
 
 int main(/*int argc, char *argv[]*/) {
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     // redirect
     // FILE *err_out = freopen("err.out", "w", stderr);
     // if (err_out == nullptr)return 0;

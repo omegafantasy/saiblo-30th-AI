@@ -7,6 +7,10 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#endif
 #define TIME1 0.15f
 #define TIME2 0.2f
 #define MAX_NODE_COUNT 20000
@@ -1660,6 +1664,10 @@ std::vector<Operation> advanced_ai(int player_id, const GameInfo &game_info) {
 }
 
 int main() {
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     // Run the game with the simple AI
     std::ios::sync_with_stdio(false);
     run_with_ai(advanced_ai);

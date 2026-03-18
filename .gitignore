@@ -48,5 +48,7 @@ config.json
 # Nested upstream repositories (managed independently)
 Ant-Game/
 Game1/Ant-Game/.git/
-
+Game2/DeepClueSDK-python/.git
 Game2/runtime
+past_AIs/antwar_matches
+past_AIs/mini_replay.txt
