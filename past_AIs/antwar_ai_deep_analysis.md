@@ -851,13 +851,13 @@ The ANTWar-AI's greatest transferable asset is its **evaluation function archite
 
 ## 13. Code → Behavior Correlation Report
 
-*Based on 200 self-play matches with behavioral statistics. Full stats in `antwar_behavior_analysis.md` and `antwar_stats_summary.json`.*
+*Based on 500 self-play matches with enhanced logging (pre-search decisions, super weapon usage, global state). Full stats in `antwar_behavior_analysis.md` and `antwar_stats_summary.json`.*
 
 ### 13.1 Evaluation Function → Observed Tower Placement
 
 **Code**: `node_val += base_dis * 0.4` (per tower) + dispersion penalties (-5 for d≤3, -2 for d≤6, -20 if ≥3 towers not spread)
 
-**Observed**: Top tower slots are ALL mid-field positions: ML1(393), MR1(379), ML2(305), MR2(305), M3(298), M2(289). Near-base positions (C1, C2, L1, R1) are used rarely and mostly in late game.
+**Observed**: Top tower slots are consistently mid-field positions: ML1, MR1, ML2, MR2, M3, M2 dominate across all sample sizes. Near-base positions (C1, C2, L1, R1) are used rarely and mostly in late game.
 
 **Correlation**: The +0.4/distance bonus from base is the dominant spatial signal. Mid-field positions at distance 4-6 from base score +1.6 to +2.4 over near-base positions at distance 1-2. Combined with the dispersion bonus (mid-field positions are naturally more spread), the evaluation strongly favors the MR/ML/M groups. The C/L/R groups appear mainly after round 450 when attack mode triggers rebuilding.
 
@@ -865,15 +865,15 @@ The ANTWar-AI's greatest transferable asset is its **evaluation function archite
 
 **Code**: `node_val -= (2^tower_count - 1) * 15 * 0.15` and `if tower_count >= 4: skip build`
 
-**Observed**: Average ~31 tower actions per 512-round match, with more downgrades (4724) than builds (4332). Tower count is kept low through constant recycling.
+**Observed**: Downgrades consistently outnumber builds (~1.1:1 ratio). Tower count is kept low through constant recycling rather than accumulation.
 
-**Correlation**: The exponential cost penalty grows rapidly: 2 towers costs -6.75, 3 towers costs -15.75, 4 towers costs -33.75. The hard cap at 4 plus the exponential penalty creates a "build 2-3 towers, upgrade, sell, rebuild" cycle. The downgrade > build ratio (1.09:1) confirms constant tower churn rather than accumulation.
+**Correlation**: The exponential cost penalty grows rapidly: 2 towers costs -6.75, 3 towers costs -15.75, 4 towers costs -33.75. The hard cap at 4 plus the exponential penalty creates a "build 2-3 towers, upgrade, sell, rebuild" cycle. The downgrade > build ratio confirms constant tower churn rather than accumulation.
 
 ### 13.3 Upgrade Preference → Mortar Dominance
 
 **Code**: 3 upgrade paths from Basic — Heavy(20/2/2), Quick(6/1/3), Mortar(16/4/3+AOE). Evaluation uses forward simulation to assess kill efficiency.
 
-**Observed**: Mortar 56% of upgrades, Quick 31%, Heavy 10%. Level 3 upgrades extremely rare (<2%).
+**Observed**: Mortar dominates (~55% of upgrades), Quick is secondary (~30%), Heavy is uncommon (~10%). Level 3 upgrades are extremely rare (<2%).
 
 **Correlation**: Mortar's AOE (damages ants within radius 1 of target) makes it efficient against grouped ants on the hex grid's constrained paths. Quick's 1-round cooldown with range 3 makes it the backup choice. Heavy's range-2 limitation restricts its utility. Level 3 tower penalty (-260*0.15 = -39 vs -60*0.15 = -9 for level 2) makes level 3 upgrades almost never worth the evaluation cost.
 
@@ -881,7 +881,7 @@ The ANTWar-AI's greatest transferable asset is its **evaluation function archite
 
 **Code**: Attack when `kill1 - kill2 <= -3 - max((450-round)/50, 0)` or `round >= 450 && kill1 - kill2 <= 1`
 
-**Observed**: Attack mode triggers in 100% of matches at average round 411.5. Economy drops from ~273 coins (R450) to ~130 (R470).
+**Observed**: Attack mode triggers in 100% of matches at average round ~400-410. Economy drops sharply around R450-R470 (from ~250-270 down to ~130-150).
 
 **Correlation**: In self-play, kill differentials hover near 0. The threshold becomes `-3 - 0 = -3` at round 450, and the `round >= 450 && kill_diff <= 1` clause triggers when even slightly behind. At round 411 (the average trigger), the threshold is `-3 - max(39/50,0) = -3`. A 3-kill deficit in self-play is common enough that 100% trigger rate is expected. The coin drop at R450-470 corresponds to ant upgrade purchases (200 for level 1, 250 for level 2, 200 for gen speed).
 
@@ -889,15 +889,15 @@ The ANTWar-AI's greatest transferable asset is its **evaluation function archite
 
 **Code**: Triggers when `(val < -400 && fail_round - current ≤ 8)` or `(val < -700 && fail_round ≤ 2)`
 
-**Observed**: 814 emergency storm events across 200 matches (4.07 per match), avg round 308.8.
+**Observed**: Emergency storm events occur ~4-5 times per match on average, at avg round ~310-320.
 
-**Correlation**: Round 308 is mid-game when both sides have established defenses and periodic ant waves can threaten HP. The 150ms search budget means the AI sometimes commits to configurations that are evaluated as safe but become dangerous as ants advance. Emergency storm is the safety valve — the AI detects the danger post-search and fires storm defensively. The frequency (4/match) suggests this isn't rare but a routine part of gameplay.
+**Correlation**: Round ~310 is mid-game when both sides have established defenses and periodic ant waves can threaten HP. The 150ms search budget means the AI sometimes commits to configurations that are evaluated as safe but become dangerous as ants advance. Emergency storm is the safety valve — the AI detects the danger post-search and fires storm defensively. The frequency (~4-5/match) suggests this isn't rare but a routine part of gameplay.
 
 ### 13.6 Opening Patterns → Optimal First Moves
 
 **Code**: Round 0 AI receives state with 50 coins, no towers. `build_tower_cost(0) = 15`. Tree search evaluates all 29 valid slot positions.
 
-**Observed**: First tower at MR1 (38.3%) or ML1 (34.9%). Second tower at M2/M3 around rounds 8-10.
+**Observed**: First tower typically at MR1 or ML1 (together ~70% of first moves). Second tower at M2/M3 around rounds 8-10.
 
 **Correlation**: MR1 at (6,14)/(11,14) and ML1 at (6,4)/(11,4) are symmetrically placed mid-field positions in the ML/MR groups. They score highest because: (a) distance from base = 5, giving +2.0 from spatial bonus; (b) range-3 towers at this position cover the main ant path; (c) the M2/M3 positions at (7,8)/(7,10) are then opened (different groups, no adjacency conflict). The ~9-round gap before second build matches the coin recovery from 50-15=35 → 35+9=44 → 44-30=14 (second tower costs 30).
 
@@ -905,9 +905,9 @@ The ANTWar-AI's greatest transferable asset is its **evaluation function archite
 
 **Code**: 20K node limit, 150ms budget, branching factor from 8 tac patterns × ~29 positions.
 
-**Observed**: Average 4363 nodes, 81.2 children per root. Effective depth ~1.5-2 levels.
+**Observed**: Average ~4000 nodes, ~80 children per root. Effective depth ~1.5-2 levels.
 
-**Correlation**: With 81 children per expansion and 4363 nodes, only ~54 grandchildren are explored (4363 - 81 - 1 root = 4281 grandchildren / 81 children = ~53 per expanded child). This means each first-level choice gets minimal second-level exploration. The do-nothing bias (+2.0) ensures the AI doesn't make marginally-beneficial moves that it hasn't deeply validated. The 150ms budget (not node count) is the binding constraint — the AI uses only 22% of its node pool on average.
+**Correlation**: With ~80 children per expansion and ~4000 nodes, only ~50 grandchildren are explored per child on average. This means each first-level choice gets minimal second-level exploration. The do-nothing bias (+2.0) ensures the AI doesn't make marginally-beneficial moves that it hasn't deeply validated. The 150ms budget (not node count) is the binding constraint — the AI uses only ~20% of its node pool on average.
 
 ### 13.8 Most Impactful Strategies (by implied win rate)
 

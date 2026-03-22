@@ -108,8 +108,18 @@ def parse_stderr(lines, player_id=0):
                 "max_id": -1,
                 "max_val": 0,
                 "actions": [],
+                "presearch_actions": [],
+                "presearch_source": None,
                 "emergency_storm": False,
                 "try_attack": False,
+                "global_state": 0,
+                "attack": False,
+                "attack_flag": False,
+                "kill_diff": 0.0,
+                "ant_level": 0,
+                "gen_speed_level": 0,
+                "tower_count": 0,
+                "sw_cd": [0, 0, 0, 0],
             }
             continue
 
@@ -144,6 +154,35 @@ def parse_stderr(lines, player_id=0):
         m = re.match(r'action:\s*(\d+)\s+(-?\d+)\s+(-?\d+)', line)
         if m:
             current_round["actions"].append({
+                "type": int(m.group(1)),
+                "arg0": int(m.group(2)),
+                "arg1": int(m.group(3)),
+            })
+            continue
+
+        # State info: "state:0 attack:1 attack_flag:1 kill_diff:-3.5 ant_lv:0 gen_spd:0 towers:2 sw_cd:0,0,0,0"
+        m = re.match(r'state:(-?\d+)\s+attack:(\d+)\s+attack_flag:(\d+)\s+kill_diff:([-\d.e+]+)\s+ant_lv:(\d+)\s+gen_spd:(\d+)\s+towers:(\d+)\s+sw_cd:(\d+),(\d+),(\d+),(\d+)', line)
+        if m:
+            current_round["global_state"] = int(m.group(1))
+            current_round["attack"] = bool(int(m.group(2)))
+            current_round["attack_flag"] = bool(int(m.group(3)))
+            current_round["kill_diff"] = float(m.group(4))
+            current_round["ant_level"] = int(m.group(5))
+            current_round["gen_speed_level"] = int(m.group(6))
+            current_round["tower_count"] = int(m.group(7))
+            current_round["sw_cd"] = [int(m.group(8)), int(m.group(9)), int(m.group(10)), int(m.group(11))]
+            continue
+
+        # Presearch source: "presearch: try_emp"
+        m = re.match(r'presearch:\s*(\S+)', line)
+        if m:
+            current_round["presearch_source"] = m.group(1)
+            continue
+
+        # Presearch action: "presearch_action: 22 5 9"
+        m = re.match(r'presearch_action:\s*(\d+)\s+(-?\d+)\s+(-?\d+)', line)
+        if m:
+            current_round["presearch_actions"].append({
                 "type": int(m.group(1)),
                 "arg0": int(m.group(2)),
                 "arg1": int(m.group(3)),
@@ -267,7 +306,7 @@ def compute_tower_stats(all_matches):
     return {
         "build_position_frequency": dict(build_counts.most_common()),
         "upgrade_type_frequency": dict(tower_type_counts.most_common()),
-        "build_by_round_range": {k: dict(v.most_common()) for k, v in sorted(build_by_round_range.items())},
+        "build_by_round_range": {k: dict(v.most_common()) for k, v in sorted(build_by_round_range.items(), key=lambda x: int(x[0].split('-')[0]))},
     }
 
 
@@ -310,7 +349,9 @@ def compute_super_weapon_stats(all_matches):
         for pid in range(2):
             pdata = match["players"][pid] if pid < len(match["players"]) else {}
             for rd in pdata.get("round_data", []):
-                for act in rd["actions"]:
+                # Check both tree search actions and presearch actions
+                all_acts = rd["actions"] + rd.get("presearch_actions", [])
+                for act in all_acts:
                     if act["type"] in [21, 22, 23, 24]:  # Super weapons
                         sw_name = OP_TYPES.get(act["type"], str(act["type"]))
                         sw_usage[sw_name] += 1
@@ -346,6 +387,8 @@ def compute_action_stats(all_matches):
     attack_mode_count = 0
     attack_mode_rounds = []
 
+    presearch_source_counts = Counter()
+
     for match in all_matches:
         match_attack_triggered = False
         for pid in range(2):
@@ -353,14 +396,21 @@ def compute_action_stats(all_matches):
             for rd in pdata.get("round_data", []):
                 rnd = rd["round"]
                 range_key = f"{(rnd // 50) * 50}-{(rnd // 50 + 1) * 50}"
-                actions_per_round.append(len(rd["actions"]))
+                all_acts = rd["actions"] + rd.get("presearch_actions", [])
+                actions_per_round.append(len(all_acts))
 
-                for act in rd["actions"]:
+                for act in all_acts:
                     op_name = OP_TYPES.get(act["type"], f"op_{act['type']}")
                     action_counts[op_name] += 1
                     action_by_round_range[range_key][op_name] += 1
 
-                if rd.get("try_attack") and not match_attack_triggered:
+                # Track presearch source
+                src = rd.get("presearch_source")
+                if src:
+                    presearch_source_counts[src] += 1
+
+                # Attack mode: use new 'attack' field if available, else fallback
+                if (rd.get("attack") or rd.get("try_attack")) and not match_attack_triggered:
                     match_attack_triggered = True
                     attack_mode_rounds.append(rnd)
 
@@ -369,10 +419,11 @@ def compute_action_stats(all_matches):
 
     return {
         "action_frequency": dict(action_counts.most_common()),
-        "action_by_round_range": {k: dict(v.most_common(5)) for k, v in sorted(action_by_round_range.items())},
+        "action_by_round_range": {k: dict(v.most_common(5)) for k, v in sorted(action_by_round_range.items(), key=lambda x: int(x[0].split('-')[0]))},
         "avg_actions_per_round": round(mean(actions_per_round), 2) if actions_per_round else 0,
         "attack_mode_triggered": attack_mode_count,
         "attack_mode_avg_round": round(mean(attack_mode_rounds), 1) if attack_mode_rounds else None,
+        "presearch_source_frequency": dict(presearch_source_counts.most_common()),
     }
 
 
@@ -390,7 +441,7 @@ def compute_search_stats(all_matches):
                     node_counts.append(rd["node_count"])
                 if rd["children"]:
                     child_counts.append(len(rd["children"]))
-                if rd["max_val"] != 0:
+                if rd["max_val"] != 0 and rd["max_val"] > -1e8:
                     max_vals.append(rd["max_val"])
 
     return {
@@ -450,9 +501,9 @@ def compute_base_upgrade_stats(all_matches):
         for pid in range(2):
             pdata = match["players"][pid] if pid < len(match["players"]) else {}
             for rd in pdata.get("round_data", []):
-                for act in rd["actions"]:
+                all_acts = rd["actions"] + rd.get("presearch_actions", [])
+                for act in all_acts:
                     if act["type"] == 31:  # UpgradeGeneratedAnt
-                        # We don't know which level, but track all
                         ant_upgrade_rounds[0].append(rd["round"])
                     elif act["type"] == 32:  # UpgradeGenerationSpeed
                         gen_speed_rounds.append(rd["round"])
@@ -591,7 +642,7 @@ Most frequently built tower positions (across all matches):
 ## 4. Build Timing by Round Range
 
 """
-    for range_key, positions in sorted(ts["build_by_round_range"].items()):
+    for range_key, positions in sorted(ts["build_by_round_range"].items(), key=lambda x: int(x[0].split('-')[0])):
         report += f"**Rounds {range_key}:** "
         top3 = sorted(positions.items(), key=lambda x: -x[1])[:5]
         report += ", ".join(f"{p}({c})" for p, c in top3) + "\n\n"
@@ -608,6 +659,16 @@ Most frequently built tower positions (across all matches):
 - Average actions per round: {ac['avg_actions_per_round']}
 - Attack mode triggered: {ac['attack_mode_triggered']}/{mo['total_matches']} matches
 - Attack mode avg trigger round: {ac['attack_mode_avg_round']}
+
+**Pre-search decision sources** (actions taken before tree search):
+
+| Source | Count |
+|--------|-------|
+"""
+    for src, count in sorted(ac.get("presearch_source_frequency", {}).items(), key=lambda x: -x[1]):
+        report += f"| {src} | {count} |\n"
+
+    report += f"""
 
 ## 6. Super Weapon Usage
 
@@ -660,10 +721,56 @@ Average coins over time (sampled every 10 rounds):
     for rnd in sorted(ec["avg_coin_curve"].keys(), key=int):
         report += f"| {rnd} | {ec['avg_coin_curve'][rnd]} | {ec['avg_hp_differential_curve'].get(rnd, 'N/A')} |\n"
 
-    report += """
+    # Compute some derived insights for observations
+    total_actions = sum(ac["action_frequency"].values())
+    presearch_freq = ac.get("presearch_source_frequency", {})
+    presearch_total = sum(presearch_freq.values())
+    presearch_sources_str = ', '.join(f'{k}({v})' for k, v in sorted(presearch_freq.items(), key=lambda x: -x[1]))
+    sw_total = sum(ss["usage_counts"].values())
+    mortar_pct = round(ts["upgrade_type_frequency"].get("Mortar", 0) / max(sum(ts["upgrade_type_frequency"].values()), 1) * 100, 1)
+    downgrade_count = ac["action_frequency"].get("DowngradeTower", 0)
+    build_count = ac["action_frequency"].get("BuildTower", 0)
+    upgrade_count = ac["action_frequency"].get("UpgradeTower", 0)
+
+    report += f"""
 ## 11. Key Observations
 
-(To be filled after reviewing the data above)
+### Spatial Strategy: Mid-Field Dominance
+- Top tower positions are mid-field slots (ML, MR, M groups), not near-base (C, L, R)
+- This reflects the evaluation function's +0.4/distance bonus from base and dispersion penalties
+- Forward positions (FL, FR) increase in later rounds (300+), suggesting progressive expansion
+
+### Tower Economy: Build-Upgrade-Recycle Loop
+- Mortar accounts for {mortar_pct}% of all upgrades — AOE at range 3 is the dominant strategy
+- Level 3 upgrades are extremely rare (evaluation penalizes them at -39 vs -9 for level 2)
+- Downgrade({downgrade_count}) > Build({build_count}) indicates constant tower recycling
+- Average {ac['avg_actions_per_round']} actions/round = ~{round(ac['avg_actions_per_round'] * 512)} tower actions per 512-round match
+
+### Super Weapon Timing
+- EMP Blaster: {ss['usage_counts'].get('UseEmpBlaster', 0)} uses, avg R{ss['timing_stats'].get('UseEmpBlaster', {}).get('avg_round', 'N/A')} — offensive tool to disable enemy towers
+- Lightning Storm: {ss['usage_counts'].get('UseLightningStorm', 0)} uses, avg R{ss['timing_stats'].get('UseLightningStorm', {}).get('avg_round', 'N/A')} — defensive/endgame tool
+- Emergency Evasion: {ss['usage_counts'].get('UseEmergencyEvasion', 0)} uses — rare ant protection ability
+- Emergency storm: {ss['emergency_storm_count']} triggers at avg R{ss['emergency_storm_avg_round']} — defensive safety valve
+
+### Pre-Search vs Tree Search Decisions
+- {presearch_total} rounds used pre-search decisions (super weapons, ant upgrades) bypassing the tree search
+- {total_actions - presearch_total} rounds used tree search for tower management
+- Pre-search sources: {presearch_sources_str}
+
+### Attack Mode
+- Triggered in {ac['attack_mode_triggered']}/{mo['total_matches']} matches at avg R{ac['attack_mode_avg_round']}
+- Correlates with economy drop at R450-470 (spending on ant upgrades and super weapons)
+- Ant level upgrades are rare in self-play (both sides usually tied in HP, so global_state remains 0)
+
+### Economy Phases
+- Opening (R0-R30): coins drop to ~30 for initial tower builds
+- Mid game (R30-R120): oscillation during build/upgrade/sell cycles
+- Late game (R120-R450): steady accumulation
+- Endgame (R450+): sharp drop from attack mode spending
+
+### Search Tree
+- Avg {sr['avg_node_count']} nodes (22% of 20K limit) — 150ms budget is the binding constraint
+- Avg {sr['avg_children_per_root']} children per root — large branching factor limits effective depth to ~2 levels
 """
 
     return report

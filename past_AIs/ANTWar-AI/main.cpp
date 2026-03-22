@@ -1566,27 +1566,53 @@ std::vector<Operation> advanced_ai(int player_id, const GameInfo &game_info) {
         }
     }
 
+    // Log global state info
+    std::cerr << "state:" << global_state << " attack:" << attack << " attack_flag:" << attack_flag
+              << " kill_diff:" << (kill1 - kill2) << " ant_lv:" << (int)game_info.bases[SIDE].ant_level
+              << " gen_spd:" << (int)game_info.bases[SIDE].gen_speed_level
+              << " towers:" << game_info.tower_num_of_player(SIDE)
+              << " sw_cd:" << game_info.super_weapon_cd[SIDE][SuperWeaponType::LightningStorm]
+              << "," << game_info.super_weapon_cd[SIDE][SuperWeaponType::EmpBlaster]
+              << "," << game_info.super_weapon_cd[SIDE][SuperWeaponType::Deflector]
+              << "," << game_info.super_weapon_cd[SIDE][SuperWeaponType::EmergencyEvasion] << std::endl;
+
     if (global_state <= 0 && !reserved) {
         ops = try_emp(game_info);
-        if (ops.size() > 0)
+        if (ops.size() > 0) {
+            std::cerr << "presearch: try_emp" << std::endl;
+            for (auto &op : ops)
+                std::cerr << "presearch_action: " << op.type << " " << (int)op.arg0 << " " << (int)op.arg1 << std::endl;
             return ops;
+        }
     }
     if (attack && !reserved) {
         attack_flag = true;
         ops = try_attack(game_info);
-        if (ops.size() > 0)
+        if (ops.size() > 0) {
+            std::cerr << "presearch: try_attack" << std::endl;
+            for (auto &op : ops)
+                std::cerr << "presearch_action: " << op.type << " " << (int)op.arg0 << " " << (int)op.arg1 << std::endl;
             return ops;
+        }
     }
 
     if (global_state == 1 && current_round >= 488) {
         ops = try_end_storm(game_info);
-        if (ops.size() > 0)
+        if (ops.size() > 0) {
+            std::cerr << "presearch: try_end_storm" << std::endl;
+            for (auto &op : ops)
+                std::cerr << "presearch_action: " << op.type << " " << (int)op.arg0 << " " << (int)op.arg1 << std::endl;
             return ops;
+        }
     }
     if (global_state == 0 && current_round >= 510) {
         ops = try_use_storm(game_info, true);
-        if (ops.size() > 0)
+        if (ops.size() > 0) {
+            std::cerr << "presearch: try_use_storm_endgame" << std::endl;
+            for (auto &op : ops)
+                std::cerr << "presearch_action: " << op.type << " " << (int)op.arg0 << " " << (int)op.arg1 << std::endl;
             return ops;
+        }
     }
 
     clock_t start_t = clock();
@@ -1647,6 +1673,8 @@ std::vector<Operation> advanced_ai(int player_id, const GameInfo &game_info) {
             ops = try_use_storm(game_info, true);
         std::cerr << "emergency use storm" << std::endl;
         if (ops.size() > 0) {
+            for (auto &op : ops)
+                std::cerr << "presearch_action: " << op.type << " " << (int)op.arg0 << " " << (int)op.arg1 << std::endl;
             del();
             return ops;
         }
