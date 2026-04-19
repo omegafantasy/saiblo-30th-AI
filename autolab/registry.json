@@ -1,64 +1,92 @@
 {
-  "champion": "cpp_v1_current",
+  "champion": "baseline_side_hplus",
   "versions": [
     {
-      "id": "cpp_v1_current",
-      "kind": "cpp_exe",
-      "exe": "/www/Game1/antgame_ai_cpp/v1/ai_v1",
-      "src": "/www/Game1/antgame_ai_cpp/v1/ai_v1.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "Game1 current C++ bridge AI"
-    },
-    {
-      "id": "cpp_v2_antwar_structured",
-      "kind": "cpp_exe",
-      "exe": "/www/Game1/antgame_ai_cpp/v2/ai_v2",
-      "src": "/www/Game1/antgame_ai_cpp/v2/ai_v2.cpp",
-      "enabled": false,
-      "anchor": false,
-      "notes": "Experimental structured ANTWar-style successor; currently not promoted"
-    },
-    {
       "id": "cpp_v3_unified_online",
-      "kind": "antgame_py",
-      "name": "cpp_v3",
+      "kind": "cpp_protocol_exe",
+      "exe": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/v3/ai_v3",
+      "src": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/v3/ai_v3.cpp",
       "enabled": true,
       "anchor": false,
-      "notes": "Unified pure C++ protocol AI for both local Elo and Saiblo upload"
-    },
-    {
-      "id": "cpp_v4_rollout_defense",
-      "kind": "cpp_exe",
-      "exe": "/www/Game1/antgame_ai_cpp/v4/ai_v4",
-      "src": "/www/Game1/antgame_ai_cpp/v4/ai_v4.cpp",
-      "enabled": true,
-      "anchor": false,
-      "notes": "Rollout-based defense-first Game1 C++ AI; ignores teleport and focuses on sparse conservative actions"
+      "notes": "Unified pure C++ protocol AI; current local evaluation mainline"
     },
     {
       "id": "greedy",
       "kind": "antgame_py",
       "name": "greedy",
-      "enabled": true,
-      "anchor": true,
-      "notes": "Game1 built-in greedy baseline"
+      "enabled": false,
+      "anchor": false,
+      "notes": "Temporarily disabled pending post-2026-04 ruleset revalidation; forecast-heavy baseline is not part of default production eval"
     },
     {
       "id": "random",
       "kind": "antgame_py",
       "name": "random",
-      "enabled": true,
-      "anchor": true,
-      "notes": "Game1 built-in random baseline"
+      "enabled": false,
+      "anchor": false,
+      "notes": "Game1 built-in random baseline; removed from production pool in favor of structured baselines"
     },
     {
       "id": "example",
       "kind": "antgame_py",
       "name": "example",
+      "enabled": false,
+      "anchor": false,
+      "notes": "Temporarily disabled pending post-2026-04 ruleset revalidation"
+    },
+    {
+      "id": "baseline_anchor_ant2",
+      "kind": "cpp_protocol_exe",
+      "exe": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_anchor_ant2",
+      "src": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_family.cpp",
       "enabled": true,
       "anchor": false,
-      "notes": "Game1 example baseline"
+      "notes": "C++ fixed 3-tower turtle macro: front anchor + dual rear guard, one-time ant2, no lure, no weapons"
+    },
+    {
+      "id": "baseline_side_hplus",
+      "kind": "cpp_protocol_exe",
+      "exe": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_side_hplus",
+      "src": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_family.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "C++ fixed macro that shifts Heavy+ away from front anchor toward side rear coverage and delays base greed"
+    },
+    {
+      "id": "baseline_quick_salvage",
+      "kind": "cpp_protocol_exe",
+      "exe": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_quick_salvage",
+      "src": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_family.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "C++ lure-and-salvage baseline: quick flex slot, planned downgrade recovery, one-time ant2"
+    },
+    {
+      "id": "baseline_anchor_salvage",
+      "kind": "cpp_protocol_exe",
+      "exe": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_anchor_salvage",
+      "src": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_family.cpp",
+      "enabled": false,
+      "anchor": false,
+      "notes": "Experimental C++ anchor-salvage baseline; disabled from production after weak 2026-04-03 smoke"
+    },
+    {
+      "id": "baseline_eco_hold",
+      "kind": "cpp_protocol_exe",
+      "exe": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_eco_hold",
+      "src": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_family.cpp",
+      "enabled": true,
+      "anchor": false,
+      "notes": "C++ minimal-tower economy baseline: holds on two towers, greedily rushes first ant2, avoids weapons"
+    },
+    {
+      "id": "baseline_reactive_rollout",
+      "kind": "cpp_protocol_exe",
+      "exe": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_reactive_rollout",
+      "src": "/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/baselines/ai_baseline_family.cpp",
+      "enabled": false,
+      "anchor": false,
+      "notes": "Disabled from production pool after persistently weakest local results under current ruleset"
     }
   ]
 }

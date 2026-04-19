@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/www"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/automation_pause.sh"
 PROMPT_FILE="$ROOT_DIR/docs/codex_iteration_prompt.md"
 OBJECTIVE_FILE="$ROOT_DIR/docs/codex_objective_fixed.md"
+RUNBOOK_FILE="$ROOT_DIR/docs/codex_automation_runbook.md"
 LOG_DIR="$ROOT_DIR/autolab/runtime"
 LOG_FILE="$LOG_DIR/codex_iterate.log"
 LAST_FILE="$LOG_DIR/codex_last_message.txt"
@@ -14,7 +15,7 @@ PAUSE_FILE="${CODEX_ITER_PAUSE_FILE:-$LOG_DIR/codex_iterate.paused}"
 GLOBAL_LOCK_PATH="${CODEX_GLOBAL_LOCK_PATH:-/tmp/codex-automation-global.lock}"
 GLOBAL_LOCK_WAIT_SEC="${CODEX_GLOBAL_LOCK_WAIT_SEC:-0}"
 CODEX_BIN="${CODEX_BIN:-/usr/local/bin/codex}"
-TIMEOUT_SEC="${CODEX_ITER_TIMEOUT_SEC:-0}"
+TIMEOUT_SEC="${CODEX_ITER_TIMEOUT_SEC:-1500}"
 TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"
 
 mkdir -p "$LOG_DIR"
@@ -54,6 +55,10 @@ if [[ ! -f "$OBJECTIVE_FILE" ]]; then
   echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | missing objective doc: $OBJECTIVE_FILE" >> "$LOG_FILE"
   exit 1
 fi
+if [[ ! -f "$RUNBOOK_FILE" ]]; then
+  echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | missing runbook doc: $RUNBOOK_FILE" >> "$LOG_FILE"
+  exit 1
+fi
 cd "$ROOT_DIR"
 
 SID=""
@@ -75,6 +80,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+compose_prompt() {
+  cat "$OBJECTIVE_FILE"
+  printf '\n\n'
+  cat "$RUNBOOK_FILE"
+  printf '\n\n'
+  cat "$PROMPT_FILE"
+}
+
 echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') | START codex iteration mode=${MODE} timeout=${TIMEOUT_LABEL} sid=${SID:-none}" >> "$LOG_FILE"
 
 run_codex() {
@@ -84,7 +97,8 @@ run_codex() {
   if [[ "$mode" == "resume" ]]; then
     cmd=(
       "$CODEX_BIN" exec resume "$sid"
-      --full-auto
+      -c 'transport="responses_http"'
+      --dangerously-bypass-approvals-and-sandbox
       --skip-git-repo-check
       --json
       --output-last-message "$LAST_FILE"
@@ -93,8 +107,9 @@ run_codex() {
   else
     cmd=(
       "$CODEX_BIN" exec
+      -c 'transport="responses_http"'
       --cd "$ROOT_DIR"
-      --full-auto
+      --dangerously-bypass-approvals-and-sandbox
       --skip-git-repo-check
       --json
       --output-last-message "$LAST_FILE"
@@ -103,15 +118,14 @@ run_codex() {
   fi
 
   if [[ "$TIMEOUT_SEC" =~ ^[0-9]+$ ]] && [[ "$TIMEOUT_SEC" -gt 0 ]] && [[ -x "$TIMEOUT_BIN" ]]; then
-    cat "$PROMPT_FILE" | "$TIMEOUT_BIN" --foreground "${TIMEOUT_SEC}s" "${cmd[@]}" > "$TMP_JSON" 2>> "$LOG_FILE"
+    compose_prompt | "$TIMEOUT_BIN" --foreground "${TIMEOUT_SEC}s" "${cmd[@]}" > "$TMP_JSON" 2>> "$LOG_FILE"
   else
-    cat "$PROMPT_FILE" | "${cmd[@]}" > "$TMP_JSON" 2>> "$LOG_FILE"
+    compose_prompt | "${cmd[@]}" > "$TMP_JSON" 2>> "$LOG_FILE"
   fi
 }
 
-# --full-auto: non-interactive automatic execution in workspace-write sandbox.
-# Read prompt from stdin via '-'. For resumed turns we still provide a prompt to
-# anchor behavior to the fixed objective doc.
+# Always prepend the fixed objective and runbook so resumed turns keep the same
+# operating context instead of relying on the prompt file alone.
 set +e
 run_codex "$MODE" "$SID"
 rc=$?

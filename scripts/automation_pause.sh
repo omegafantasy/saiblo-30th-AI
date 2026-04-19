@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
+AUTOMATION_ROOT_DIR="${AUTOMATION_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
 automation_pause_file() {
-  printf '%s\n' "${AUTOMATION_GLOBAL_PAUSE_FILE:-/www/autolab/runtime/automation.paused}"
+  printf '%s\n' "${AUTOMATION_GLOBAL_PAUSE_FILE:-$AUTOMATION_ROOT_DIR/autolab/runtime/automation.paused}"
 }
 
 automation_is_paused() {

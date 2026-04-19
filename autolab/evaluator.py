@@ -4,6 +4,7 @@ import json
 import os
 import multiprocessing as mp
 import random
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
@@ -11,12 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-from .common import ANT_GAME_DIR, RUNTIME_DIR, ensure_dirs, now_ts, write_json
+from .common import ANT_GAME_DIR, RUNTIME_DIR, current_ruleset_id, ensure_dirs, now_ts, write_json
 from .elo import compute_elo
 from .game1_match_runner import ensure_game_bin, run_match_task, stage_version
 from .registry import get_version, load_registry, set_champion
 
-MAX_PARALLEL_JOBS = 16
+MAX_PARALLEL_JOBS = 24
 
 
 def _version_is_usable(v: Dict[str, Any]) -> bool:
@@ -26,6 +27,12 @@ def _version_is_usable(v: Dict[str, Any]) -> bool:
         return False
     kind = str(v.get("kind", "")).strip()
     if kind == "cpp_exe":
+        exe = str(v.get("exe", "")).strip()
+        if not exe:
+            return False
+        p = Path(exe)
+        return p.is_file() and os.access(str(p), os.X_OK)
+    if kind == "cpp_protocol_exe":
         exe = str(v.get("exe", "")).strip()
         if not exe:
             return False
@@ -114,7 +121,7 @@ def _accumulate_elo_and_stats(
     return ratings, stats, count
 
 
-def _iter_rows_from_match_files(files: List[Path]) -> Iterable[Dict[str, Any]]:
+def _iter_rows_from_match_files(files: List[Path], ruleset_id: str | None = None) -> Iterable[Dict[str, Any]]:
     for f in files:
         with f.open("r", encoding="utf-8", errors="ignore") as fp:
             for line in fp:
@@ -126,6 +133,8 @@ def _iter_rows_from_match_files(files: List[Path]) -> Iterable[Dict[str, Any]]:
                 except Exception:
                     continue
                 if isinstance(obj, dict):
+                    if ruleset_id is not None and str(obj.get("ruleset_id", "")) != ruleset_id:
+                        continue
                     yield obj
 
 
@@ -347,7 +356,7 @@ class EvalConfig:
     adaptive_top_boost: float = 1.5
     adaptive_new_target_games: int = 600
     adaptive_new_boost: float = 2.0
-    save_replays: bool = True
+    save_replays: bool = False
 
 
 def _split_csv(value: str) -> List[str]:
@@ -356,6 +365,7 @@ def _split_csv(value: str) -> List[str]:
 
 def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
     ensure_dirs()
+    ruleset_id = current_ruleset_id()
     scope = str(cfg.runtime_scope or "").strip()
     runtime_dir = RUNTIME_DIR if not scope else (RUNTIME_DIR / "scopes" / scope)
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -395,6 +405,7 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
     tag = f"eval_{ts}"
     game_bin = ensure_game_bin(ANT_GAME_DIR)
     package_root = runtime_dir / "packages" / tag
+    match_root = runtime_dir / "match_work" / tag
     package_root.mkdir(parents=True, exist_ok=True)
     packaged_dirs: Dict[str, str] = {}
     for version in all_versions:
@@ -428,7 +439,7 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
             p0_name = a
             p1_name = b
             replay_path = replay_dir / f"{tag}_p0-{p0_name}_p1-{p1_name}_seed-{s}.json"
-            work_dir = runtime_dir / "match_work" / tag / f"p0-{p0_name}_p1-{p1_name}_seed-{s}"
+            work_dir = match_root / f"p0-{p0_name}_p1-{p1_name}_seed-{s}"
             tasks.append(
                 {
                     "a": a,
@@ -446,7 +457,7 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
             p0_name = b
             p1_name = a
             replay_path = replay_dir / f"{tag}_p0-{p0_name}_p1-{p1_name}_seed-{s + 911}.json"
-            work_dir = runtime_dir / "match_work" / tag / f"p0-{p0_name}_p1-{p1_name}_seed-{s + 911}"
+            work_dir = match_root / f"p0-{p0_name}_p1-{p1_name}_seed-{s + 911}"
             tasks.append(
                 {
                     "a": a,
@@ -523,12 +534,17 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
 
     matches_path = runtime_dir / f"{tag}_matches.jsonl"
     summary_path = runtime_dir / f"{tag}_summary.json"
+    if not bool(cfg.save_replays):
+        for r in rows:
+            r["replay_file"] = ""
     for r in rows:
+        r["ruleset_id"] = ruleset_id
         with matches_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     round_out = {
         "tag": tag,
+        "ruleset_id": ruleset_id,
         "config": {
             "mode": cfg.mode,
             "games_per_pair": cfg.games_per_pair,
@@ -572,7 +588,7 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
         allowed_ids = set(all_ids)
         completed_files = _iter_completed_match_files(runtime_dir)
         cum_ratings, cum_stats, cum_matches = _accumulate_elo_and_stats(
-            rows=_iter_rows_from_match_files(completed_files),
+            rows=_iter_rows_from_match_files(completed_files, ruleset_id=ruleset_id),
             base_rating=cfg.base_rating,
             k_factor=cfg.k_factor,
             allowed_ids=allowed_ids,
@@ -592,6 +608,7 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
 
         out = {
             "tag": tag,
+            "ruleset_id": ruleset_id,
             "config": {
                 **round_out["config"],
                 "rating_mode": "cumulative",
@@ -621,6 +638,11 @@ def run_evaluation(cfg: EvalConfig) -> Dict[str, Any]:
     if cfg.doc_out:
         _write_markdown_report(Path(cfg.doc_out), out)
 
+    if not bool(cfg.save_replays):
+        shutil.rmtree(replay_dir, ignore_errors=True)
+        shutil.rmtree(match_root, ignore_errors=True)
+        shutil.rmtree(package_root, ignore_errors=True)
+
     return out
 
 
@@ -629,6 +651,7 @@ def _write_markdown_report(path: Path, result: Dict[str, Any]) -> None:
     lines.append("# 自动评测轮次报告")
     lines.append("")
     lines.append(f"- tag: `{result['tag']}`")
+    lines.append(f"- ruleset_id: `{result.get('ruleset_id', '')}`")
     lines.append(f"- mode: `{result['config']['mode']}`")
     lines.append(f"- matches: `{result['matches']}`")
     lines.append(f"- jobs: `{result['config']['jobs']}`")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import select
 import shutil
@@ -12,7 +13,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 
-TIMEOUT_SECONDS = 20.0
+GAME_IO_TIMEOUT_SECONDS = 20.0
+AI_TIME_REPORT_CAP_MS = 200
 
 
 def ensure_game_bin(ant_game_dir: Path) -> Path:
@@ -66,11 +68,30 @@ def stage_version(ant_game_dir: Path, version: Dict[str, Any], output_dir: Path)
         exe = Path(str(version.get("exe", ""))).resolve()
         if not exe.is_file():
             raise RuntimeError(f"cpp exe not found: {exe}")
+        bridge = ant_game_dir / "AI" / "ai_cpp_v1.py"
+        if not bridge.is_file():
+            raise RuntimeError(
+                "legacy cpp_exe staging requires Game1/Ant-Game/AI/ai_cpp_v1.py, "
+                "which is not present in this migrated repository"
+            )
         _copy_sdk_layout(ant_game_dir, output_dir)
-        shutil.copy2(ant_game_dir / "AI" / "ai_cpp_v1.py", output_dir / "ai.py")
+        shutil.copy2(bridge, output_dir / "ai.py")
         cpp_dir = output_dir / "cpp_ai"
         cpp_dir.mkdir(parents=True, exist_ok=True)
         target = cpp_dir / "ai_v1"
+        shutil.copy2(exe, target)
+        target.chmod(0o755)
+        return output_dir
+
+    if kind == "cpp_protocol_exe":
+        exe = Path(str(version.get("exe", ""))).resolve()
+        if not exe.is_file():
+            raise RuntimeError(f"cpp protocol exe not found: {exe}")
+        _copy_sdk_layout(ant_game_dir, output_dir)
+        shutil.copy2(ant_game_dir / "AI" / "ai_cpp_protocol.py", output_dir / "ai.py")
+        cpp_dir = output_dir / "cpp_ai"
+        cpp_dir.mkdir(parents=True, exist_ok=True)
+        target = cpp_dir / "ai"
         shutil.copy2(exe, target)
         target.chmod(0o755)
         return output_dir
@@ -83,10 +104,18 @@ def _packet(payload: object) -> bytes:
     return struct.pack(">I", len(body)) + body
 
 
-def _read_exact(stream, size: int, proc: subprocess.Popen[bytes], label: str, timeout: float = TIMEOUT_SECONDS) -> bytes:
+def _read_exact(
+    stream,
+    size: int,
+    proc: subprocess.Popen[bytes],
+    label: str,
+    timeout: float = GAME_IO_TIMEOUT_SECONDS,
+    deadline: float | None = None,
+) -> bytes:
     fd = stream.fileno()
     data = bytearray()
-    deadline = time.monotonic() + timeout
+    if deadline is None:
+        deadline = time.monotonic() + timeout
     while len(data) < size:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -105,16 +134,21 @@ def _read_exact(stream, size: int, proc: subprocess.Popen[bytes], label: str, ti
 
 
 def _read_game_packet(game: subprocess.Popen[bytes]) -> tuple[int, bytes]:
-    size = struct.unpack(">I", _read_exact(game.stdout, 4, game, "game packet length"))[0]
-    obj = struct.unpack(">i", _read_exact(game.stdout, 4, game, "game packet object"))[0]
-    payload = _read_exact(game.stdout, size, game, "game packet payload")
+    deadline = time.monotonic() + GAME_IO_TIMEOUT_SECONDS
+    size = struct.unpack(">I", _read_exact(game.stdout, 4, game, "game packet length", deadline=deadline))[0]
+    obj = struct.unpack(">i", _read_exact(game.stdout, 4, game, "game packet object", deadline=deadline))[0]
+    payload = _read_exact(game.stdout, size, game, "game packet payload", deadline=deadline)
     return obj, payload
 
 
-def _read_ai_packet(ai: subprocess.Popen[bytes], label: str) -> bytes:
-    size = struct.unpack(">I", _read_exact(ai.stdout, 4, ai, f"{label} packet length"))[0]
-    payload = _read_exact(ai.stdout, size, ai, f"{label} packet payload")
-    return struct.pack(">I", size) + payload
+def _read_ai_packet(ai: subprocess.Popen[bytes], label: str) -> tuple[bytes, int, int]:
+    start = time.monotonic()
+    deadline = start + GAME_IO_TIMEOUT_SECONDS
+    size = struct.unpack(">I", _read_exact(ai.stdout, 4, ai, f"{label} packet length", deadline=deadline))[0]
+    payload = _read_exact(ai.stdout, size, ai, f"{label} packet payload", deadline=deadline)
+    elapsed_ms = max(0, int(math.ceil((time.monotonic() - start) * 1000.0)))
+    reported_ms = min(elapsed_ms, AI_TIME_REPORT_CAP_MS)
+    return struct.pack(">I", size) + payload, elapsed_ms, reported_ms
 
 
 def _write_all(stream, payload: bytes) -> None:
@@ -184,6 +218,7 @@ def run_match_task(task: Dict[str, Any]) -> Dict[str, Any]:
     game_bin = Path(str(task["game_bin"])).resolve()
     work_dir = Path(str(task["work_dir"])).resolve()
     replay_file = Path(str(task["replay_file"])).resolve()
+    max_rounds = int(task.get("max_rounds", 0) or 0)
     work_dir.mkdir(parents=True, exist_ok=True)
     replay_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -199,6 +234,12 @@ def run_match_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "a_seat": 0 if a_on_seat0 else 1,
         "replay_file": str(replay_file),
     }
+    events: list[Dict[str, Any]] = []
+
+    def record_event(kind: str, **payload: Any) -> None:
+        events.append({"kind": kind, **payload})
+        if len(events) > 40:
+            del events[0]
 
     game_stderr_handle = game_stderr_path.open("wb")
     game = None
@@ -223,27 +264,40 @@ def run_match_task(task: Dict[str, Any]) -> Dict[str, Any]:
             "config": {"random_seed": seed},
             "replay": str(replay_file),
         }
+        if max_rounds > 0:
+            init["config"]["max_rounds"] = max_rounds
         _write_all(game.stdin, _packet(init))
+        record_event("send_init", config=init["config"])
 
         while True:
             obj, payload = _read_game_packet(game)
+            record_event("game_packet", object=obj, size=len(payload))
             if obj in (0, 1):
                 _write_all(ais[obj].stdin, payload)
+                record_event("forward_to_ai", player=obj, size=len(payload))
                 continue
 
             message = json.loads(payload.decode("utf-8"))
             if isinstance(message, dict) and "player" in message and "content" in message:
                 for player, content in zip(message["player"], message["content"]):
                     _write_all(ais[int(player)].stdin, content.encode("utf-8"))
+                    record_event("broadcast_to_ai", player=int(player), size=len(content))
             if isinstance(message, dict) and message.get("listen"):
                 for player in message["listen"]:
-                    ai_packet = _read_ai_packet(ais[int(player)], f"ai{player}")
+                    try:
+                        record_event("listen", player=int(player))
+                        ai_packet, elapsed_ms, reported_ms = _read_ai_packet(ais[int(player)], f"ai{player}")
+                    except TimeoutError:
+                        _terminate(ais[int(player)])
+                        raise
+                    record_event("ai_reply", player=int(player), elapsed_ms=elapsed_ms, reported_ms=reported_ms, size=len(ai_packet))
                     reply = {
                         "player": int(player),
                         "content": ai_packet.decode("latin1"),
-                        "time": 0,
+                        "time": reported_ms,
                     }
                     _write_all(game.stdin, _packet(reply))
+                    record_event("send_to_game", player=int(player), time=reported_ms, size=len(reply["content"]))
             if isinstance(message, dict) and "end_state" in message:
                 result["end_state"] = message["end_state"]
                 result["end_info"] = message.get("end_info")
@@ -275,6 +329,7 @@ def run_match_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 "game_returncode": game.returncode,
                 "ai0_returncode": ai0.returncode,
                 "ai1_returncode": ai1.returncode,
+                "events_tail": events,
             }
         )
         return result
@@ -288,6 +343,7 @@ def run_match_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 "game_returncode": game.poll() if game is not None else None,
                 "ai0_returncode": ai0.poll() if ai0 is not None else None,
                 "ai1_returncode": ai1.poll() if ai1 is not None else None,
+                "events_tail": events,
             }
         )
         return result

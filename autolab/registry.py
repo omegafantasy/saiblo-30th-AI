@@ -9,33 +9,16 @@ from .common import REGISTRY_FILE, ROOT_DIR, VERSIONS_DIR, ensure_dirs, read_jso
 
 def _default_registry() -> Dict[str, Any]:
     return {
-        "champion": "cpp_v1_current",
+        "champion": "cpp_v3_unified_online",
         "versions": [
             {
-                "id": "cpp_v1_current",
-                "kind": "cpp_exe",
-                "exe": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v1" / "ai_v1"),
-                "src": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v1" / "ai_v1.cpp"),
-                "enabled": True,
-                "anchor": False,
-                "notes": "Game1 current C++ bridge AI",
-            },
-            {
-                "id": "cpp_v2_antwar_structured",
-                "kind": "cpp_exe",
-                "exe": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v2" / "ai_v2"),
-                "src": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v2" / "ai_v2.cpp"),
-                "enabled": False,
-                "anchor": False,
-                "notes": "Game1 structured ANTWar-style successor; currently not promoted",
-            },
-            {
                 "id": "cpp_v3_unified_online",
-                "kind": "antgame_py",
-                "name": "cpp_v3",
+                "kind": "cpp_protocol_exe",
+                "exe": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v3" / "ai_v3"),
+                "src": str(ROOT_DIR / "Game1" / "antgame_ai_cpp" / "v3" / "ai_v3.cpp"),
                 "enabled": True,
                 "anchor": False,
-                "notes": "Unified pure C++ protocol AI for both local Elo and Saiblo upload",
+                "notes": "Unified pure C++ protocol AI; current local evaluation mainline",
             },
             {
                 "id": "greedy",

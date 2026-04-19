@@ -1,13 +1,13 @@
 [Unit]
-Description=Autolab idle evaluator loop (up to 8 CPUs)
+Description=Autolab idle evaluator loop (up to 32 CPUs)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/www
-ExecStart=/www/scripts/autolab_idle_eval_loop.sh
+WorkingDirectory=/root/autodl-tmp/saiblo_iter
+ExecStart=/root/autodl-tmp/saiblo_iter/scripts/autolab_idle_eval_loop.sh
 Restart=always
 RestartSec=15
 Nice=10

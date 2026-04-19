@@ -1,0 +1,19 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+HOME=/root
+AUTOMATION_MAX_JOBS_CAP=24
+AUTO_EVAL_MAX_JOBS=24
+HTTP_PROXY=http://127.0.0.1:7890
+HTTPS_PROXY=http://127.0.0.1:7890
+ALL_PROXY=socks5://127.0.0.1:7890
+NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.cn,.seetacloud.com,.qq.com,.wechat.com,.tencent.com,.baidu.com,.aliyun.com,.taobao.com,.jd.com,.bilibili.com,.zhihu.com,.weibo.com,.douyin.com
+http_proxy=http://127.0.0.1:7890
+https_proxy=http://127.0.0.1:7890
+all_proxy=socks5://127.0.0.1:7890
+no_proxy=localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.cn,.seetacloud.com,.qq.com,.wechat.com,.tencent.com,.baidu.com,.aliyun.com,.taobao.com,.jd.com,.bilibili.com,.zhihu.com,.weibo.com,.douyin.com
+
+* * * * * AUTOLAB_IDLE_RUN_ONCE=1 /usr/bin/flock -n /tmp/autolab-idle-eval-once.lock /root/autodl-tmp/saiblo_iter/scripts/autolab_idle_eval_loop.sh >/dev/null 2>&1
+0,30 * * * * /usr/bin/flock -n /tmp/codex-iterate-cron.lock /root/autodl-tmp/saiblo_iter/scripts/codex_iterate_once.sh >/dev/null 2>&1
+10,40 * * * * /usr/bin/flock -n /tmp/codex-anchor-iterate-cron.lock /root/autodl-tmp/saiblo_iter/scripts/codex_anchor_iterate_once.sh >/dev/null 2>&1
+*/10 * * * * /usr/bin/flock -n /tmp/autolab-runtime-gc.lock /root/autodl-tmp/saiblo_iter/scripts/autolab_runtime_gc.sh >/dev/null 2>&1
+*/5 * * * * /usr/bin/env python3 /root/.codex/scripts/codex_auth_rotate.py >> /root/.codex/log/codex-auth-rotate.log 2>&1 # codex-auth-rotate

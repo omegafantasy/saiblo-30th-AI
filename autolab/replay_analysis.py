@@ -21,6 +21,8 @@ ACTION_LABELS: Dict[int, str] = {
     32: "upgrade_generated_ant",
 }
 
+MIDGAME_ROUND = 40
+
 
 @dataclass
 class ReplayAnalysisConfig:
@@ -112,6 +114,146 @@ def _label_action(op_type: int) -> str:
     return ACTION_LABELS.get(op_type, f"op_{op_type}")
 
 
+def _empty_window_bucket() -> Dict[str, Any]:
+    return {
+        "zero_tower_rounds": 0,
+        "rich_zero_tower_rounds": 0,
+        "rich_zero_tower_idle_rounds": 0,
+        "rich_zero_tower_build_rounds": 0,
+        "rich_zero_tower_other_rounds": 0,
+        "max_rich_zero_tower_idle_streak": 0,
+        "max_rich_zero_tower_idle_streak_start_round": None,
+        "max_rich_zero_tower_idle_streak_end_round": None,
+        "_current_idle_streak": 0,
+        "_current_idle_streak_start_round": None,
+        "_current_idle_streak_last_round": None,
+        "samples": [],
+    }
+
+
+def _reset_idle_streak(bucket: Dict[str, Any]) -> None:
+    bucket["_current_idle_streak"] = 0
+    bucket["_current_idle_streak_start_round"] = None
+    bucket["_current_idle_streak_last_round"] = None
+
+
+def _record_window_bucket(
+    bucket: Dict[str, Any],
+    *,
+    rich: bool,
+    action: str,
+    frame_index: int,
+    coins: int,
+    base_hp: int,
+    enemy_base_hp: int,
+    ops: list[str],
+) -> None:
+    bucket["zero_tower_rounds"] += 1
+    if not rich:
+        _reset_idle_streak(bucket)
+        return
+    bucket["rich_zero_tower_rounds"] += 1
+    if action == "build":
+        bucket["rich_zero_tower_build_rounds"] += 1
+        _reset_idle_streak(bucket)
+    elif action == "other":
+        bucket["rich_zero_tower_other_rounds"] += 1
+        _reset_idle_streak(bucket)
+    else:
+        bucket["rich_zero_tower_idle_rounds"] += 1
+        last_round = bucket.get("_current_idle_streak_last_round")
+        if last_round == frame_index - 1:
+            bucket["_current_idle_streak"] += 1
+        else:
+            bucket["_current_idle_streak"] = 1
+            bucket["_current_idle_streak_start_round"] = frame_index
+        bucket["_current_idle_streak_last_round"] = frame_index
+        if bucket["_current_idle_streak"] > bucket["max_rich_zero_tower_idle_streak"]:
+            bucket["max_rich_zero_tower_idle_streak"] = bucket["_current_idle_streak"]
+            bucket["max_rich_zero_tower_idle_streak_start_round"] = bucket["_current_idle_streak_start_round"]
+            bucket["max_rich_zero_tower_idle_streak_end_round"] = frame_index
+    if len(bucket["samples"]) < 12:
+        bucket["samples"].append(
+            {
+                "round": frame_index,
+                "coins": coins,
+                "base_hp": base_hp,
+                "enemy_base_hp": enemy_base_hp,
+                "action": action,
+                "ops": list(ops),
+            }
+        )
+
+
+def _serialize_window_bucket(bucket: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "zero_tower_rounds": int(bucket["zero_tower_rounds"]),
+        "rich_zero_tower_rounds": int(bucket["rich_zero_tower_rounds"]),
+        "rich_zero_tower_idle_rounds": int(bucket["rich_zero_tower_idle_rounds"]),
+        "rich_zero_tower_build_rounds": int(bucket["rich_zero_tower_build_rounds"]),
+        "rich_zero_tower_other_rounds": int(bucket["rich_zero_tower_other_rounds"]),
+        "max_rich_zero_tower_idle_streak": int(bucket["max_rich_zero_tower_idle_streak"]),
+        "max_rich_zero_tower_idle_streak_start_round": bucket["max_rich_zero_tower_idle_streak_start_round"],
+        "max_rich_zero_tower_idle_streak_end_round": bucket["max_rich_zero_tower_idle_streak_end_round"],
+        "samples": list(bucket["samples"]),
+    }
+
+
+def _state_tower_counts(state: Any) -> list[int]:
+    counts = [0, 0]
+    if not isinstance(state, dict):
+        return counts
+    towers = state.get("towers", [])
+    if not isinstance(towers, list):
+        return counts
+    for tower in towers:
+        if not isinstance(tower, dict):
+            continue
+        try:
+            player = int(tower.get("player", -1))
+            tower_type = int(tower.get("type", -1))
+        except Exception:
+            continue
+        if player not in (0, 1) or tower_type < 0:
+            continue
+        counts[player] += 1
+    return counts
+
+
+def _state_coins(state: Any) -> list[int]:
+    if not isinstance(state, dict):
+        return [0, 0]
+    raw = state.get("coins", [0, 0])
+    if not isinstance(raw, list):
+        return [0, 0]
+    out = [0, 0]
+    for idx in (0, 1):
+        if idx >= len(raw):
+            continue
+        try:
+            out[idx] = int(raw[idx])
+        except Exception:
+            out[idx] = 0
+    return out
+
+
+def _state_camps(state: Any) -> list[int]:
+    if not isinstance(state, dict):
+        return [0, 0]
+    raw = state.get("camps", [0, 0])
+    if not isinstance(raw, list):
+        return [0, 0]
+    out = [0, 0]
+    for idx in (0, 1):
+        if idx >= len(raw):
+            continue
+        try:
+            out[idx] = int(raw[idx])
+        except Exception:
+            out[idx] = 0
+    return out
+
+
 def analyze_single_replay(replay_path: Path) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "replay_file": str(replay_path),
@@ -141,10 +283,73 @@ def analyze_single_replay(replay_path: Path) -> Dict[str, Any]:
     anthp_levels = [0, 0]
     speed_levels = [0, 0]
     winner = None
+    preturn_windows = {
+        0: {
+            **_empty_window_bucket(),
+            "midgame": _empty_window_bucket(),
+            "midgame_not_ahead": _empty_window_bucket(),
+        },
+        1: {
+            **_empty_window_bucket(),
+            "midgame": _empty_window_bucket(),
+            "midgame_not_ahead": _empty_window_bucket(),
+        },
+    }
+    prev_state: Dict[str, Any] | None = None
 
-    for frame in payload:
+    for frame_index, frame in enumerate(payload):
         if not isinstance(frame, dict):
             continue
+        if prev_state is not None:
+            pre_towers = _state_tower_counts(prev_state)
+            pre_coins = _state_coins(prev_state)
+            pre_camps = _state_camps(prev_state)
+            for player_key, player in (("op0", 0), ("op1", 1)):
+                if pre_towers[player] != 0:
+                    continue
+                window = preturn_windows[player]
+                ops = frame.get(player_key, [])
+                action = "idle"
+                labels = []
+                if isinstance(ops, list) and ops:
+                    labels = [_label_action(_op_type(op)) for op in ops]
+                    if all(_op_type(op) == 11 for op in ops):
+                        action = "build"
+                    else:
+                        action = "other"
+                rich = pre_coins[player] >= 30
+                _record_window_bucket(
+                    window,
+                    rich=rich,
+                    action=action,
+                    frame_index=frame_index,
+                    coins=pre_coins[player],
+                    base_hp=pre_camps[player],
+                    enemy_base_hp=pre_camps[1 - player],
+                    ops=labels,
+                )
+                if frame_index >= MIDGAME_ROUND:
+                    _record_window_bucket(
+                        window["midgame"],
+                        rich=rich,
+                        action=action,
+                        frame_index=frame_index,
+                        coins=pre_coins[player],
+                        base_hp=pre_camps[player],
+                        enemy_base_hp=pre_camps[1 - player],
+                        ops=labels,
+                    )
+                    if pre_camps[player] <= pre_camps[1 - player]:
+                        _record_window_bucket(
+                            window["midgame_not_ahead"],
+                            rich=rich,
+                            action=action,
+                            frame_index=frame_index,
+                            coins=pre_coins[player],
+                            base_hp=pre_camps[player],
+                            enemy_base_hp=pre_camps[1 - player],
+                            ops=labels,
+                        )
         for player_key, player in (("op0", 0), ("op1", 1)):
             ops = frame.get(player_key, [])
             if not isinstance(ops, list):
@@ -208,6 +413,7 @@ def analyze_single_replay(replay_path: Path) -> Dict[str, Any]:
             ant_mass_series[player].append(round(ant_mass[player], 3))
             behavior_final[player] = local_behavior[player]
             final_tower_types[player] = local_tower_types[player]
+        prev_state = state
 
     rounds = len(payload)
     base_hp_gap = [a - b for a, b in zip(base_hp_series[0], base_hp_series[1])]
@@ -223,6 +429,14 @@ def analyze_single_replay(replay_path: Path) -> Dict[str, Any]:
             "winner": winner,
             "player_action_counts": {
                 str(player): dict(sorted(counts.items())) for player, counts in action_counts.items()
+            },
+            "preturn_windows": {
+                str(player): {
+                    **_serialize_window_bucket(window),
+                    "midgame": _serialize_window_bucket(window["midgame"]),
+                    "midgame_not_ahead": _serialize_window_bucket(window["midgame_not_ahead"]),
+                }
+                for player, window in preturn_windows.items()
             },
             "final_state": {
                 "base_hp": [base_hp_series[0][-1] if base_hp_series[0] else 0, base_hp_series[1][-1] if base_hp_series[1] else 0],
@@ -250,6 +464,19 @@ def analyze_single_replay(replay_path: Path) -> Dict[str, Any]:
 
 
 def _row_summary(row: Dict[str, Any], replay: Dict[str, Any]) -> Dict[str, Any]:
+    preturn_windows = replay.get("preturn_windows", {})
+    p0_window = preturn_windows.get("0", {}) if isinstance(preturn_windows, dict) else {}
+    p1_window = preturn_windows.get("1", {}) if isinstance(preturn_windows, dict) else {}
+    p0_midgame_not_ahead = p0_window.get("midgame_not_ahead", {}) if isinstance(p0_window, dict) else {}
+    p1_midgame_not_ahead = p1_window.get("midgame_not_ahead", {}) if isinstance(p1_window, dict) else {}
+    try:
+        p0_idle = int(p0_midgame_not_ahead.get("rich_zero_tower_idle_rounds", 0))
+    except Exception:
+        p0_idle = 0
+    try:
+        p1_idle = int(p1_midgame_not_ahead.get("rich_zero_tower_idle_rounds", 0))
+    except Exception:
+        p1_idle = 0
     return {
         "a": str(row.get("a", "")),
         "b": str(row.get("b", "")),
@@ -265,6 +492,10 @@ def _row_summary(row: Dict[str, Any], replay: Dict[str, Any]) -> Dict[str, Any]:
         "ant_counts": replay.get("final_state", {}).get("ant_counts", [0, 0]),
         "metrics": replay.get("metrics", {}),
         "player_action_counts": replay.get("player_action_counts", {}),
+        "preturn_windows": preturn_windows,
+        "p0_midgame_not_ahead_idle_rounds": p0_idle,
+        "p1_midgame_not_ahead_idle_rounds": p1_idle,
+        "max_midgame_not_ahead_idle_rounds": max(p0_idle, p1_idle),
     }
 
 
@@ -306,25 +537,44 @@ def _write_markdown(path: Path, result: Dict[str, Any]) -> None:
         ("Longest Matches", "longest"),
         ("Largest Base HP Swings", "largest_base_hp_gap"),
         ("Largest Ant Mass Swings", "largest_ant_mass_gap"),
+        ("Largest Midgame Not-Ahead Idle Windows", "largest_midgame_not_ahead_idle"),
     ):
         lines.append(f"## {title}")
         lines.append("")
-        lines.append("| a | b | seed | rounds | winner | base_hp | towers | ants | replay |")
-        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+        if key == "largest_midgame_not_ahead_idle":
+            lines.append("| a | b | seed | winner | p0_idle | p1_idle | base_hp | replay |")
+            lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+        else:
+            lines.append("| a | b | seed | rounds | winner | base_hp | towers | ants | replay |")
+            lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
         for item in result.get("notable", {}).get(key, []):
-            lines.append(
-                "| {a} | {b} | {seed} | {rounds} | {winner} | {base_hp} | {towers} | {ants} | `{replay}` |".format(
-                    a=item.get("a", ""),
-                    b=item.get("b", ""),
-                    seed=item.get("seed", 0),
-                    rounds=item.get("rounds", 0),
-                    winner=item.get("winner_seat", "?"),
-                    base_hp=item.get("base_hp", [0, 0]),
-                    towers=item.get("tower_counts", [0, 0]),
-                    ants=item.get("ant_counts", [0, 0]),
-                    replay=item.get("replay_file", ""),
+            if key == "largest_midgame_not_ahead_idle":
+                lines.append(
+                    "| {a} | {b} | {seed} | {winner} | {p0_idle} | {p1_idle} | {base_hp} | `{replay}` |".format(
+                        a=item.get("a", ""),
+                        b=item.get("b", ""),
+                        seed=item.get("seed", 0),
+                        winner=item.get("winner_seat", "?"),
+                        p0_idle=item.get("p0_midgame_not_ahead_idle_rounds", 0),
+                        p1_idle=item.get("p1_midgame_not_ahead_idle_rounds", 0),
+                        base_hp=item.get("base_hp", [0, 0]),
+                        replay=item.get("replay_file", ""),
+                    )
                 )
-            )
+            else:
+                lines.append(
+                    "| {a} | {b} | {seed} | {rounds} | {winner} | {base_hp} | {towers} | {ants} | `{replay}` |".format(
+                        a=item.get("a", ""),
+                        b=item.get("b", ""),
+                        seed=item.get("seed", 0),
+                        rounds=item.get("rounds", 0),
+                        winner=item.get("winner_seat", "?"),
+                        base_hp=item.get("base_hp", [0, 0]),
+                        towers=item.get("tower_counts", [0, 0]),
+                        ants=item.get("ant_counts", [0, 0]),
+                        replay=item.get("replay_file", ""),
+                    )
+                )
         lines.append("")
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -385,6 +635,7 @@ def run_replay_analysis(cfg: ReplayAnalysisConfig) -> Dict[str, Any]:
             "longest": _pick_top(analyzed, "rounds", top),
             "largest_base_hp_gap": _pick_top(analyzed, "metrics.max_base_hp_gap", top),
             "largest_ant_mass_gap": _pick_top(analyzed, "metrics.max_ant_mass_gap", top),
+            "largest_midgame_not_ahead_idle": _pick_top(analyzed, "max_midgame_not_ahead_idle_rounds", top),
         },
         "matches": analyzed,
     }

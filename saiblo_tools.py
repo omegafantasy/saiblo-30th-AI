@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import socket
 import sys
 import time
 import urllib.error
@@ -64,23 +65,40 @@ def resolve_token(cli_token: str) -> Tuple[str, str]:
     return "", ""
 
 
+def is_timeout_error(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    msg = str(exc).strip().lower()
+    return "timed out" in msg or "timeout" in msg
+
+
 def api_request(method: str, path: str, token: str | None = None, payload: dict | None = None, timeout: float = 20.0) -> Any:
     url = f"{API_BASE}{path}"
     data = None
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(url=url, data=data, headers=_headers(token), method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            if not raw.strip():
-                return {}
-            return json.loads(raw)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {e.code} {url}\n{body}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"Request failed: {url} ({e})") from e
+    attempts = 3 if str(method).upper() == "GET" else 1
+    for attempt in range(1, attempts + 1):
+        req = urllib.request.Request(url=url, data=data, headers=_headers(token), method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                if not raw.strip():
+                    return {}
+                return json.loads(raw)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {e.code} {url}\n{body}") from e
+        except urllib.error.URLError as e:
+            if attempt < attempts and is_timeout_error(e.reason if isinstance(e.reason, BaseException) else e):
+                time.sleep(0.5 * attempt)
+                continue
+            raise RuntimeError(f"Request failed: {url} ({e})") from e
+        except (TimeoutError, socket.timeout) as e:
+            if attempt < attempts:
+                time.sleep(0.5 * attempt)
+                continue
+            raise RuntimeError(f"Request timed out: {url} ({e})") from e
 
 
 def api_download(path: str, token: str | None = None, timeout: float = 60.0) -> Tuple[bytes, Dict[str, str]]:
@@ -91,17 +109,26 @@ def api_download(path: str, token: str | None = None, timeout: float = 60.0) -> 
     }
     if token:
         h["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url=url, headers=h, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read()
-            headers = {k.lower(): v for k, v in resp.headers.items()}
-            return body, headers
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {e.code} {url}\n{body}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"Request failed: {url} ({e})") from e
+    for attempt in range(1, 4):
+        req = urllib.request.Request(url=url, headers=h, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+                headers = {k.lower(): v for k, v in resp.headers.items()}
+                return body, headers
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {e.code} {url}\n{body}") from e
+        except urllib.error.URLError as e:
+            if attempt < 3 and is_timeout_error(e.reason if isinstance(e.reason, BaseException) else e):
+                time.sleep(0.5 * attempt)
+                continue
+            raise RuntimeError(f"Request failed: {url} ({e})") from e
+        except (TimeoutError, socket.timeout) as e:
+            if attempt < 3:
+                time.sleep(0.5 * attempt)
+                continue
+            raise RuntimeError(f"Request timed out: {url} ({e})") from e
 
 
 def api_multipart_post(path: str, token: str, data: Dict[str, str], files: Dict[str, tuple[str, bytes, str]], timeout: float = 60.0) -> Any:
@@ -176,6 +203,48 @@ def activate_code(entity_id: int, code_id: str, token: str) -> Dict[str, Any]:
     )
 
 
+def normalize_code_ref(value: Any) -> str:
+    return re.sub(r"[^0-9a-f]", "", str(value or "").strip().lower())
+
+
+def format_uuidish(code_id: Any) -> str:
+    raw = normalize_code_ref(code_id)
+    if len(raw) == 32:
+        return f"{raw[:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:]}"
+    return str(code_id or "").strip()
+
+
+def extract_code_api_id(code: Dict[str, Any]) -> str:
+    url = str(code.get("url", "")).strip()
+    m = re.search(r"/codes/([0-9a-fA-F-]+)/", url)
+    if m:
+        return m.group(1).lower()
+    return format_uuidish(code.get("id", ""))
+
+
+def resolve_entity_code(entity_id: int, token: str, code_id: str = "", version: int | None = None) -> Dict[str, Any]:
+    codes = get_entity_codes(entity_id, token)
+    if version is not None:
+        for code in codes:
+            if isinstance(code, dict) and int(code.get("version", -1)) == int(version):
+                return code
+        raise RuntimeError(f"code version not found on entity {entity_id}: version={version}")
+
+    want = normalize_code_ref(code_id)
+    if not want:
+        raise RuntimeError("either code_id or version is required")
+    for code in codes:
+        if not isinstance(code, dict):
+            continue
+        candidates = {
+            normalize_code_ref(code.get("id", "")),
+            normalize_code_ref(extract_code_api_id(code)),
+        }
+        if want in candidates:
+            return code
+    raise RuntimeError(f"code id not found on entity {entity_id}: {code_id}")
+
+
 def require_token(cli_token: str, action: str) -> str:
     token, source = resolve_token(cli_token)
     if not token:
@@ -186,6 +255,40 @@ def require_token(cli_token: str, action: str) -> str:
         raise SystemExit(2)
     print(f"[token-source] {source}", file=sys.stderr)
     return token
+
+
+def cmd_activate_code(args: argparse.Namespace) -> int:
+    token = require_token(args.token, "activate-code")
+    version = int(args.version) if args.version is not None else None
+    code = resolve_entity_code(
+        entity_id=int(args.entity_id),
+        token=token,
+        code_id=args.code_id,
+        version=version,
+    )
+    compile_status = str(code.get("compile_status", "")).strip()
+    compact_code_id = str(code.get("id", "")).strip()
+    api_code_id = extract_code_api_id(code)
+    out = {
+        "entity_id": int(args.entity_id),
+        "requested_code_id": str(args.code_id or "").strip() or None,
+        "requested_version": version,
+        "resolved_code_id": compact_code_id or None,
+        "resolved_api_code_id": api_code_id or None,
+        "resolved_version": int(code.get("version", 0)) if str(code.get("version", "")).strip() else None,
+        "compile_status": compile_status,
+        "dry_run": bool(args.dry_run),
+        "activated": False,
+    }
+    if args.dry_run:
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+    if compile_status != "编译成功":
+        raise RuntimeError(f"cannot activate code with compile_status={compile_status}")
+    out["activate_response"] = activate_code(int(args.entity_id), api_code_id, token)
+    out["activated"] = True
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0
 
 
 def cmd_recent(args: argparse.Namespace) -> int:
@@ -235,12 +338,13 @@ def cmd_match(args: argparse.Namespace) -> int:
     return 0
 
 
-def create_room_match(game_id: int, entity_a: str, entity_b: str, token: str) -> dict:
+def create_room_match(game_id: int, entity_a: str, entity_b: str, token: str, request_timeout: float = 60.0) -> dict:
     room = api_request(
         "POST",
         "/api/rooms/",
         token=token,
         payload={"game_id": int(game_id), "player_number": 2},
+        timeout=float(request_timeout),
     )
     room_id = room["id"]
 
@@ -250,20 +354,29 @@ def create_room_match(game_id: int, entity_a: str, entity_b: str, token: str) ->
         join_path,
         token=token,
         payload={"order": 0, "enter": True, "is_user": False, "is_remote": False, "entity": entity_a},
+        timeout=float(request_timeout),
     )
     api_request(
         "POST",
         join_path,
         token=token,
         payload={"order": 1, "enter": True, "is_user": False, "is_remote": False, "entity": entity_b},
+        timeout=float(request_timeout),
     )
 
-    begin = api_request("POST", f"/api/rooms/{room_id}/begin_match/", token=token, payload={})
+    begin = api_request(
+        "POST",
+        f"/api/rooms/{room_id}/begin_match/",
+        token=token,
+        payload={},
+        timeout=float(request_timeout),
+    )
     return {
         "room_id": room_id,
         "match_id": begin.get("match_id"),
         "entity_a": entity_a,
         "entity_b": entity_b,
+        "request_timeout": float(request_timeout),
     }
 
 
@@ -289,6 +402,11 @@ def wait_match_finished(match_id: int, token: str, timeout_sec: float, poll_inte
         if time.time() >= deadline:
             return last
         time.sleep(max(0.1, float(poll_interval)))
+
+
+def is_match_finished_state(state: Any) -> bool:
+    value = str(state or "").strip()
+    return bool(value) and value not in ("准备中", "评测中")
 
 
 def pick_filename_from_headers(headers: Dict[str, str], fallback: str) -> str:
@@ -341,7 +459,7 @@ def cmd_room_match(args: argparse.Namespace) -> int:
             a, b = args.entity_b, args.entity_a
         else:
             a, b = args.entity_a, args.entity_b
-        row = create_room_match(args.game_id, a, b, token)
+        row = create_room_match(args.game_id, a, b, token, request_timeout=float(args.request_timeout))
         rows.append(row)
         if args.interval > 0 and i + 1 < args.count:
             time.sleep(args.interval)
@@ -390,13 +508,27 @@ def cmd_download_replay(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     detail = fetch_match_detail(args.match_id, token)
+    if args.wait_finish and not is_match_finished_state(detail.get("state") if detail else None):
+        detail = wait_match_finished(
+            match_id=int(args.match_id),
+            token=token,
+            timeout_sec=float(args.wait_timeout),
+            poll_interval=float(args.poll_interval),
+        )
+
+    detail_path = out_dir / f"match_{int(args.match_id)}.json"
+    save_json(detail_path, detail)
+    if not is_match_finished_state(detail.get("state") if detail else None):
+        raise RuntimeError(
+            f"match {int(args.match_id)} not finished after waiting; "
+            f"state={detail.get('state') if detail else None}; detail_path={detail_path}"
+        )
+
     data, headers = api_download(f"/api/matches/{int(args.match_id)}/download/", token=token)
     fallback = f"match_{int(args.match_id)}.bin"
     filename = pick_filename_from_headers(headers, fallback)
     replay_path = out_dir / filename
     replay_path.write_bytes(data)
-    detail_path = out_dir / f"match_{int(args.match_id)}.json"
-    save_json(detail_path, detail)
     out = {
         "match_id": int(args.match_id),
         "state": detail.get("state"),
@@ -421,7 +553,7 @@ def cmd_run_matches(args: argparse.Namespace) -> int:
         else:
             a, b = args.entity_a, args.entity_b
 
-        started = create_room_match(args.game_id, a, b, token)
+        started = create_room_match(args.game_id, a, b, token, request_timeout=float(args.request_timeout))
         match_id = int(started.get("match_id", 0) or 0)
         detail: Dict[str, Any] = {}
         if match_id > 0:
@@ -435,17 +567,21 @@ def cmd_run_matches(args: argparse.Namespace) -> int:
         replay_path = ""
         detail_path = ""
         replay_size = 0
+        replay_note = ""
         if match_id > 0:
             detail_path_obj = save_dir / f"match_{match_id}.json"
             save_json(detail_path_obj, detail)
             detail_path = str(detail_path_obj)
             if args.download_replay:
-                data, headers = api_download(f"/api/matches/{match_id}/download/", token=token)
-                name = pick_filename_from_headers(headers, f"match_{match_id}.bin")
-                replay_obj = save_dir / name
-                replay_obj.write_bytes(data)
-                replay_path = str(replay_obj)
-                replay_size = len(data)
+                if is_match_finished_state(detail.get("state") if detail else None):
+                    data, headers = api_download(f"/api/matches/{match_id}/download/", token=token)
+                    name = pick_filename_from_headers(headers, f"match_{match_id}.bin")
+                    replay_obj = save_dir / name
+                    replay_obj.write_bytes(data)
+                    replay_path = str(replay_obj)
+                    replay_size = len(data)
+                else:
+                    replay_note = f"skip download because state={detail.get('state') if detail else None}"
 
         rows.append(
             {
@@ -460,6 +596,7 @@ def cmd_run_matches(args: argparse.Namespace) -> int:
                 "detail_path": detail_path,
                 "replay_path": replay_path,
                 "replay_size": replay_size,
+                "replay_note": replay_note,
             }
         )
         if args.interval > 0 and i + 1 < int(args.count):
@@ -486,6 +623,23 @@ def cmd_entities(args: argparse.Namespace) -> int:
         "entities": entities if isinstance(entities, list) else [],
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_codes(args: argparse.Namespace) -> int:
+    token = require_token(args.token, "codes")
+    rows = get_entity_codes(args.entity_id, token)
+    print(
+        json.dumps(
+            {
+                "entity_id": int(args.entity_id),
+                "count": len(rows),
+                "codes": rows,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -573,7 +727,7 @@ def cmd_upload_ai(args: argparse.Namespace) -> int:
     activate_resp: Dict[str, Any] | None = None
     if args.activate and code_id:
         if compile_status == "编译成功":
-            activate_resp = activate_code(entity_id, code_id, token)
+            activate_resp = activate_code(entity_id, extract_code_api_id(uploaded), token)
             activated = True
         else:
             activate_resp = {"skipped": True, "reason": f"compile_status={compile_status}"}
@@ -617,13 +771,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp_match.add_argument("--match-id", type=int, required=True)
     sp_match.set_defaults(func=cmd_match)
 
-    sp_room = sub.add_parser("room-match", help="create room and start match between two entities")
+    sp_room = sub.add_parser("room-match", help="create room and start match between two code ids")
     sp_room.add_argument("--game-id", type=int, default=48)
-    sp_room.add_argument("--entity-a", required=True, help="AI token of seat 0")
-    sp_room.add_argument("--entity-b", required=True, help="AI token of seat 1")
+    sp_room.add_argument("--entity-a", required=True, help="code id of seat 0")
+    sp_room.add_argument("--entity-b", required=True, help="code id of seat 1")
     sp_room.add_argument("--count", type=int, default=1)
     sp_room.add_argument("--swap", action="store_true", help="alternate seat order between runs")
     sp_room.add_argument("--interval", type=float, default=0.0, help="seconds between room creations")
+    sp_room.add_argument("--request-timeout", type=float, default=60.0, help="timeout seconds for room/join/begin POSTs")
     sp_room.set_defaults(func=cmd_room_match)
 
     sp_ladder = sub.add_parser("ladders", help="list game ranklist (ladders)")
@@ -636,15 +791,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp_dl = sub.add_parser("download-replay", help="download replay + detail json for one match")
     sp_dl.add_argument("--match-id", type=int, required=True)
     sp_dl.add_argument("--out-dir", default="replays/saiblo_api")
+    sp_dl.add_argument("--wait-finish", action="store_true", help="wait until match finished before download")
+    sp_dl.add_argument("--wait-timeout", type=float, default=120.0, help="max seconds waiting for match finish")
+    sp_dl.add_argument("--poll-interval", type=float, default=1.5, help="poll interval while waiting")
     sp_dl.set_defaults(func=cmd_download_replay)
 
-    sp_run = sub.add_parser("run-matches", help="create matches, wait finish, and save detail/replay")
+    sp_run = sub.add_parser("run-matches", help="create matches from two code ids, wait finish, and save detail/replay")
     sp_run.add_argument("--game-id", type=int, default=48)
-    sp_run.add_argument("--entity-a", required=True, help="AI token of seat 0")
-    sp_run.add_argument("--entity-b", required=True, help="AI token of seat 1")
+    sp_run.add_argument("--entity-a", required=True, help="code id of seat 0")
+    sp_run.add_argument("--entity-b", required=True, help="code id of seat 1")
     sp_run.add_argument("--count", type=int, default=2)
     sp_run.add_argument("--swap", action="store_true", help="alternate seat order between runs")
     sp_run.add_argument("--interval", type=float, default=0.0, help="seconds between room creations")
+    sp_run.add_argument("--request-timeout", type=float, default=60.0, help="timeout seconds for room/join/begin POSTs")
     sp_run.add_argument("--wait-timeout", type=float, default=120.0, help="max seconds per match waiting")
     sp_run.add_argument("--poll-interval", type=float, default=1.5, help="poll interval while waiting")
     sp_run.add_argument("--save-dir", default="replays/saiblo_api")
@@ -654,6 +813,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp_entities = sub.add_parser("entities", help="list my entities for one game")
     sp_entities.add_argument("--game-id", type=int, default=48)
     sp_entities.set_defaults(func=cmd_entities)
+
+    sp_codes = sub.add_parser("codes", help="list uploaded codes for one entity id")
+    sp_codes.add_argument("--entity-id", type=int, required=True)
+    sp_codes.set_defaults(func=cmd_codes)
+
+    sp_activate = sub.add_parser("activate-code", help="activate one existing code on an entity")
+    sp_activate.add_argument("--entity-id", type=int, required=True)
+    target = sp_activate.add_mutually_exclusive_group(required=True)
+    target.add_argument("--code-id", default="", help="uploaded code id, hyphenated or compact")
+    target.add_argument("--version", type=int, help="uploaded version number on the entity")
+    sp_activate.add_argument("--dry-run", action="store_true", help="resolve target code without sending activation request")
+    sp_activate.set_defaults(func=cmd_activate_code)
 
     sp_upload = sub.add_parser("upload-ai", help="upload source file to one AI entity (create if needed)")
     sp_upload.add_argument("--game-id", type=int, default=48)

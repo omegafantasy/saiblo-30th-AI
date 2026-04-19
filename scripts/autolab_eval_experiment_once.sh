@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/www"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/automation_pause.sh"
 PY_BIN="${PY_BIN:-$(command -v python3 || command -v python || true)}"
 EVAL_SCRIPT="$ROOT_DIR/autolab_eval.py"
 REPLAY_ANALYZE_SCRIPT="$ROOT_DIR/autolab_replay_analyze.py"
 DOC_OUT="${EXPERIMENT_DOC_OUT:-$ROOT_DIR/docs/generated/iter_eval_latest.md}"
 RUNTIME_SCOPE="${EXPERIMENT_RUNTIME_SCOPE:-iter}"
-JOBS="${EXPERIMENT_JOBS:-8}"
-JOBS_CAP="${AUTOMATION_MAX_JOBS_CAP:-8}"
+JOBS="${EXPERIMENT_JOBS:-32}"
+JOBS_CAP="${AUTOMATION_MAX_JOBS_CAP:-32}"
 CPU_POLICY="${EXPERIMENT_CPU_POLICY:-all}"
 ALLOW_ARG_OVERRIDE="${EXPERIMENT_ALLOW_ARG_OVERRIDE:-0}"
 REPLAY_ANALYZE="${EXPERIMENT_REPLAY_ANALYZE:-1}"

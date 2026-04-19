@@ -8,7 +8,7 @@ import os
 from autolab.evaluator import run_from_args
 
 
-DEFAULT_MAX_JOBS_CAP = 8
+DEFAULT_MAX_JOBS_CAP = 24
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--adaptive-new-boost", type=float, default=2.0, help="extra weight scale for low-game versions")
     p.add_argument("--runtime-scope", default="", help="optional runtime sub-scope, outputs under autolab/runtime/scopes/<scope>")
     p.add_argument("--write-latest", action=argparse.BooleanOptionalAction, default=True, help="whether to write latest.json in selected runtime scope")
-    p.add_argument("--save-replays", action=argparse.BooleanOptionalAction, default=True, help="persist replay files for every match")
+    p.add_argument("--save-replays", action=argparse.BooleanOptionalAction, default=False, help="persist replay files for every match")
     p.add_argument("--doc-out", default="", help="optional markdown output path")
     return p
 

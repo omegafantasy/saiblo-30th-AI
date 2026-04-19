@@ -9,6 +9,7 @@ THRESHOLD_GB="${THRESHOLD_GB:-50}"
 THRESHOLD_BYTES=$((THRESHOLD_GB * 1024 * 1024 * 1024))
 LOG_FILE="${LOG_FILE:-$RUNTIME_DIR/runtime_gc.log}"
 LOCK_FILE="${LOCK_FILE:-/tmp/autolab-runtime-gc.lock}"
+TRANSIENT_TTL_MIN="${TRANSIENT_TTL_MIN:-180}"
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -24,6 +25,45 @@ runtime_size_bytes() {
   else
     du -sB1 "$RUNTIME_DIR" | awk '{print $1}'
   fi
+}
+
+cleanup_transient_dir() {
+  local target="$1"
+  local label="$2"
+  if [ ! -d "$target" ]; then
+    return 0
+  fi
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      "$target"/*) ;;
+      *)
+        log "unsafe transient delete blocked: $path"
+        continue
+        ;;
+    esac
+    rm -rf -- "$path"
+    log "deleted transient $label: $path"
+  done < <(find "$target" -mindepth 1 -maxdepth 1 -mmin +"$TRANSIENT_TTL_MIN" -print 2>/dev/null | sort)
+}
+
+cleanup_scope_transients() {
+  local scopes_root="$1"
+  if [ ! -d "$scopes_root" ]; then
+    return 0
+  fi
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      "$scopes_root"/*/tmp_replays/*|"$scopes_root"/*/match_work/*|"$scopes_root"/*/packages/*|"$scopes_root"/*/replays/*) ;;
+      *)
+        log "unsafe scope transient delete blocked: $path"
+        continue
+        ;;
+    esac
+    rm -rf -- "$path"
+    log "deleted scope transient: $path"
+  done < <(find "$scopes_root" -mindepth 2 -maxdepth 3 \( -path "$scopes_root/*/tmp_replays/*" -o -path "$scopes_root/*/match_work/*" -o -path "$scopes_root/*/packages/*" -o -path "$scopes_root/*/replays/*" \) -mmin +"$TRANSIENT_TTL_MIN" -print 2>/dev/null | sort)
 }
 
 if command -v flock >/dev/null 2>&1; then
@@ -44,6 +84,12 @@ if automation_is_paused; then
   log "paused by $(automation_pause_file)"
   exit 0
 fi
+
+cleanup_transient_dir "$RUNTIME_DIR/tmp_replays" "tmp_replays"
+cleanup_transient_dir "$RUNTIME_DIR/match_work" "match_work"
+cleanup_transient_dir "$RUNTIME_DIR/packages" "packages"
+cleanup_transient_dir "$RUNTIME_DIR/tmp_smoke" "tmp_smoke"
+cleanup_scope_transients "$RUNTIME_DIR/scopes"
 
 if [ ! -d "$REPLAYS_DIR" ]; then
   log "replays dir missing: $REPLAYS_DIR"

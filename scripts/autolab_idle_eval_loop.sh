@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/www"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/automation_pause.sh"
 EVAL_SCRIPT="$ROOT_DIR/autolab_eval.py"
 LOG_DIR="$ROOT_DIR/autolab/runtime"
 LOG_FILE="$LOG_DIR/idle_eval_loop.log"
 PY_BIN="${PY_BIN:-$(command -v python3 || command -v python || true)}"
 ITER_LOCK_FILE="${ITER_LOCK_FILE:-/tmp/codex-iterate.lock}"
+PAUSE_ON_ITER_ACTIVE="${AUTO_EVAL_PAUSE_ON_ITER_ACTIVE:-0}"
+RUN_ONCE="${AUTOLAB_IDLE_RUN_ONCE:-0}"
 
 EVAL_MODE="${AUTO_EVAL_MODE:-adaptive}"
-MAX_JOBS="${AUTO_EVAL_MAX_JOBS:-8}"
-MAX_JOBS_CAP="${AUTOMATION_MAX_JOBS_CAP:-8}"
+MAX_JOBS="${AUTO_EVAL_MAX_JOBS:-24}"
+MAX_JOBS_CAP="${AUTOMATION_MAX_JOBS_CAP:-24}"
 GAMES_PER_PAIR="${AUTO_EVAL_GAMES_PER_PAIR:-6}"
 ANCHOR_GAMES_PER_PAIR="${AUTO_EVAL_ANCHOR_GAMES_PER_PAIR:-1}"
 ADAPTIVE_PAIR_COUNT="${AUTO_EVAL_ADAPTIVE_PAIR_COUNT:-45}"
@@ -54,20 +56,28 @@ log "START autolab idle loop python=$PY_BIN mode=$EVAL_MODE max_jobs=$MAX_JOBS g
 while true; do
   if automation_is_paused; then
     log "PAUSED by $(automation_pause_file) sleep=${SLEEP_FAIL}s"
+    if [[ "$RUN_ONCE" == "1" ]]; then
+      exit 0
+    fi
     sleep "$SLEEP_FAIL"
     continue
   fi
 
-  # Priority policy: when codex iterate holds its lock, pause production eval.
-  exec {iter_lock_fd}> "$ITER_LOCK_FILE"
-  if ! flock -n "$iter_lock_fd"; then
-    log "ITER_ACTIVE skip production eval sleep=${SLEEP_ITER_ACTIVE}s"
+  if [[ "$PAUSE_ON_ITER_ACTIVE" == "1" ]]; then
+    # Optional policy: pause eval while codex iterate holds its lock.
+    exec {iter_lock_fd}> "$ITER_LOCK_FILE"
+    if ! flock -n "$iter_lock_fd"; then
+      log "ITER_ACTIVE skip production eval sleep=${SLEEP_ITER_ACTIVE}s"
+      exec {iter_lock_fd}>&-
+      if [[ "$RUN_ONCE" == "1" ]]; then
+        exit 0
+      fi
+      sleep "$SLEEP_ITER_ACTIVE"
+      continue
+    fi
+    flock -u "$iter_lock_fd"
     exec {iter_lock_fd}>&-
-    sleep "$SLEEP_ITER_ACTIVE"
-    continue
   fi
-  flock -u "$iter_lock_fd"
-  exec {iter_lock_fd}>&-
 
   set +e
   "$PY_BIN" "$EVAL_SCRIPT" \
@@ -86,6 +96,7 @@ while true; do
     --idle-sample-sec "$IDLE_SAMPLE_SEC" \
     --pin-cpu \
     --auto-promote \
+    --no-save-replays \
     --doc-out "$ROOT_DIR/docs/generated/idle_eval_latest.md" \
     >> "$LOG_FILE" 2>&1
   rc=$?
@@ -93,9 +104,15 @@ while true; do
 
   if [[ $rc -eq 0 ]]; then
     log "EVAL_OK sleep=${SLEEP_OK}s"
+    if [[ "$RUN_ONCE" == "1" ]]; then
+      exit 0
+    fi
     sleep "$SLEEP_OK"
   else
     log "EVAL_SKIP_OR_FAIL rc=$rc sleep=${SLEEP_FAIL}s"
+    if [[ "$RUN_ONCE" == "1" ]]; then
+      exit 0
+    fi
     sleep "$SLEEP_FAIL"
   fi
 done

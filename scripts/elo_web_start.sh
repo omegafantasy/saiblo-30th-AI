@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/www"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/automation_pause.sh"
 RUNTIME_DIR="$ROOT_DIR/autolab/runtime"
 PID_FILE="$RUNTIME_DIR/elo_web.pid"
