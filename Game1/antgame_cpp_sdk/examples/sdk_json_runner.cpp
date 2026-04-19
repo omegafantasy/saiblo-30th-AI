@@ -486,6 +486,24 @@ json run_native_trace(const json &request) {
     return json{{"trace", trace}};
 }
 
+json run_public_advance(const json &request) {
+    antgame::sdk::NativeSimulator simulator(
+        request.value("seed", 0ULL),
+        request.value("movement_policy", std::string("enhanced")),
+        request.value("cold_handle_rule_illegal", false));
+    simulator.sync_public_round_state(parse_public_round_state(request.at("public_state")));
+    const int steps = std::max(request.value("steps", 1), 0);
+    for (int step = 0; step < steps && !simulator.terminal(); ++step) {
+        simulator.advance_round();
+    }
+
+    json out;
+    out["terminal"] = simulator.terminal();
+    out["winner"] = simulator.winner();
+    out["state"] = public_round_state_to_json(simulator.to_public_round_state());
+    return out;
+}
+
 json run_game_trace(const json &request) {
     const bool cold_handle_rule_illegal = request.value("cold_handle_rule_illegal", false);
     Game game;
@@ -546,6 +564,8 @@ int main() {
             response = run_public_eval(request);
         } else if (mode == "native_trace") {
             response = run_native_trace(request);
+        } else if (mode == "public_advance") {
+            response = run_public_advance(request);
         } else if (mode == "game_trace") {
             response = run_game_trace(request);
         } else {

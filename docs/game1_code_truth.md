@@ -131,6 +131,7 @@
 补充：
 
 - `Basic` 最大血量 `10`
+- `Basic` 从新建开始射程就是 `1`
 - 其余塔最大血量 `15`
 - 升级回满血
 - 降级按血量比例继承
@@ -146,6 +147,8 @@
 
 当前实现中：
 
+- `Lightning Storm` 对蚂蚁走普通受伤流程，不是真实伤害
+- 因此 `Lightning Storm` 会先消耗 `Emergency Evasion` / 战斗蚁初始回避层
 - `Lightning Storm` 与 `EMP` 的中心都会在回合末随机漂移到当前格或相邻合法格
 - `Deflector` 与 `Emergency Evasion` 还会写入寻路吸引场
 

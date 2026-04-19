@@ -15,8 +15,19 @@ ANTGAME_DIR = GAME1_DIR / "Ant-Game"
 sys.path.insert(0, str(ANTGAME_DIR))
 
 from SDK.backend.engine import GameState, MOVEMENT_POLICY_ENHANCED, MOVEMENT_POLICY_LEGACY, PublicRoundState
-from SDK.backend.model import Operation
-from SDK.utils.constants import OperationType, PLAYER_BASES, STRATEGIC_BUILD_ORDER, SUPER_WEAPON_STATS, SuperWeaponType, TOWER_UPGRADE_TREE
+from SDK.backend.model import Ant, Operation, Tower
+from SDK.utils.constants import (
+    AntBehavior,
+    AntKind,
+    OperationType,
+    PLAYER_BASES,
+    STRATEGIC_BUILD_ORDER,
+    SUPER_WEAPON_STATS,
+    SuperWeaponType,
+    TOWER_UPGRADE_TREE,
+    TowerType,
+)
+from SDK.utils.geometry import hex_distance
 
 
 GAME_DIR = ANTGAME_DIR / "game"
@@ -450,3 +461,95 @@ def test_cpp_sdk_public_state_matches_python_public_queries(
             assert _normalize_cpp_public_round_state(cpp_out["state"]) == _normalize_python_public_round_state(
                 after_state.to_public_round_state()
             )
+
+
+def test_cpp_sdk_lightning_storm_matches_python_evasion_blocking() -> None:
+    seed = 2
+    storm = Operation(OperationType.USE_LIGHTNING_STORM, 6, 12)
+    turns = [([], []) for _ in range(21)]
+    turns.append(([storm], []))
+
+    python_state = GameState.initial(
+        seed=seed,
+        movement_policy=MOVEMENT_POLICY_ENHANCED,
+        cold_handle_rule_illegal=True,
+    )
+    for _ in range(21):
+        python_state.resolve_turn([], [])
+
+    storm_range = SUPER_WEAPON_STATS[SuperWeaponType.LIGHTNING_STORM].attack_range
+    target_before = {
+        ant.ant_id: (ant.hp, ant.shield)
+        for ant in python_state.ants
+        if ant.player == 1
+        and ant.kind == AntKind.COMBAT
+        and ant.shield > 0
+        and hex_distance(ant.x, ant.y, storm.arg0, storm.arg1) <= storm_range
+    }
+    assert target_before
+
+    python_state.resolve_turn([storm], [])
+    target_after = {ant.ant_id: (ant.hp, ant.shield) for ant in python_state.ants}
+    assert any(
+        ant_id in target_after
+        and target_after[ant_id][0] == before_hp
+        and target_after[ant_id][1] == before_shield - 1
+        for ant_id, (before_hp, before_shield) in target_before.items()
+    )
+
+    payload = _trace_request(
+        seed=seed,
+        movement_policy=MOVEMENT_POLICY_ENHANCED,
+        cold_handle_rule_illegal=True,
+        turns=turns,
+    )
+    native_trace = _run_cpp_sdk_runner({"mode": "native_trace", **payload})["trace"]
+    game_trace = _run_cpp_sdk_runner({"mode": "game_trace", **payload})["trace"]
+    expected_state = _normalize_python_public_round_state(python_state.to_public_round_state())
+    expected_without_effects = {key: value for key, value in expected_state.items() if key != "active_effects"}
+
+    native_state = _normalize_cpp_public_round_state(native_trace[-1]["state"])
+    game_state = _normalize_cpp_public_round_state(game_trace[-1]["state"])
+
+    assert {key: value for key, value in native_state.items() if key != "active_effects"} == expected_without_effects
+    assert {key: value for key, value in game_state.items() if key != "active_effects"} == expected_without_effects
+
+
+def test_cpp_sdk_public_advance_keeps_basic_range_one() -> None:
+    seed = 0
+    baseline_state = GameState.initial(seed=seed, movement_policy=MOVEMENT_POLICY_ENHANCED)
+    baseline_state.towers = [Tower(0, 0, 6, 9, TowerType.BASIC, cooldown_clock=0.0, hp=10)]
+    baseline_state.ants = [
+        Ant(
+            0,
+            1,
+            7,
+            7,
+            hp=20,
+            level=0,
+            kind=AntKind.WORKER,
+            behavior=AntBehavior.DEFAULT,
+        )
+    ]
+    public_state = baseline_state.to_public_round_state()
+
+    python_state = GameState.initial(seed=seed, movement_policy=MOVEMENT_POLICY_ENHANCED)
+    python_state.sync_public_round_state(public_state)
+    python_state.advance_round()
+    tracked_ant = next(ant for ant in python_state.ants if ant.ant_id == 0)
+    assert tracked_ant.hp == 20
+
+    cpp_out = _run_cpp_sdk_runner(
+        {
+            "mode": "public_advance",
+            "seed": seed,
+            "movement_policy": MOVEMENT_POLICY_ENHANCED,
+            "cold_handle_rule_illegal": False,
+            "public_state": _public_round_state_to_payload(public_state),
+            "steps": 1,
+        }
+    )
+
+    assert _normalize_cpp_public_round_state(cpp_out["state"]) == _normalize_python_public_round_state(
+        python_state.to_public_round_state()
+    )
