@@ -10,6 +10,20 @@
 
 namespace antgame::sdk {
 
+struct NativeAntHiddenState {
+    int ant_id = -1;
+    int shield = 0;
+    bool defend = false;
+    bool evasion_control_free_on_break = false;
+    bool is_frozen = false;
+    int behavior_rounds = 0;
+    int behavior_expiry = 0;
+    int target_x = -1;
+    int target_y = -1;
+    bool has_pending_behavior = false;
+    AntBehavior pending_behavior = AntBehavior::Default;
+};
+
 struct ResolveResult {
     bool terminal = false;
     int winner = -1;
@@ -44,11 +58,13 @@ class NativeSimulator {
     int next_tower_id() const;
     bool terminal() const;
     int winner() const;
+    std::vector<NativeAntHiddenState> ant_hidden_states() const;
     const std::string &movement_policy() const;
     uint64_t seed() const;
     bool cold_handle_rule_illegal() const;
 
     PublicRoundState to_public_round_state() const;
+    void reseed_future(uint64_t seed);
     std::vector<Operation> apply_operation_list(int player, const std::vector<Operation> &operations);
     ResolveResult advance_round();
     ResolveResult resolve_turn(const std::vector<Operation> &ops0, const std::vector<Operation> &ops1);

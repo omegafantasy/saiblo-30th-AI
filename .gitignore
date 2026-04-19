@@ -20,6 +20,8 @@ venv/
 *.dylib
 *.dll
 *.exe
+Game1/antgame_cpp_sdk/build/
+Game1/antgame_ai_cpp/*/build/
 # C++ AI binaries (source should be tracked)
 ai_cpp/v*/ai_v[0-9]*
 !ai_cpp/v*/ai_v*.cpp
@@ -38,6 +40,13 @@ result.txt
 autolab/runtime/
 autolab/versions/
 docs/generated/
+Game1/antgame_ai_cpp/eval_batch_*/
+Game1/antgame_ai_cpp/tmp_eval_*/
+Game1/antgame_ai_cpp/eval_complete_samples/
+Game1/antgame_ai_cpp/eval_complete_samples_game_main
+Game1/antgame_ai_cpp/partial_debug_seed*/
+Game1/antgame_ai_cpp/tools/__pycache__/
+docs/game1_strength_eval_*.md
 
 # Secrets / local credentials
 past_AIs/zdata.py

@@ -274,6 +274,30 @@ struct sdk::NativeSimulator::Impl {
         return out;
     }
 
+    std::vector<sdk::NativeAntHiddenState> ant_hidden_states() const {
+        std::vector<sdk::NativeAntHiddenState> out;
+        out.reserve(game.ants.size());
+        for (const auto &ant : game.ants) {
+            out.push_back(sdk::NativeAntHiddenState{
+                ant.get_id(),
+                ant.shield,
+                ant.defend,
+                ant.evasion_control_free_on_break,
+                ant.is_frozen || ant.all_frozen,
+                ant.behavior_rounds,
+                ant.behavior_expiry,
+                ant.target_x,
+                ant.target_y,
+                ant.has_pending_behavior,
+                static_cast<sdk::AntBehavior>(static_cast<int>(ant.pending_behavior)),
+            });
+        }
+        std::sort(out.begin(), out.end(), [](const sdk::NativeAntHiddenState &lhs, const sdk::NativeAntHiddenState &rhs) {
+            return lhs.ant_id < rhs.ant_id;
+        });
+        return out;
+    }
+
     std::vector<sdk::Operation> apply_operation_list(int player_id, const std::vector<sdk::Operation> &operations) {
         std::vector<sdk::Operation> illegal;
         illegal.reserve(operations.size());
@@ -540,6 +564,10 @@ int sdk::NativeSimulator::winner() const {
     return impl_->winner_value;
 }
 
+std::vector<sdk::NativeAntHiddenState> sdk::NativeSimulator::ant_hidden_states() const {
+    return impl_->ant_hidden_states();
+}
+
 const std::string &sdk::NativeSimulator::movement_policy() const {
     return impl_->movement_policy_value;
 }
@@ -554,6 +582,12 @@ bool sdk::NativeSimulator::cold_handle_rule_illegal() const {
 
 sdk::PublicRoundState sdk::NativeSimulator::to_public_round_state() const {
     return impl_->to_public_round_state();
+}
+
+void sdk::NativeSimulator::reseed_future(uint64_t seed) {
+    impl_->seed_value = seed;
+    impl_->game.random_seed = seed;
+    impl_->game.rng_state = (seed ^ kRngMultiplier) & kRngMask;
 }
 
 std::vector<sdk::Operation> sdk::NativeSimulator::apply_operation_list(int player, const std::vector<sdk::Operation> &operations) {

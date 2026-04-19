@@ -1,5 +1,6 @@
 CXX ?= g++
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Iinclude -I../Ant-Game/game/include
+CXXFLAGS ?= -std=c++17 -O3 -DNDEBUG -Wall -Wextra -Iinclude -I../Ant-Game/game/include
+DEPFLAGS := -MMD -MP
 AR ?= ar
 
 BUILD_DIR := build
@@ -7,24 +8,26 @@ LIB := $(BUILD_DIR)/libantgame_cpp_sdk.a
 GAME_SOURCES := $(filter-out ../Ant-Game/game/src/main.cpp,$(wildcard ../Ant-Game/game/src/*.cpp))
 GAME_OBJECTS := $(patsubst ../Ant-Game/game/src/%.cpp,$(BUILD_DIR)/game/%.o,$(GAME_SOURCES))
 SDK_OBJECTS := $(BUILD_DIR)/native_sim.o
+DEPS := $(GAME_OBJECTS:.o=.d) $(SDK_OBJECTS:.o=.d)
 LIB_OBJECTS := $(GAME_OBJECTS) $(SDK_OBJECTS)
 
 EXAMPLE_BIN := $(BUILD_DIR)/sdk_example_ai
 SMOKE_BIN := $(BUILD_DIR)/sdk_smoke
 JSON_RUNNER_BIN := $(BUILD_DIR)/sdk_json_runner
-HEAVY_BASELINE_BENCH_BIN := $(BUILD_DIR)/sdk_heavy_baseline_bench
+RANDOM_SEARCH_BENCH_BIN := $(BUILD_DIR)/sdk_random_search_bench
+ROLLOUT_PROBE_BIN := $(BUILD_DIR)/sdk_rollout_probe
 
 .PHONY: all clean smoke
 
-all: $(LIB) $(EXAMPLE_BIN) $(SMOKE_BIN) $(JSON_RUNNER_BIN) $(HEAVY_BASELINE_BENCH_BIN)
+all: $(LIB) $(EXAMPLE_BIN) $(SMOKE_BIN) $(JSON_RUNNER_BIN) $(RANDOM_SEARCH_BENCH_BIN) $(ROLLOUT_PROBE_BIN)
 
 $(BUILD_DIR)/game/%.o: ../Ant-Game/game/src/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/native_sim.o: src/native_sim.cpp include/antgame_sdk/sdk.hpp include/antgame_sdk/native_sim.hpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(LIB): $(LIB_OBJECTS)
 	@mkdir -p $(dir $@)
@@ -42,7 +45,11 @@ $(JSON_RUNNER_BIN): examples/sdk_json_runner.cpp $(LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
 
-$(HEAVY_BASELINE_BENCH_BIN): examples/sdk_heavy_baseline_bench.cpp $(LIB)
+$(RANDOM_SEARCH_BENCH_BIN): examples/sdk_random_search_bench.cpp include/antgame_sdk/random_search_baseline.hpp $(LIB)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
+
+$(ROLLOUT_PROBE_BIN): examples/sdk_rollout_probe.cpp include/antgame_sdk/random_search_baseline.hpp $(LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
 
@@ -51,3 +58,5 @@ smoke: $(SMOKE_BIN)
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+-include $(DEPS)

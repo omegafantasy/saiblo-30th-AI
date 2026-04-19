@@ -22,6 +22,8 @@
 5. 协议与 C++ 侧公共状态：
    `Game1/antgame_cpp_sdk/include/antgame_sdk/sdk.hpp`
    `Game1/antgame_cpp_sdk/include/antgame_sdk/native_sim.hpp`
+6. 若要审计某个具体回合的动作价值：
+   `Game1/antgame_cpp_sdk/examples/sdk_rollout_probe.cpp`
 
 ## 3. 当前 Game1 代码结构
 
@@ -147,8 +149,12 @@
 
 当前实现中：
 
+- 超级武器在玩家操作阶段部署后立即进入生效状态
 - `Lightning Storm` 对蚂蚁走普通受伤流程，不是真实伤害
+- `Lightning Storm` 部署当下就会先结算一次范围内敌蚁伤害，并用内部 `last_trigger_round` 防止同回合攻击阶段重复触发
 - 因此 `Lightning Storm` 会先消耗 `Emergency Evasion` / 战斗蚁初始回避层
+- `EMP Blaster` 部署当下即会影响后续操作，因此玩家 `0` 本回合放下的 `EMP` 可以直接让玩家 `1` 同回合在覆盖区内的建/升/降塔失败
+- `Emergency Evasion` 部署当下会立刻把范围内己蚁回避层补到至少 `2`
 - `Lightning Storm` 与 `EMP` 的中心都会在回合末随机漂移到当前格或相邻合法格
 - `Deflector` 与 `Emergency Evasion` 还会写入寻路吸引场
 
@@ -171,7 +177,11 @@
 
 ## 11. 回合顺序
 
-native 当前主流程：
+native 当前整回合主流程：
+
+0. 玩家操作阶段：先玩家 `0`，再玩家 `1`
+   - 超武在这里部署并立即生效
+   - 因此同回合后手操作会受到前手刚放下的 `EMP` 影响
 
 1. `attack_ants`
 2. `move_ants`
@@ -194,6 +204,11 @@ native 当前主流程：
 - 超武冷却
 - 生效中的区域效果
 
+补充：
+
+- `active_effects` 公开的是 `type / player / x / y / remaining_turns`
+- native / Python engine 内部还维护 `last_trigger_round` 一类非公开字段，用于保证“部署即生效”的效果不会在同回合重复结算
+
 所有进一步判断都应从这些公开字段和当前代码结算逻辑出发，不再引用历史策略页。
 
 ## 13. 操作编号
@@ -212,14 +227,17 @@ native 当前主流程：
 
 - C++ baseline 源码：`Game1/antgame_ai_cpp/cpp_heavy_baseline/ai_cpp_heavy_baseline.cpp`
 - C++ baseline 构建：`Game1/antgame_ai_cpp/cpp_heavy_baseline/Makefile`
-- baseline 决策逻辑复用：`Game1/antgame_cpp_sdk/include/antgame_sdk/heavy_baseline.hpp`
-- 当前 baseline 通过持久化 `NativeSimulator` 保留隐藏状态，并在少量候选动作上做轻量 rollout
+- baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`
+- `Game1/antgame_cpp_sdk/include/antgame_sdk/heavy_baseline.hpp` 仅保留兼容包装
+- 若要对可疑动作做原生复算，应使用 `Game1/antgame_cpp_sdk/examples/sdk_rollout_probe.cpp`，不要只看 baseline 自身 rollout 分数
 - 当前基线策略重点：
-  - 高操作惩罚，默认偏向 `hold`
-  - 战斗蚁近基地时优先空城/拆塔返还
-  - 安全窗口内先做 `Heavy`，再尝试 `Bewitch`
-  - `Bewitch` 存活后再补少量 `Quick`
-  - 只考虑少量建塔点、`UpgradeGeneratedAnt`、`Lightning Storm`
+  - 简化终点评估 + `hold` 偏置，默认偏向少操作
+  - 仅搜索 `Build/Upgrade/Downgrade/Lightning`
+  - 当前不考虑基地升级
+  - 主防守搜索忽略我方蚂蚁，使用共享进攻 EV 补钱
+  - `Upgrade` 当前只作为单回合动作
+  - 双回合只保留核心九格 `Build -> Upgrade` 与 `Downgrade -> Followup`
+  - 终点评估关注基地血量、塔剩余价值、塔奖励、敌蚂蚁威胁和钱
 
 ## 15. 胜负判定
 

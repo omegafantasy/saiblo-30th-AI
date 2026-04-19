@@ -1,0 +1,6 @@
+.pytest_cache/
+build/game/
+build/*.d
+build/*.o
+build/repro_*.json
+build_asan/

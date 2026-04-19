@@ -1,5 +1,5 @@
 CXX ?= g++
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -I../../antgame_cpp_sdk/include -I../../Ant-Game/game/include
+CXXFLAGS ?= -std=c++17 -O3 -DNDEBUG -Wall -Wextra -I../../antgame_cpp_sdk/include -I../../Ant-Game/game/include
 AR ?= ar
 
 BUILD_DIR := build
@@ -11,7 +11,7 @@ BIN := $(BUILD_DIR)/ai_cpp_heavy_baseline
 
 all: $(BIN)
 
-$(BIN): ai_cpp_heavy_baseline.cpp $(LIB)
+$(BIN): ai_cpp_heavy_baseline.cpp ../../antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp $(LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
 

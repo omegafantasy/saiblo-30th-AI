@@ -1,11 +1,13 @@
 # cpp_heavy_baseline
 
-这是当前保留的 Game1 C++ baseline 入口。
+这是当前保留的 Game1 C++ AI 入口。
+
+目录名仍然沿用历史命名，但内部决策逻辑已经不是旧版 `heavy` 脚本基线，而是新的随机搜索基线。
 
 ## 1. 目标
 
 - 基于 `Game1/antgame_cpp_sdk` 提供协议与公共状态
-- 复用 `heavy_baseline.hpp` 中的轻量搜索决策逻辑
+- 复用 `random_search_baseline.hpp` 中的轻量随机搜索逻辑
 - 保持代码简单、可维护、可高速模拟
 
 ## 2. 文件
@@ -36,11 +38,16 @@ bash package_ai.sh cpp_heavy_baseline
 - 规则真值仍以 `../../Ant-Game/` 为准
 - 外置 SDK 位于 `../../antgame_cpp_sdk/`
 - 若 `Ant-Game` 更新，需要先同步确认 SDK 与 baseline 仍然匹配
+- 当前已按最新规则同步：超武部署当回合立即生效，后手同回合会受前手 `EMP` 影响
 
 ## 6. 当前策略轮廓
 
-- 对大多数动作施加显式高惩罚，默认优先 `hold`
-- 战斗蚁近基地时偏向空城、拆塔返还
-- 安全窗口内先做 `Heavy`，再尝试 `Bewitch`
-- `Bewitch` 稳定后只补少量 `Quick`
-- 搜索只覆盖少量建塔点、`UpgradeGeneratedAnt`、`Lightning Storm`
+- 使用简化终点评估与 `hold` 偏置，默认倾向少操作
+- 主搜索只考虑我方塔/敌方蚂蚁/我方闪电/敌方已激活超武
+- 仅搜索 `Build/Upgrade/Downgrade/Lightning/Hold`
+- 当前不考虑任何基地升级
+- `Upgrade` 当前只作为单回合动作搜索
+- 双回合只保留：
+  - 核心九格 `C1/C2/C3/L1/L2/L3/R1/R2/R3` 上的 `Build -> Upgrade`
+  - `Downgrade -> Followup`，且若第二步是建塔，也只允许核心九格
+- 用共享进攻 EV 与终点估值驱动动作选择

@@ -515,6 +515,53 @@ def test_cpp_sdk_lightning_storm_matches_python_evasion_blocking() -> None:
     assert {key: value for key, value in game_state.items() if key != "active_effects"} == expected_without_effects
 
 
+def test_cpp_sdk_public_state_same_turn_emp_blocks_later_player_tower_op() -> None:
+    seed = 0
+    build_x, build_y = STRATEGIC_BUILD_ORDER[1][0]
+    emp = Operation(OperationType.USE_EMP_BLASTER, build_x, build_y)
+    build = Operation(OperationType.BUILD_TOWER, build_x, build_y)
+
+    python_state = GameState.initial(seed=seed, movement_policy=MOVEMENT_POLICY_ENHANCED)
+    python_state.coins[0] = 200
+    snapshot = python_state.to_public_round_state()
+
+    first_eval = _run_cpp_sdk_runner(
+        {
+            "mode": "public_eval",
+            "seed": seed,
+            "movement_policy": MOVEMENT_POLICY_ENHANCED,
+            "cold_handle_rule_illegal": False,
+            "player": 0,
+            "public_state": _public_round_state_to_payload(snapshot),
+            "query_operations": [_operation_tokens(emp)],
+            "apply_operations": [_operation_tokens(emp)],
+            "slot_points": [],
+        }
+    )
+    state_after_emp = first_eval["state"]
+
+    python_after_emp = GameState.initial(seed=seed, movement_policy=MOVEMENT_POLICY_ENHANCED)
+    python_after_emp.sync_public_round_state(snapshot)
+    python_after_emp.apply_operation_list(0, [emp])
+    assert python_after_emp.can_apply_operation(1, build) is False
+
+    second_eval = _run_cpp_sdk_runner(
+        {
+            "mode": "public_eval",
+            "seed": seed,
+            "movement_policy": MOVEMENT_POLICY_ENHANCED,
+            "cold_handle_rule_illegal": False,
+            "player": 1,
+            "public_state": state_after_emp,
+            "query_operations": [_operation_tokens(build)],
+            "apply_operations": [],
+            "slot_points": [],
+        }
+    )
+
+    assert second_eval["can_apply"] == [False]
+
+
 def test_cpp_sdk_public_advance_keeps_basic_range_one() -> None:
     seed = 0
     baseline_state = GameState.initial(seed=seed, movement_policy=MOVEMENT_POLICY_ENHANCED)
