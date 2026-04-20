@@ -5,13 +5,14 @@ AR ?= ar
 BUILD_DIR := build
 CPP_SDK_DIR := ../../antgame_cpp_sdk
 LIB := $(CPP_SDK_DIR)/build/libantgame_cpp_sdk.a
+SDK_HEADERS := $(wildcard $(CPP_SDK_DIR)/include/antgame_sdk/*.hpp)
 BIN := $(BUILD_DIR)/ai_cpp_heavy_baseline
 
 .PHONY: all clean
 
 all: $(BIN)
 
-$(BIN): ai_cpp_heavy_baseline.cpp ../../antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp $(LIB)
+$(BIN): ai_cpp_heavy_baseline.cpp $(SDK_HEADERS) $(LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
 

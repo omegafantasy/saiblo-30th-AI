@@ -4,20 +4,19 @@
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <cstdint>
-#include <functional>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <queue>
 #include <sstream>
 #include <string>
 #include <tuple>
-#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "antgame_sdk/native_sim.hpp"
+#include "antgame_sdk/random_search_params.hpp"
 #include "antgame_sdk/sdk.hpp"
 
 namespace antgame::sdk {
@@ -55,61 +54,315 @@ constexpr double kTeleportRatio = 0.1;
 constexpr int kLightningAntDamage = 20;
 constexpr int kLightningTowerDamage = 3;
 constexpr int kLightningTowerInterval = 5;
+constexpr int kMaxSimTowers = 64;
+constexpr int kMaxSimAnts = 512;
+constexpr int kMaxSimEffects = 32;
+constexpr int kMaxMoveCandidates = 6;
+constexpr int kMaxImportantAnts = 3;
+constexpr int kMaxValidCells = kMapSize * kMapSize;
+constexpr int kMaxReverseHeapEntries = 8192;
+constexpr int kMaxCachedRange = 4;
+constexpr int kMaxRangeCells = 61;
 
-struct Config {
-    int defense_rollouts = 100;
-    int defense_plan_initial_rollouts = 20;
-    int defense_plan_rollout_step = 20;
-    int defense_horizon = 6;
-    int important_ant_limit = 3;
-    int move_option_limit = 3;
-    int lightning_center_limit = 6;
-    int lightning_rollouts_per_center = 18;
-    int lightning_horizon = 15;
-    int offense_rollouts = 128;
-    int offense_horizon = 6;
-    double defense_plan_keep_fraction = 0.5;
+[[noreturn]] inline void fixed_storage_overflow(const char *label) {
+    std::cerr << "random_search_baseline fixed storage overflow: " << label << '\n';
+    std::abort();
+}
 
-    double hold_bias = 50.0;
-    double generic_action_penalty = 0.0;
-    double build_penalty = 0.0;
-    double upgrade_penalty = 0.0;
-    double downgrade_penalty = 0.0;
-    double lightning_penalty = 0.0;
-    double two_step_plan_penalty = 0.0;
-    double peace_action_extra_penalty = 0.0;
-    double peace_build_extra_penalty = 0.0;
-    double peace_downgrade_extra_penalty = 0.0;
-    double peace_lightning_extra_penalty = 0.0;
-    double ring1_build_extra_penalty = 0.0;
-    double emergency_downgrade_penalty_discount = 0.0;
-    double emergency_heavy_upgrade_penalty_discount = 0.0;
-    double emergency_lightning_penalty_discount = 0.0;
-    double build_cost_penalty_scale = 0.0;
-    double upgrade_cost_penalty_scale = 0.0;
-    double heavy_upgrade_penalty_discount = 0.0;
+template <typename T, int Capacity>
+struct FixedList {
+    int count = 0;
+    T data[Capacity]{};
 
-    double base_hp_weight = 200.0;
-    double tower_value_weight = 10.0;
-    double tower_threat_weight = 1.35;
-    double ant_threat_weight = 1.0;
-    double money_weight = 10.0;
-    double heavy_tower_bonus = 30.0;
-    double bewitch_tower_bonus = 100.0;
-    double heavy_candidate_bonus = 0.0;
-    double heavy_emergency_bonus = 0.0;
+    int size() const { return count; }
+    bool empty() const { return count <= 0; }
+    void clear() { count = 0; }
+    void reserve(int) {}
 
-    double base_ant_threat_cap = 200.0;
-    double combat_tower_threat_coin_ratio = 0.3;
-    double randomized_threat_scale = 0.6;
-    double bewitched_threat_scale = 0.25;
-    double control_free_threat_scale = 1.0;
+    T &operator[](int index) { return data[index]; }
+    const T &operator[](int index) const { return data[index]; }
+
+    T *begin() { return data; }
+    T *end() { return data + count; }
+    const T *begin() const { return data; }
+    const T *end() const { return data + count; }
+
+    T &back() { return data[count - 1]; }
+    const T &back() const { return data[count - 1]; }
+
+    void push_back(const T &value) {
+        if (count >= Capacity) {
+            fixed_storage_overflow(__PRETTY_FUNCTION__);
+        }
+        data[count++] = value;
+    }
+
+    template <typename... Args>
+    T &emplace_back(Args... args) {
+        if (count >= Capacity) {
+            fixed_storage_overflow(__PRETTY_FUNCTION__);
+        }
+        data[count] = T{args...};
+        ++count;
+        return data[count - 1];
+    }
+
+    void pop_back() {
+        if (count > 0) {
+            --count;
+        }
+    }
+
+    void resize(int new_size) {
+        if (new_size < 0 || new_size > Capacity) {
+            fixed_storage_overflow(__PRETTY_FUNCTION__);
+        }
+        if (new_size > count) {
+            for (int index = count; index < new_size; ++index) {
+                data[index] = T{};
+            }
+        }
+        count = new_size;
+    }
+
+    void erase_at(int index) {
+        if (index < 0 || index >= count) {
+            return;
+        }
+        for (int pos = index + 1; pos < count; ++pos) {
+            data[pos - 1] = data[pos];
+        }
+        --count;
+    }
 };
 
-inline const Config &config() {
-    static const Config cfg;
-    return cfg;
+struct DoubleGrid {
+    float data[kMapSize][kMapSize]{};
+
+    float *operator[](int x) { return data[x]; }
+    const float *operator[](int x) const { return data[x]; }
+};
+
+struct IntGrid {
+    int data[kMapSize][kMapSize]{};
+
+    int *operator[](int x) { return data[x]; }
+    const int *operator[](int x) const { return data[x]; }
+};
+
+struct FloatCells {
+    float data[kMaxValidCells]{};
+
+    float &operator[](int index) { return data[index]; }
+    const float &operator[](int index) const { return data[index]; }
+};
+
+struct IntPair {
+    int first = -1;
+    int second = -1;
+};
+
+struct MoveCandidate {
+    int direction = kNoMove;
+    int nx = -1;
+    int ny = -1;
+};
+
+struct GeometryCache {
+    int valid_count = 0;
+    int index_by_cell[kMapSize][kMapSize]{};
+    int cell_x[kMaxValidCells]{};
+    int cell_y[kMaxValidCells]{};
+    int neighbor_by_dir[kMaxValidCells][6]{};
+    int distance[kMaxValidCells][kMaxValidCells]{};
+    int range_count[kMaxValidCells][kMaxCachedRange + 1]{};
+    int range_cells[kMaxValidCells][kMaxCachedRange + 1][kMaxRangeCells]{};
+    int base_distance = 0;
+
+    GeometryCache() {
+        for (int x = 0; x < kMapSize; ++x) {
+            for (int y = 0; y < kMapSize; ++y) {
+                index_by_cell[x][y] = -1;
+            }
+        }
+        for (int index = 0; index < kMaxValidCells; ++index) {
+            for (int direction = 0; direction < 6; ++direction) {
+                neighbor_by_dir[index][direction] = -1;
+            }
+        }
+        for (int x = 0; x < kMapSize; ++x) {
+            for (int y = 0; y < kMapSize; ++y) {
+                if (!is_valid_pos(x, y)) {
+                    continue;
+                }
+                index_by_cell[x][y] = valid_count;
+                cell_x[valid_count] = x;
+                cell_y[valid_count] = y;
+                ++valid_count;
+            }
+        }
+        for (int index = 0; index < valid_count; ++index) {
+            const int x = cell_x[index];
+            const int y = cell_y[index];
+            for (int direction = 0; direction < 6; ++direction) {
+                const int nx = x + kOffset[y & 1][direction][0];
+                const int ny = y + kOffset[y & 1][direction][1];
+                if (!is_valid_pos(nx, ny)) {
+                    continue;
+                }
+                neighbor_by_dir[index][direction] = index_by_cell[nx][ny];
+            }
+        }
+        for (int lhs = 0; lhs < valid_count; ++lhs) {
+            for (int rhs = 0; rhs < valid_count; ++rhs) {
+                distance[lhs][rhs] = hex_distance(cell_x[lhs], cell_y[lhs], cell_x[rhs], cell_y[rhs]);
+            }
+        }
+        for (int center = 0; center < valid_count; ++center) {
+            for (int other = 0; other < valid_count; ++other) {
+                const int dist = distance[center][other];
+                for (int range = dist; range <= kMaxCachedRange; ++range) {
+                    const int count = range_count[center][range];
+                    if (count >= kMaxRangeCells) {
+                        fixed_storage_overflow("GeometryCache::range_cells");
+                    }
+                    range_cells[center][range][count] = other;
+                    range_count[center][range] = count + 1;
+                }
+            }
+        }
+        base_distance =
+            distance[index_by_cell[kPlayerBases[0].first][kPlayerBases[0].second]][index_by_cell[kPlayerBases[1].first][kPlayerBases[1].second]];
+    }
+};
+
+inline const GeometryCache &geometry_cache() {
+    static const GeometryCache cache;
+    return cache;
 }
+
+inline int cell_index_of(int x, int y) {
+    if (x < 0 || x >= kMapSize || y < 0 || y >= kMapSize) {
+        return -1;
+    }
+    return geometry_cache().index_by_cell[x][y];
+}
+
+inline int cell_distance_by_index(int lhs, int rhs) {
+    if (lhs < 0 || rhs < 0) {
+        return 0;
+    }
+    return geometry_cache().distance[lhs][rhs];
+}
+
+inline int cell_distance_fast(int x0, int y0, int x1, int y1) {
+    const int lhs = cell_index_of(x0, y0);
+    const int rhs = cell_index_of(x1, y1);
+    if (lhs >= 0 && rhs >= 0) {
+        return cell_distance_by_index(lhs, rhs);
+    }
+    return hex_distance(x0, y0, x1, y1);
+}
+
+struct ForcedMove {
+    int ant_id = -1;
+    int direction = kNoMove;
+};
+
+struct ReverseHeapNode {
+    int cell_index = -1;
+    float total = 0.0f;
+    float damage = 0.0f;
+};
+
+struct ReverseHeap {
+    int count = 0;
+    ReverseHeapNode nodes[kMaxReverseHeapEntries]{};
+
+    static bool better(const ReverseHeapNode &lhs, const ReverseHeapNode &rhs) {
+        if (lhs.total != rhs.total) {
+            return lhs.total < rhs.total;
+        }
+        return lhs.damage < rhs.damage;
+    }
+
+    bool empty() const { return count <= 0; }
+
+    void push(const ReverseHeapNode &node) {
+        if (count >= kMaxReverseHeapEntries) {
+            fixed_storage_overflow("ReverseHeap::push");
+        }
+        int index = count++;
+        nodes[index] = node;
+        while (index > 0) {
+            const int parent = (index - 1) / 2;
+            if (!better(nodes[index], nodes[parent])) {
+                break;
+            }
+            std::swap(nodes[index], nodes[parent]);
+            index = parent;
+        }
+    }
+
+    ReverseHeapNode pop() {
+        const ReverseHeapNode top = nodes[0];
+        --count;
+        if (count > 0) {
+            nodes[0] = nodes[count];
+            int index = 0;
+            while (true) {
+                const int left = index * 2 + 1;
+                const int right = left + 1;
+                int best = index;
+                if (left < count && better(nodes[left], nodes[best])) {
+                    best = left;
+                }
+                if (right < count && better(nodes[right], nodes[best])) {
+                    best = right;
+                }
+                if (best == index) {
+                    break;
+                }
+                std::swap(nodes[index], nodes[best]);
+                index = best;
+            }
+        }
+        return top;
+    }
+};
+
+template <int Capacity>
+struct IdCountMap {
+    int count = 0;
+    int keys[Capacity]{};
+    int values[Capacity]{};
+
+    void clear() { count = 0; }
+
+    int get(int key) const {
+        for (int index = 0; index < count; ++index) {
+            if (keys[index] == key) {
+                return values[index];
+            }
+        }
+        return 0;
+    }
+
+    void increment(int key) {
+        for (int index = 0; index < count; ++index) {
+            if (keys[index] == key) {
+                ++values[index];
+                return;
+            }
+        }
+        if (count >= Capacity) {
+            fixed_storage_overflow("IdCountMap::increment");
+        }
+        keys[count] = key;
+        values[count] = 1;
+        ++count;
+    }
+};
 
 inline std::uint64_t mix_seed(std::uint64_t seed, std::uint64_t value) {
     seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
@@ -190,7 +443,7 @@ struct SearchEffect {
 
     bool active() const { return remaining_turns > 0; }
     bool in_range(int tx, int ty) const {
-        return active() && hex_distance(x, y, tx, ty) <= weapon_stats(weapon_type).attack_range;
+        return active() && cell_distance_fast(x, y, tx, ty) <= weapon_stats(weapon_type).attack_range;
     }
 };
 
@@ -203,20 +456,20 @@ struct MoveOption {
 };
 
 struct MoveOptionsResult {
-    std::vector<MoveOption> options;
-    std::vector<std::pair<int, int>> annotated_cells;
-    std::vector<int> annotated_towers;
+    FixedList<MoveOption, kMaxMoveCandidates> options;
+    FixedList<IntPair, kMaxMoveCandidates> annotated_cells;
+    FixedList<int, kMaxMoveCandidates> annotated_towers;
 };
 
 struct ComboRolloutSpec {
-    std::vector<std::pair<int, int>> forced_moves;
+    FixedList<ForcedMove, kMaxImportantAnts> forced_moves;
     double probability = 1.0;
     double danger = 0.0;
     int samples = 1;
 };
 
 struct OffensiveExpectation {
-    std::array<double, 6> money_gain_by_round = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    std::array<double, 8> money_gain_by_round = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 };
 
 struct OperationCandidate {
@@ -234,6 +487,7 @@ struct SearchPlan {
     int blocked_x = -1;
     int blocked_y = -1;
     int blocked_tower_id = -1;
+    double terminal_bonus = 0.0;
     double heuristic = 0.0;
     double penalty = 0.0;
 };
@@ -244,19 +498,10 @@ struct PlanResult {
 };
 
 struct PenaltyBreakdown {
-    double generic = 0.0;
-    double build = 0.0;
-    double upgrade = 0.0;
     double downgrade = 0.0;
     double lightning = 0.0;
-    double cost_scaled = 0.0;
-    double peace_extra = 0.0;
-    double ring1_build = 0.0;
-    double two_step = 0.0;
     double hold_bias = 0.0;
-    double heavy_discount = 0.0;
     double emergency_discount = 0.0;
-    double other = 0.0;
     double total = 0.0;
 };
 
@@ -270,6 +515,7 @@ struct TerminalEvaluationBreakdown {
     double ant_threat_score = 0.0;
     double money_raw = 0.0;
     double money_score = 0.0;
+    double terminal_bonus_score = 0.0;
     double total = 0.0;
 
     TerminalEvaluationBreakdown &operator+=(const TerminalEvaluationBreakdown &other) {
@@ -282,6 +528,7 @@ struct TerminalEvaluationBreakdown {
         ant_threat_score += other.ant_threat_score;
         money_raw += other.money_raw;
         money_score += other.money_score;
+        terminal_bonus_score += other.terminal_bonus_score;
         total += other.total;
         return *this;
     }
@@ -325,17 +572,6 @@ inline std::string op_key(const Operation &operation) {
     std::ostringstream oss;
     oss << static_cast<int>(operation.op_type) << ':' << operation.arg0 << ':' << operation.arg1;
     return oss.str();
-}
-
-inline bool debug_enabled() {
-    static const bool enabled = []() {
-        const char *value = std::getenv("ANTGAME_CPP_BASELINE_DEBUG");
-        if (value == nullptr || *value == '\0') {
-            return false;
-        }
-        return std::string(value) != "0";
-    }();
-    return enabled;
 }
 
 enum class DebugMode : int {
@@ -428,6 +664,16 @@ inline bool lightning_tower_strike_turn(int remaining_duration) {
     return active_turn > 0 && active_turn % kLightningTowerInterval == 0;
 }
 
+inline bool enemy_superweapon_window_active(const PublicState &state, int player) {
+    const int enemy = 1 - player;
+    for (const auto &effect : state.active_effects) {
+        if (effect.player == enemy && effect.remaining_turns > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline int attack_cooldown_reset(TowerType type) {
     const double speed = tower_stats(type).speed;
     if (speed < 1.0) {
@@ -451,46 +697,11 @@ inline bool should_self_destruct(const SearchAnt &ant) {
 inline int half_plane_delta(int player, int x, int y) {
     const auto [own_x, own_y] = kPlayerBases[player];
     const auto [enemy_x, enemy_y] = kPlayerBases[1 - player];
-    return hex_distance(x, y, own_x, own_y) - hex_distance(x, y, enemy_x, enemy_y);
+    return cell_distance_fast(x, y, own_x, own_y) - cell_distance_fast(x, y, enemy_x, enemy_y);
 }
 
 inline bool ant_in_own_half(int player, int x, int y) {
     return half_plane_delta(player, x, y) <= 0;
-}
-
-inline double visible_enemy_pressure(const PublicState &state, int player, int x, int y) {
-    const int enemy = 1 - player;
-    double score = 0.0;
-    for (const auto &ant : state.ants) {
-        if (ant.player != enemy || !ant.is_alive()) {
-            continue;
-        }
-        const int distance = hex_distance(x, y, ant.x, ant.y);
-        if (distance > 7) {
-            continue;
-        }
-        const double base = ant.kind == AntKind::Combat ? 6.0 : 2.2;
-        const double hp_ratio = static_cast<double>(std::max(ant.hp, 1)) / std::max(ant.max_hp(), 1);
-        score += base * hp_ratio / (1.0 + static_cast<double>(distance));
-    }
-    return score;
-}
-
-inline double visible_cluster_score(const PublicState &state, int player, int x, int y, int range) {
-    const int enemy = 1 - player;
-    double score = 0.0;
-    for (const auto &ant : state.ants) {
-        if (ant.player != enemy || !ant.is_alive()) {
-            continue;
-        }
-        const int distance = hex_distance(x, y, ant.x, ant.y);
-        if (distance > range) {
-            continue;
-        }
-        score += ant.kind == AntKind::Combat ? 4.5 : 1.6;
-        score += static_cast<double>(ant.hp) / std::max(1, ant.max_hp());
-    }
-    return score;
 }
 
 struct ImmediateThreatContext {
@@ -513,7 +724,7 @@ inline ImmediateThreatContext immediate_threat_context(const PublicState &state,
         if (ant.player != enemy || !ant.is_alive()) {
             continue;
         }
-        const int base_distance = hex_distance(base_x, base_y, ant.x, ant.y);
+        const int base_distance = cell_distance_fast(base_x, base_y, ant.x, ant.y);
         const double behavior_scale = behavior_threat_scale(ant.behavior);
         if (ant.kind == AntKind::Combat) {
             context.nearest_combat_base_distance = std::min(context.nearest_combat_base_distance, base_distance);
@@ -529,7 +740,7 @@ inline ImmediateThreatContext immediate_threat_context(const PublicState &state,
                 if (tower.player != player || tower.hp <= 0) {
                     continue;
                 }
-                const int distance = hex_distance(tower.x, tower.y, ant.x, ant.y);
+                const int distance = cell_distance_fast(tower.x, tower.y, ant.x, ant.y);
                 if (distance > 3) {
                     continue;
                 }
@@ -553,22 +764,24 @@ inline ImmediateThreatContext immediate_threat_context(const PublicState &state,
 inline PenaltyBreakdown operation_penalty_breakdown(const PublicState &state, int player, const SearchPlan &plan) {
     const auto &cfg = config();
     PenaltyBreakdown penalty;
+    const bool enemy_superweapon_window = enemy_superweapon_window_active(state, player);
     auto apply_single = [&](const Operation &operation) {
-        penalty.generic += cfg.generic_action_penalty;
         switch (operation.op_type) {
-        case OperationType::BuildTower:
-            penalty.build += cfg.build_penalty;
-            penalty.cost_scaled += static_cast<double>(-state.operation_income(player, operation)) * cfg.build_cost_penalty_scale;
-            break;
-        case OperationType::UpgradeTower:
-            penalty.upgrade += cfg.upgrade_penalty;
-            penalty.cost_scaled += static_cast<double>(-state.operation_income(player, operation)) * cfg.upgrade_cost_penalty_scale;
-            break;
         case OperationType::DowngradeTower:
             penalty.downgrade += cfg.downgrade_penalty;
+            {
+                const int refund = state.operation_income(player, operation);
+                if (refund > 0) {
+                    penalty.downgrade += static_cast<double>(refund) * cfg.money_weight *
+                                         cfg.downgrade_refund_penalty_scale;
+                }
+            }
             break;
         case OperationType::UseLightningStorm:
             penalty.lightning += cfg.lightning_penalty;
+            if (enemy_superweapon_window) {
+                penalty.emergency_discount += cfg.enemy_superweapon_window_lightning_bonus;
+            }
             break;
         default:
             break;
@@ -580,15 +793,10 @@ inline PenaltyBreakdown operation_penalty_breakdown(const PublicState &state, in
     if (plan.has_second) {
         apply_single(plan.second);
     }
-    if (plan.has_first && plan.has_second) {
-        penalty.two_step += cfg.two_step_plan_penalty;
-    }
     if (!plan.has_first && !plan.has_second) {
         penalty.hold_bias += cfg.hold_bias;
     }
-    penalty.total = penalty.generic + penalty.build + penalty.upgrade + penalty.downgrade + penalty.lightning +
-                    penalty.cost_scaled + penalty.peace_extra + penalty.ring1_build + penalty.two_step + penalty.other -
-                    penalty.hold_bias - penalty.heavy_discount - penalty.emergency_discount;
+    penalty.total = penalty.downgrade + penalty.lightning - penalty.hold_bias - penalty.emergency_discount;
     return penalty;
 }
 
@@ -603,31 +811,15 @@ inline TowerType downgrade_target_type(TowerType tower_type) {
     return static_cast<TowerType>(static_cast<int>(tower_type) / 10);
 }
 
-inline int basic_hp_after_full_downgrade(TowerType tower_type, int hp) {
-    if (tower_type == TowerType::Basic) {
-        return hp;
-    }
-    int current_hp = hp;
-    TowerType current_type = tower_type;
-    while (current_type != TowerType::Basic) {
-        const int previous_max_hp = tower_stats(current_type).max_hp;
-        current_type = downgrade_target_type(current_type);
-        const int downgraded_max_hp = tower_stats(current_type).max_hp;
-        current_hp = previous_max_hp > 0
-                         ? std::max(1, (downgraded_max_hp * current_hp + previous_max_hp - 1) / previous_max_hp)
-                         : downgraded_max_hp;
-    }
-    return current_hp;
-}
-
-inline double tower_full_salvage_value(const std::vector<SearchTower> &towers) {
+template <typename TowerList>
+inline double tower_full_salvage_value(const TowerList &towers) {
     struct BasicRefund {
         double ratio = 0.0;
     };
 
     double total = 0.0;
-    std::vector<BasicRefund> basics;
-    basics.reserve(towers.size());
+    BasicRefund basics[kMaxSimTowers]{};
+    int basic_count = 0;
 
     for (const auto &tower : towers) {
         if (!tower.alive()) {
@@ -645,19 +837,29 @@ inline double tower_full_salvage_value(const std::vector<SearchTower> &towers) {
                              ? std::max(1, (downgraded_max_hp * current_hp + previous_max_hp - 1) / previous_max_hp)
                              : downgraded_max_hp;
         }
-        basics.push_back(BasicRefund{static_cast<double>(std::max(current_hp, 0)) /
-                                     static_cast<double>(std::max(1, tower_stats(TowerType::Basic).max_hp))});
+        if (basic_count >= kMaxSimTowers) {
+            fixed_storage_overflow("tower_full_salvage_value basics");
+        }
+        basics[basic_count++] = BasicRefund{static_cast<double>(std::max(current_hp, 0)) /
+                                            static_cast<double>(std::max(1, tower_stats(TowerType::Basic).max_hp))};
     }
 
-    std::sort(basics.begin(), basics.end(), [](const BasicRefund &lhs, const BasicRefund &rhs) {
-        return lhs.ratio > rhs.ratio;
-    });
-    int tower_count = static_cast<int>(basics.size());
-    for (const auto &basic : basics) {
-        if (tower_count <= 0) {
-            break;
+    for (int i = 0; i < basic_count; ++i) {
+        int best = i;
+        for (int j = i + 1; j < basic_count; ++j) {
+            if (basics[j].ratio > basics[best].ratio) {
+                best = j;
+            }
         }
-        total += static_cast<double>(tower_build_cost_for_count(tower_count - 1)) * kTowerDowngradeRefundRatio * basic.ratio;
+        if (best != i) {
+            const BasicRefund tmp = basics[i];
+            basics[i] = basics[best];
+            basics[best] = tmp;
+        }
+    }
+    int tower_count = basic_count;
+    for (int index = 0; index < basic_count; ++index) {
+        total += static_cast<double>(tower_build_cost_for_count(tower_count - 1)) * kTowerDowngradeRefundRatio * basics[index].ratio;
         --tower_count;
     }
     return total;
@@ -700,50 +902,11 @@ inline double tower_type_bonus(TowerType tower_type) {
 }
 
 inline double tower_position_bonus(int player, int x, int y) {
-    if (player == 0) {
-        if (x == 4 && y == 9) {
-            return 30.0;
-        }
-        if (x == 5 && y == 9) {
-            return 25.0;
-        }
-        if (x == 6 && y == 9) {
-            return 20.0;
-        }
-        if ((x == 5 && y == 7) || (x == 5 && y == 11)) {
-            return 16.0;
-        }
-        if ((x == 5 && y == 6) || (x == 5 && y == 12)) {
-            return 10.0;
-        }
-        if ((x == 6 && y == 7) || (x == 6 && y == 11)) {
-            return 8.0;
-        }
-        return 0.0;
-    }
-    if (x == 14 && y == 9) {
-        return 30.0;
-    }
-    if (x == 13 && y == 9) {
-        return 25.0;
-    }
-    if (x == 12 && y == 9) {
-        return 20.0;
-    }
-    if ((x == 13 && y == 7) || (x == 13 && y == 11)) {
-        return 16.0;
-    }
-    if ((x == 12 && y == 6) || (x == 12 && y == 12)) {
-        return 10.0;
-    }
-    if ((x == 12 && y == 7) || (x == 12 && y == 11)) {
-        return 8.0;
-    }
-    return 0.0;
+    return random_search_position_bonus(old_ai_position_code_at(player, x, y));
 }
 
 inline bool is_two_step_core_slot(int player, int x, int y) {
-    return tower_position_bonus(player, x, y) > 0.0;
+    return is_core_build_position(old_ai_position_code_at(player, x, y));
 }
 
 inline double ant_base_distance_factor(int base_distance) {
@@ -781,10 +944,10 @@ class DefenseSimulator {
     int lightning_cooldown = 0;
     bool terminal = false;
 
-    std::vector<SearchTower> towers;
-    std::vector<SearchAnt> ants;
-    std::vector<SearchEffect> my_effects;
-    std::vector<SearchEffect> enemy_effects;
+    FixedList<SearchTower, kMaxSimTowers> towers;
+    FixedList<SearchAnt, kMaxSimAnts> ants;
+    FixedList<SearchEffect, kMaxSimEffects> my_effects;
+    FixedList<SearchEffect, kMaxSimEffects> enemy_effects;
 
     DefenseSimulator clone() const { return *this; }
 
@@ -797,15 +960,12 @@ class DefenseSimulator {
                 tower_lookup.index_by_cell[x][y] = -1;
             }
         }
-        tower_lookup.index_by_id.clear();
-        tower_lookup.index_by_id.reserve(towers.size());
-        for (int index = 0; index < static_cast<int>(towers.size()); ++index) {
-            const auto &tower = towers[static_cast<std::size_t>(index)];
+        for (int index = 0; index < towers.size(); ++index) {
+            const auto &tower = towers[index];
             if (!tower.alive()) {
                 continue;
             }
             tower_lookup.index_by_cell[tower.x][tower.y] = index;
-            tower_lookup.index_by_id.emplace(tower.tower_id, index);
         }
         tower_lookup.dirty = false;
     }
@@ -824,21 +984,21 @@ class DefenseSimulator {
     }
 
     SearchTower *tower_by_id(int tower_id) {
-        refresh_tower_lookup();
-        const auto it = tower_lookup.index_by_id.find(tower_id);
-        if (it == tower_lookup.index_by_id.end()) {
-            return nullptr;
+        for (int index = 0; index < towers.size(); ++index) {
+            if (towers[index].tower_id == tower_id) {
+                return &towers[index];
+            }
         }
-        return &towers[static_cast<std::size_t>(it->second)];
+        return nullptr;
     }
 
     const SearchTower *tower_by_id(int tower_id) const {
-        refresh_tower_lookup();
-        const auto it = tower_lookup.index_by_id.find(tower_id);
-        if (it == tower_lookup.index_by_id.end()) {
-            return nullptr;
+        for (int index = 0; index < towers.size(); ++index) {
+            if (towers[index].tower_id == tower_id) {
+                return &towers[index];
+            }
         }
-        return &towers[static_cast<std::size_t>(it->second)];
+        return nullptr;
     }
 
     bool emp_blocks(int x, int y) const {
@@ -869,8 +1029,8 @@ class DefenseSimulator {
         return tower != nullptr && tower->alive();
     }
 
-    std::vector<std::tuple<int, int, int>> legal_move_candidates(const SearchAnt &ant) const {
-        std::vector<std::tuple<int, int, int>> out;
+    FixedList<MoveCandidate, kMaxMoveCandidates> legal_move_candidates(const SearchAnt &ant) const {
+        FixedList<MoveCandidate, kMaxMoveCandidates> out;
         bool allow_backtrack = ant.behavior == AntBehavior::Random || ant.behavior == AntBehavior::Bewitched;
         auto collect = [&](bool allow_reverse) {
             out.clear();
@@ -883,7 +1043,7 @@ class DefenseSimulator {
                 if (!ant_can_target_cell(ant, nx, ny)) {
                     continue;
                 }
-                out.emplace_back(direction, nx, ny);
+                out.push_back(MoveCandidate{direction, nx, ny});
             }
         };
         collect(allow_backtrack);
@@ -891,16 +1051,16 @@ class DefenseSimulator {
             collect(true);
         }
         if (out.empty()) {
-            out.emplace_back(kNoMove, ant.x, ant.y);
+            out.push_back(MoveCandidate{kNoMove, ant.x, ant.y});
         }
         return out;
     }
 
-    using Grid = std::array<std::array<double, kMapSize>, kMapSize>;
+    using Grid = DoubleGrid;
 
     struct ReversePathPlan {
-        Grid total_cost{};
-        Grid damage_cost{};
+        FloatCells total_cost{};
+        FloatCells damage_cost{};
     };
 
     struct TowerPathCache {
@@ -911,21 +1071,25 @@ class DefenseSimulator {
     struct MoveCache {
         bool static_risk_dirty = true;
         bool move_cache_dirty = true;
+        unsigned char walkable_cells[kMaxValidCells]{};
+        unsigned char walkable_neighbor_count[kMaxValidCells]{};
+        int walkable_neighbors[kMaxValidCells][6]{};
         Grid damage_risk_field{};
         Grid control_risk_field{};
         Grid effect_pull_field{};
         Grid traffic_field{};
-        Grid worker_costs{};
-        Grid combat_base_costs{};
+        IntGrid occupied_count{};
+        IntGrid adjacent_count{};
+        FloatCells worker_costs{};
+        FloatCells combat_base_costs{};
         Grid reservations{};
-        std::vector<TowerPathCache> tower_plans;
-        std::unordered_map<int, int> tower_claims;
+        FixedList<TowerPathCache, kMaxSimTowers> tower_plans;
+        IdCountMap<kMaxSimTowers> tower_claims;
     };
 
     struct TowerLookupCache {
         bool dirty = true;
-        std::array<std::array<int, kMapSize>, kMapSize> index_by_cell{};
-        std::unordered_map<int, int> index_by_id;
+        IntGrid index_by_cell{};
     };
 
     mutable MoveCache move_cache;
@@ -939,26 +1103,21 @@ class DefenseSimulator {
     double ant_effect_pull_weight(const SearchAnt &ant) const { return ant.kind == AntKind::Combat ? 0.35 : 0.55; }
 
     double crowding_penalty(const SearchAnt &ant, int x, int y) const {
-        double penalty = 0.0;
-        for (const auto &other : ants) {
-            if (other.ant_id == ant.ant_id || !other.alive()) {
-                continue;
-            }
-            const int dist = hex_distance(x, y, other.x, other.y);
-            if (dist == 0) {
-                penalty += 1.0;
-            } else if (dist == 1) {
-                penalty += 0.35;
-            }
+        double penalty =
+            static_cast<double>(move_cache.occupied_count[x][y]) + 0.35 * static_cast<double>(move_cache.adjacent_count[x][y]);
+        const int self_distance = cell_distance_fast(x, y, ant.x, ant.y);
+        if (self_distance == 0) {
+            penalty -= 1.0;
+        } else if (self_distance == 1) {
+            penalty -= 0.35;
         }
         return penalty;
     }
 
     double move_progress_score(const SearchAnt &ant, int x, int y, int target_x, int target_y) const {
-        const int current_distance = hex_distance(ant.x, ant.y, target_x, target_y);
-        const int next_distance = hex_distance(x, y, target_x, target_y);
-        const int base_distance =
-            hex_distance(kPlayerBases[0].first, kPlayerBases[0].second, kPlayerBases[1].first, kPlayerBases[1].second);
+        const int current_distance = cell_distance_fast(ant.x, ant.y, target_x, target_y);
+        const int next_distance = cell_distance_fast(x, y, target_x, target_y);
+        const int base_distance = geometry_cache().base_distance;
 
         double score = static_cast<double>(current_distance - next_distance);
         if (next_distance == current_distance) {
@@ -992,38 +1151,85 @@ class DefenseSimulator {
 
     Grid compute_traffic_field() const {
         Grid traffic{};
+        const auto &geometry = geometry_cache();
         for (const auto &ant : ants) {
             if (!ant.alive()) {
                 continue;
             }
             traffic[ant.x][ant.y] += 1.0;
-            for (int direction = 0; direction < 6; ++direction) {
-                const int nx = ant.x + kOffset[ant.y & 1][direction][0];
-                const int ny = ant.y + kOffset[ant.y & 1][direction][1];
-                if (ant_can_walk_to(nx, ny, enemy)) {
-                    traffic[nx][ny] += 0.35;
-                }
+            const int ant_index = cell_index_of(ant.x, ant.y);
+            if (ant_index < 0) {
+                continue;
+            }
+            for (int slot = 0; slot < move_cache.walkable_neighbor_count[ant_index]; ++slot) {
+                const int neighbor_index = move_cache.walkable_neighbors[ant_index][slot];
+                const int nx = geometry.cell_x[neighbor_index];
+                const int ny = geometry.cell_y[neighbor_index];
+                traffic[nx][ny] += 0.35;
             }
         }
         return traffic;
+    }
+
+    void refresh_crowding_fields() const {
+        const auto &geometry = geometry_cache();
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            const int x = geometry.cell_x[index];
+            const int y = geometry.cell_y[index];
+            move_cache.occupied_count[x][y] = 0;
+            move_cache.adjacent_count[x][y] = 0;
+        }
+        for (const auto &ant : ants) {
+            if (!ant.alive()) {
+                continue;
+            }
+            ++move_cache.occupied_count[ant.x][ant.y];
+            const int ant_index = cell_index_of(ant.x, ant.y);
+            if (ant_index < 0) {
+                continue;
+            }
+            for (int direction = 0; direction < 6; ++direction) {
+                const int neighbor_index = geometry.neighbor_by_dir[ant_index][direction];
+                if (neighbor_index < 0) {
+                    continue;
+                }
+                ++move_cache.adjacent_count[geometry.cell_x[neighbor_index]][geometry.cell_y[neighbor_index]];
+            }
+        }
     }
 
     void refresh_static_risk_fields() const {
         if (!move_cache.static_risk_dirty) {
             return;
         }
-        for (int x = 0; x < kMapSize; ++x) {
-            for (int y = 0; y < kMapSize; ++y) {
-                move_cache.damage_risk_field[x][y] = 0.0;
-                move_cache.control_risk_field[x][y] = 0.0;
-                move_cache.effect_pull_field[x][y] = 0.0;
+        refresh_tower_lookup();
+        const auto &geometry = geometry_cache();
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            const int x = geometry.cell_x[index];
+            const int y = geometry.cell_y[index];
+            move_cache.walkable_cells[index] = static_cast<unsigned char>(is_base_cell(x, y) || tower_lookup.index_by_cell[x][y] < 0);
+            move_cache.damage_risk_field[x][y] = 0.0;
+            move_cache.control_risk_field[x][y] = 0.0;
+            move_cache.effect_pull_field[x][y] = 0.0;
+        }
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            int count = 0;
+            for (int direction = 0; direction < 6; ++direction) {
+                const int neighbor_index = geometry.neighbor_by_dir[index][direction];
+                if (neighbor_index < 0 || move_cache.walkable_cells[neighbor_index] == 0) {
+                    continue;
+                }
+                move_cache.walkable_neighbors[index][count++] = neighbor_index;
             }
+            move_cache.walkable_neighbor_count[index] = static_cast<unsigned char>(count);
         }
 
         for (const auto &tower : towers) {
             if (!tower.alive()) {
                 continue;
             }
+            const int tower_index = cell_index_of(tower.x, tower.y);
+            const int attack_range = std::min(tower.attack_range(), kMaxCachedRange);
             const double damage_value = static_cast<double>(tower.damage()) / 25.0;
             double control_value = 0.0;
             switch (tower.tower_type) {
@@ -1039,18 +1245,16 @@ class DefenseSimulator {
             default:
                 break;
             }
-            for (int x = 0; x < kMapSize; ++x) {
-                for (int y = 0; y < kMapSize; ++y) {
-                    if (!ant_can_walk_to(x, y, enemy)) {
-                        continue;
-                    }
-                    if (hex_distance(x, y, tower.x, tower.y) > tower.attack_range()) {
-                        continue;
-                    }
-                    move_cache.damage_risk_field[x][y] += damage_value;
-                    if (control_value > 0.0) {
-                        move_cache.control_risk_field[x][y] += control_value;
-                    }
+            for (int slot = 0; slot < geometry.range_count[tower_index][attack_range]; ++slot) {
+                const int index = geometry.range_cells[tower_index][attack_range][slot];
+                if (move_cache.walkable_cells[index] == 0) {
+                    continue;
+                }
+                const int x = geometry.cell_x[index];
+                const int y = geometry.cell_y[index];
+                move_cache.damage_risk_field[x][y] += damage_value;
+                if (control_value > 0.0) {
+                    move_cache.control_risk_field[x][y] += control_value;
                 }
             }
         }
@@ -1060,12 +1264,16 @@ class DefenseSimulator {
             if (!effect.active() || effect.weapon_type != SuperWeaponType::LightningStorm) {
                 continue;
             }
-            for (int x = 0; x < kMapSize; ++x) {
-                for (int y = 0; y < kMapSize; ++y) {
-                    if (ant_can_walk_to(x, y, enemy) && effect.in_range(x, y)) {
-                        move_cache.damage_risk_field[x][y] += storm_damage;
-                    }
+            const int effect_index = cell_index_of(effect.x, effect.y);
+            const int attack_range = std::min(weapon_stats(effect.weapon_type).attack_range, kMaxCachedRange);
+            for (int slot = 0; slot < geometry.range_count[effect_index][attack_range]; ++slot) {
+                const int index = geometry.range_cells[effect_index][attack_range][slot];
+                if (move_cache.walkable_cells[index] == 0) {
+                    continue;
                 }
+                const int x = geometry.cell_x[index];
+                const int y = geometry.cell_y[index];
+                move_cache.damage_risk_field[x][y] += storm_damage;
             }
         }
 
@@ -1077,13 +1285,17 @@ class DefenseSimulator {
                 effect.weapon_type != SuperWeaponType::EmergencyEvasion) {
                 continue;
             }
+            const int effect_index = cell_index_of(effect.x, effect.y);
             const double pull = effect.weapon_type == SuperWeaponType::Deflector ? 1.0 : 1.35;
-            for (int x = 0; x < kMapSize; ++x) {
-                for (int y = 0; y < kMapSize; ++y) {
-                    if (ant_can_walk_to(x, y, enemy) && effect.in_range(x, y)) {
-                        move_cache.effect_pull_field[x][y] += pull;
-                    }
+            const int attack_range = std::min(weapon_stats(effect.weapon_type).attack_range, kMaxCachedRange);
+            for (int slot = 0; slot < geometry.range_count[effect_index][attack_range]; ++slot) {
+                const int index = geometry.range_cells[effect_index][attack_range][slot];
+                if (move_cache.walkable_cells[index] == 0) {
+                    continue;
                 }
+                const int x = geometry.cell_x[index];
+                const int y = geometry.cell_y[index];
+                move_cache.effect_pull_field[x][y] += pull;
             }
         }
 
@@ -1093,6 +1305,7 @@ class DefenseSimulator {
     void prepare_move_cache(bool reset_reservations) const {
         refresh_static_risk_fields();
         move_cache.traffic_field = compute_traffic_field();
+        refresh_crowding_fields();
 
         bool has_worker = false;
         bool has_combat = false;
@@ -1108,38 +1321,62 @@ class DefenseSimulator {
         }
 
         const auto [base_x, base_y] = kPlayerBases[player];
+        float step_damage[kMaxValidCells]{};
+        float worker_step_total[kMaxValidCells]{};
+        float combat_step_total[kMaxValidCells]{};
+        if (has_worker || has_combat) {
+            const auto &geometry = geometry_cache();
+            for (int index = 0; index < geometry.valid_count; ++index) {
+                const int x = geometry.cell_x[index];
+                const int y = geometry.cell_y[index];
+                const float damage = move_cache.damage_risk_field[x][y] * 25.0f;
+                const float control = move_cache.control_risk_field[x][y];
+                const float traffic = move_cache.traffic_field[x][y];
+                const float effect = move_cache.effect_pull_field[x][y];
+                step_damage[index] = damage;
+                if (has_worker) {
+                    worker_step_total[index] =
+                        std::max(0.15f, 1.0f + 0.20f * damage + 1.80f * control + 0.75f * traffic - 0.35f * effect);
+                }
+                if (has_combat) {
+                    combat_step_total[index] =
+                        std::max(0.15f, 1.0f + 0.08f * damage + 0.45f * control + 0.25f * traffic - 0.20f * effect);
+                }
+            }
+        }
         if (has_worker) {
-            const ReversePathPlan worker_plan =
-                reverse_weighted_plan({{base_x, base_y}}, 0.20, 1.80, 0.75, 0.35, move_cache.traffic_field, false);
+            FixedList<IntPair, 6> sources;
+            sources.push_back(IntPair{base_x, base_y});
+            const ReversePathPlan worker_plan = reverse_weighted_plan(sources, worker_step_total, step_damage);
             move_cache.worker_costs = worker_plan.total_cost;
         }
         if (has_combat) {
-            const ReversePathPlan combat_base_plan =
-                reverse_weighted_plan({{base_x, base_y}}, 0.08, 0.45, 0.25, 0.20, move_cache.traffic_field, false);
+            FixedList<IntPair, 6> sources;
+            sources.push_back(IntPair{base_x, base_y});
+            const ReversePathPlan combat_base_plan = reverse_weighted_plan(sources, combat_step_total, step_damage);
             move_cache.combat_base_costs = combat_base_plan.total_cost;
         }
 
         move_cache.tower_plans.clear();
         if (has_combat) {
-            move_cache.tower_plans.reserve(towers.size());
             for (const auto &tower : towers) {
                 if (!tower.alive()) {
                     continue;
                 }
-                std::vector<std::pair<int, int>> sources;
-                sources.reserve(6);
+                FixedList<IntPair, 6> sources;
                 for (int direction = 0; direction < 6; ++direction) {
                     const int nx = tower.x + kOffset[tower.y & 1][direction][0];
                     const int ny = tower.y + kOffset[tower.y & 1][direction][1];
-                    if (ant_can_walk_to(nx, ny, enemy)) {
-                        sources.emplace_back(nx, ny);
+                    const int neighbor_index = cell_index_of(nx, ny);
+                    if (neighbor_index >= 0 && move_cache.walkable_cells[neighbor_index] != 0) {
+                        sources.push_back(IntPair{nx, ny});
                     }
                 }
                 if (sources.empty()) {
                     continue;
                 }
-                move_cache.tower_plans.push_back(TowerPathCache{
-                    tower.tower_id, reverse_weighted_plan(sources, 0.08, 0.45, 0.25, 0.20, move_cache.traffic_field, false)});
+                move_cache.tower_plans.push_back(
+                    TowerPathCache{tower.tower_id, reverse_weighted_plan(sources, combat_step_total, step_damage)});
             }
         }
 
@@ -1169,12 +1406,16 @@ class DefenseSimulator {
         return nullptr;
     }
 
+    int tower_claim_count(int tower_id) const {
+        return move_cache.tower_claims.get(tower_id);
+    }
+
     void record_move_annotation(int move, int cell_x, int cell_y, int tower_id) const {
         if (move != kNoMove && cell_x >= 0 && cell_y >= 0) {
             move_cache.reservations[cell_x][cell_y] += 1.0;
         }
         if (tower_id >= 0) {
-            ++move_cache.tower_claims[tower_id];
+            move_cache.tower_claims.increment(tower_id);
         }
     }
 
@@ -1192,69 +1433,51 @@ class DefenseSimulator {
     }
 
     ReversePathPlan reverse_weighted_plan(
-        const std::vector<std::pair<int, int>> &sources,
-        double damage_weight,
-        double control_weight,
-        double traffic_weight,
-        double effect_weight,
-        const Grid &traffic_field,
-        bool control_immune) const {
+        const FixedList<IntPair, 6> &sources,
+        const float step_total[kMaxValidCells],
+        const float step_damage[kMaxValidCells]) const {
         ReversePathPlan plan;
-        const double inf = std::numeric_limits<double>::infinity();
-        for (int x = 0; x < kMapSize; ++x) {
-            for (int y = 0; y < kMapSize; ++y) {
-                plan.total_cost[x][y] = inf;
-                plan.damage_cost[x][y] = inf;
-            }
+        const float inf = std::numeric_limits<float>::infinity();
+        const auto &geometry = geometry_cache();
+        unsigned char visited[kMaxValidCells]{};
+        ReverseHeap heap;
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            plan.total_cost[index] = inf;
+            plan.damage_cost[index] = inf;
         }
-
-        using QueueEntry = std::tuple<double, double, int, int>;
-        std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<QueueEntry>> queue;
         for (const auto &[x, y] : sources) {
-            if (!ant_can_walk_to(x, y, enemy)) {
+            const int index = cell_index_of(x, y);
+            if (index < 0 || move_cache.walkable_cells[index] == 0) {
                 continue;
             }
-            if (plan.total_cost[x][y] <= 0.0) {
+            if (plan.total_cost[index] <= 0.0f) {
                 continue;
             }
-            plan.total_cost[x][y] = 0.0;
-            plan.damage_cost[x][y] = 0.0;
-            queue.emplace(0.0, 0.0, x, y);
+            plan.total_cost[index] = 0.0f;
+            plan.damage_cost[index] = 0.0f;
+            heap.push(ReverseHeapNode{index, 0.0f, 0.0f});
         }
 
-        while (!queue.empty()) {
-            const auto [current_total, current_damage, x, y] = queue.top();
-            queue.pop();
-            if (current_total > plan.total_cost[x][y] + 1e-6) {
+        while (!heap.empty()) {
+            const ReverseHeapNode node = heap.pop();
+            const int cell_index = node.cell_index;
+            if (cell_index < 0 || visited[cell_index] != 0) {
                 continue;
             }
-            if (std::abs(current_total - plan.total_cost[x][y]) <= 1e-6 &&
-                current_damage > plan.damage_cost[x][y] + 1e-6) {
-                continue;
-            }
+            visited[cell_index] = 1;
+            const float best_total = node.total;
+            const float best_damage = node.damage;
 
-            const double step_damage = cell_damage_hp(x, y);
-            const double step_control = control_immune ? 0.0 : cell_control_risk(x, y);
-            const double step_traffic = traffic_field[x][y];
-            const double step_effect = cell_effect_pull(x, y);
-            const double step_total =
-                std::max(0.15, 1.0 + damage_weight * step_damage + control_weight * step_control +
-                                   traffic_weight * step_traffic - effect_weight * step_effect);
-
-            for (int direction = 0; direction < 6; ++direction) {
-                const int px = x + kOffset[y & 1][direction][0];
-                const int py = y + kOffset[y & 1][direction][1];
-                if (!ant_can_walk_to(px, py, enemy)) {
-                    continue;
-                }
-                const double next_total = current_total + step_total;
-                const double next_damage = current_damage + step_damage;
-                if (next_total + 1e-6 < plan.total_cost[px][py] ||
-                    (std::abs(next_total - plan.total_cost[px][py]) <= 1e-6 &&
-                     next_damage + 1e-6 < plan.damage_cost[px][py])) {
-                    plan.total_cost[px][py] = next_total;
-                    plan.damage_cost[px][py] = next_damage;
-                    queue.emplace(next_total, next_damage, px, py);
+            for (int slot = 0; slot < move_cache.walkable_neighbor_count[cell_index]; ++slot) {
+                const int previous_index = move_cache.walkable_neighbors[cell_index][slot];
+                const float next_total = best_total + step_total[cell_index];
+                const float next_damage = best_damage + step_damage[cell_index];
+                if (next_total + 1e-6f < plan.total_cost[previous_index] ||
+                    (std::fabs(next_total - plan.total_cost[previous_index]) <= 1e-6f &&
+                     next_damage + 1e-6f < plan.damage_cost[previous_index])) {
+                    plan.total_cost[previous_index] = next_total;
+                    plan.damage_cost[previous_index] = next_damage;
+                    heap.push(ReverseHeapNode{previous_index, next_total, next_damage});
                 }
             }
         }
@@ -1272,7 +1495,7 @@ class DefenseSimulator {
                 if (!other.alive()) {
                     continue;
                 }
-                if (hex_distance(tower.x, tower.y, other.x, other.y) > kCombatSelfDestructRange) {
+                if (cell_distance_fast(tower.x, tower.y, other.x, other.y) > kCombatSelfDestructRange) {
                     continue;
                 }
                 total_damage += std::min(kCombatSelfDestructDamage, other.hp);
@@ -1304,15 +1527,15 @@ class DefenseSimulator {
             if (!tower.alive()) {
                 continue;
             }
-            const double distance_score = std::max(0.0, 8.0 - static_cast<double>(hex_distance(x, y, tower.x, tower.y)));
+            const double distance_score = std::max(0.0, 8.0 - static_cast<double>(cell_distance_fast(x, y, tower.x, tower.y)));
             best = std::max(best, distance_score + self_destruct_bonus);
         }
         return best;
     }
 
-    std::pair<int, int> random_bewitch_target(const SearchAnt &ant, FastRng &rng) const {
-        std::vector<std::pair<int, int>> cells;
-        cells.reserve(96);
+    IntPair random_bewitch_target(const SearchAnt &ant, FastRng &rng) const {
+        IntPair chosen{kPlayerBases[enemy].first, kPlayerBases[enemy].second};
+        int seen = 0;
         const int anchor_delta = half_plane_delta(enemy, ant.x, ant.y);
         for (int x = 0; x < kMapSize; ++x) {
             for (int y = 0; y < kMapSize; ++y) {
@@ -1323,14 +1546,14 @@ class DefenseSimulator {
                     continue;
                 }
                 if (half_plane_delta(enemy, x, y) <= anchor_delta) {
-                    cells.emplace_back(x, y);
+                    ++seen;
+                    if (rng.next_int(seen) == 0) {
+                        chosen = IntPair{x, y};
+                    }
                 }
             }
         }
-        if (cells.empty()) {
-            return kPlayerBases[enemy];
-        }
-        return cells[static_cast<std::size_t>(rng.next_int(static_cast<int>(cells.size())))];
+        return chosen;
     }
 
     void set_ant_behavior(SearchAnt &ant, AntBehavior behavior, int target_x = -1, int target_y = -1) {
@@ -1399,7 +1622,7 @@ class DefenseSimulator {
             if (!ant.alive()) {
                 continue;
             }
-            const int distance = hex_distance(tower.x, tower.y, ant.x, ant.y);
+            const int distance = cell_distance_fast(tower.x, tower.y, ant.x, ant.y);
             if (distance > tower.attack_range()) {
                 continue;
             }
@@ -1413,11 +1636,11 @@ class DefenseSimulator {
 
     MoveOptionsResult evaluate_move_options(const SearchAnt &ant) const {
         const auto candidates = legal_move_candidates(ant);
+        const int candidate_count = candidates.size();
         MoveOptionsResult result;
-        result.options.reserve(candidates.size());
         auto danger_for_cell = [&](int nx, int ny, bool tower_target) {
             double danger =
-                static_cast<double>(12 - std::min(12, hex_distance(nx, ny, kPlayerBases[player].first, kPlayerBases[player].second)));
+                static_cast<double>(12 - std::min(12, cell_distance_fast(nx, ny, kPlayerBases[player].first, kPlayerBases[player].second)));
             if (tower_target) {
                 danger += 8.0;
             }
@@ -1427,25 +1650,29 @@ class DefenseSimulator {
             return danger;
         };
         if (ant.behavior == AntBehavior::Random) {
-            const double uniform = 1.0 / static_cast<double>(std::max<std::size_t>(1, candidates.size()));
-            for (const auto &[direction, nx, ny] : candidates) {
+            const double uniform = 1.0 / static_cast<double>(std::max(1, candidate_count));
+            for (int index = 0; index < candidate_count; ++index) {
+                const auto &candidate = candidates[index];
+                const int direction = candidate.direction;
+                const int nx = candidate.nx;
+                const int ny = candidate.ny;
                 result.options.push_back(MoveOption{direction, nx, ny, uniform, danger_for_cell(nx, ny, tower_at(nx, ny) != nullptr)});
             }
             return result;
         }
 
-        std::vector<double> scores;
-        std::vector<double> raw_scores;
-        scores.reserve(candidates.size());
-        raw_scores.reserve(candidates.size());
-        std::vector<std::pair<int, int>> annotated_cells;
-        std::vector<int> annotated_towers;
+        double scores[kMaxMoveCandidates]{};
+        double raw_scores[kMaxMoveCandidates]{};
+        FixedList<IntPair, kMaxMoveCandidates> annotated_cells;
+        FixedList<int, kMaxMoveCandidates> annotated_towers;
 
         if (ant.behavior == AntBehavior::Bewitched) {
             const int target_x = ant.target_x >= 0 ? ant.target_x : kPlayerBases[enemy].first;
             const int target_y = ant.target_y >= 0 ? ant.target_y : kPlayerBases[enemy].second;
-            for (const auto &[direction, nx, ny] : candidates) {
-                (void)direction;
+            for (int index = 0; index < candidate_count; ++index) {
+                const auto &candidate = candidates[index];
+                const int nx = candidate.nx;
+                const int ny = candidate.ny;
                 const SearchTower *tower_target = tower_at(nx, ny);
                 const int eval_x = tower_target != nullptr ? ant.x : nx;
                 const int eval_y = tower_target != nullptr ? ant.y : ny;
@@ -1460,22 +1687,28 @@ class DefenseSimulator {
                                      ant_control_risk_weight(ant) * control +
                                      ant_tower_pull_weight(ant) * tower_pull +
                                      ant_effect_pull_weight(ant) * effect + (tower_target != nullptr ? 4.0 : 0.0);
-                scores.push_back(score);
-                raw_scores.push_back(score + effect);
+                scores[index] = score;
+                raw_scores[index] = score + effect;
             }
         } else if (ant.kind == AntKind::Worker) {
             ensure_move_cache();
-            annotated_cells.reserve(candidates.size());
-            annotated_towers.reserve(candidates.size());
-            const double current_cost = move_cache.worker_costs[ant.x][ant.y];
+            const int current_index = cell_index_of(ant.x, ant.y);
+            const double current_cost =
+                current_index >= 0 ? static_cast<double>(move_cache.worker_costs[current_index]) : std::numeric_limits<double>::infinity();
 
             double best_walk_remaining = std::numeric_limits<double>::infinity();
-            for (const auto &[direction, nx, ny] : candidates) {
-                (void)direction;
+            for (int index = 0; index < candidate_count; ++index) {
+                const auto &candidate = candidates[index];
+                const int nx = candidate.nx;
+                const int ny = candidate.ny;
                 if (tower_at(nx, ny) != nullptr) {
                     continue;
                 }
-                best_walk_remaining = std::min(best_walk_remaining, move_cache.worker_costs[nx][ny]);
+                const int candidate_index = cell_index_of(nx, ny);
+                if (candidate_index >= 0) {
+                    best_walk_remaining =
+                        std::min(best_walk_remaining, static_cast<double>(move_cache.worker_costs[candidate_index]));
+                }
             }
             const double reroute_gain =
                 (std::isfinite(current_cost) && std::isfinite(best_walk_remaining))
@@ -1484,8 +1717,10 @@ class DefenseSimulator {
             const bool blocked = !std::isfinite(best_walk_remaining) || !std::isfinite(current_cost) ||
                                  current_cost - best_walk_remaining <= 0.50;
 
-            for (const auto &[direction, nx, ny] : candidates) {
-                (void)direction;
+            for (int index = 0; index < candidate_count; ++index) {
+                const auto &candidate = candidates[index];
+                const int nx = candidate.nx;
+                const int ny = candidate.ny;
                 const SearchTower *tower_target = tower_at(nx, ny);
                 double score = -1e18;
                 if (tower_target != nullptr) {
@@ -1499,58 +1734,56 @@ class DefenseSimulator {
                     } else {
                         score -= reroute_gain;
                     }
-                    const auto claim_it = move_cache.tower_claims.find(tower_target->tower_id);
-                    if (claim_it != move_cache.tower_claims.end()) {
-                        score -= static_cast<double>(claim_it->second);
-                    }
-                    annotated_cells.emplace_back(-1, -1);
+                    score -= static_cast<double>(tower_claim_count(tower_target->tower_id));
+                    annotated_cells.push_back(IntPair{-1, -1});
                     annotated_towers.push_back(tower_target->tower_id);
                 } else {
-                    const double remaining = move_cache.worker_costs[nx][ny];
+                    const int candidate_index = cell_index_of(nx, ny);
+                    const double remaining =
+                        candidate_index >= 0 ? static_cast<double>(move_cache.worker_costs[candidate_index])
+                                             : std::numeric_limits<double>::infinity();
                     if (std::isfinite(remaining)) {
                         score = -remaining;
                         score -= 1.4 * move_cache.reservations[nx][ny];
                         score -= 0.25 * crowding_penalty(ant, nx, ny);
                     }
-                    annotated_cells.emplace_back(nx, ny);
+                    annotated_cells.push_back(IntPair{nx, ny});
                     annotated_towers.push_back(-1);
                 }
-                scores.push_back(score);
-                raw_scores.push_back(score);
+                scores[index] = score;
+                raw_scores[index] = score;
             }
         } else {
             ensure_move_cache();
-            annotated_cells.reserve(candidates.size());
-            annotated_towers.reserve(candidates.size());
-            for (const auto &[direction, nx, ny] : candidates) {
-                (void)direction;
+            for (int index = 0; index < candidate_count; ++index) {
+                const auto &candidate = candidates[index];
+                const int nx = candidate.nx;
+                const int ny = candidate.ny;
                 const SearchTower *tower_target = tower_at(nx, ny);
                 double score = -1e18;
                 int best_tower_id = -1;
                 if (tower_target != nullptr) {
                     score = tower_attack_value(ant, *tower_target, static_cast<double>(ant.hp)) + 1.5;
                     best_tower_id = tower_target->tower_id;
-                    const auto claim_it = move_cache.tower_claims.find(best_tower_id);
-                    if (claim_it != move_cache.tower_claims.end()) {
-                        score -= 0.85 * static_cast<double>(claim_it->second);
-                    }
-                    annotated_cells.emplace_back(-1, -1);
+                    score -= 0.85 * static_cast<double>(tower_claim_count(best_tower_id));
+                    annotated_cells.push_back(IntPair{-1, -1});
                 } else if (!move_cache.tower_plans.empty()) {
+                    const int candidate_index = cell_index_of(nx, ny);
                     for (const auto &entry : move_cache.tower_plans) {
                         const SearchTower *tower = tower_by_id(entry.tower_id);
                         if (tower == nullptr) {
                             continue;
                         }
-                        const double travel_cost = entry.plan.total_cost[nx][ny];
+                        if (candidate_index < 0) {
+                            continue;
+                        }
+                        const double travel_cost = static_cast<double>(entry.plan.total_cost[candidate_index]);
                         if (!std::isfinite(travel_cost)) {
                             continue;
                         }
-                        const double arrival_hp = static_cast<double>(ant.hp) - entry.plan.damage_cost[nx][ny];
+                        const double arrival_hp = static_cast<double>(ant.hp) - static_cast<double>(entry.plan.damage_cost[candidate_index]);
                         double utility = tower_attack_value(ant, *tower, arrival_hp) - 0.90 * travel_cost;
-                        const auto claim_it = move_cache.tower_claims.find(entry.tower_id);
-                        if (claim_it != move_cache.tower_claims.end()) {
-                            utility -= 0.85 * static_cast<double>(claim_it->second);
-                        }
+                        utility -= 0.85 * static_cast<double>(tower_claim_count(entry.tower_id));
                         if (utility > score) {
                             score = utility;
                             best_tower_id = entry.tower_id;
@@ -1559,37 +1792,43 @@ class DefenseSimulator {
                     if (std::isfinite(score)) {
                         score -= 0.45 * move_cache.reservations[nx][ny];
                     }
-                    annotated_cells.emplace_back(nx, ny);
+                    annotated_cells.push_back(IntPair{nx, ny});
                 } else {
-                    const double remaining = move_cache.combat_base_costs[nx][ny];
+                    const int candidate_index = cell_index_of(nx, ny);
+                    const double remaining =
+                        candidate_index >= 0 ? static_cast<double>(move_cache.combat_base_costs[candidate_index])
+                                             : std::numeric_limits<double>::infinity();
                     if (std::isfinite(remaining)) {
                         score = -remaining;
                         score -= 0.45 * move_cache.reservations[nx][ny];
                     }
-                    annotated_cells.emplace_back(nx, ny);
+                    annotated_cells.push_back(IntPair{nx, ny});
                 }
-                scores.push_back(score);
-                raw_scores.push_back(score);
+                scores[index] = score;
+                raw_scores[index] = score;
                 annotated_towers.push_back(best_tower_id);
             }
         }
 
-        const bool has_annotations = annotated_cells.size() == candidates.size() && annotated_towers.size() == candidates.size();
+        const bool has_annotations = annotated_cells.size() == candidate_count && annotated_towers.size() == candidate_count;
 
         double max_score = -1e18;
-        for (double score : scores) {
-            max_score = std::max(max_score, score);
+        for (int index = 0; index < candidate_count; ++index) {
+            max_score = std::max(max_score, scores[index]);
         }
         if (ant.behavior == AntBehavior::Conservative || ant.behavior == AntBehavior::ControlFree) {
             int best = 0;
-            for (int index = 1; index < static_cast<int>(scores.size()); ++index) {
+            for (int index = 1; index < candidate_count; ++index) {
                 if (scores[index] > scores[best] ||
                     (scores[index] == scores[best] && raw_scores[index] > raw_scores[best])) {
                     best = index;
                 }
             }
-            for (std::size_t index = 0; index < candidates.size(); ++index) {
-                const auto &[direction, nx, ny] = candidates[index];
+            for (int index = 0; index < candidate_count; ++index) {
+                const auto &candidate = candidates[index];
+                const int direction = candidate.direction;
+                const int nx = candidate.nx;
+                const int ny = candidate.ny;
                 const SearchTower *tower_target = tower_at(nx, ny);
                 result.options.push_back(MoveOption{
                     direction, nx, ny, static_cast<int>(index) == best ? 1.0 : 0.0, danger_for_cell(nx, ny, tower_target != nullptr)});
@@ -1603,11 +1842,14 @@ class DefenseSimulator {
 
         const double temperature = ant.behavior == AntBehavior::Bewitched ? 1.5 : 1.75;
         double total = 0.0;
-        for (double score : scores) {
-            total += std::exp((score - max_score) / temperature);
+        for (int index = 0; index < candidate_count; ++index) {
+            total += std::exp((scores[index] - max_score) / temperature);
         }
-        for (std::size_t index = 0; index < candidates.size(); ++index) {
-            const auto &[direction, nx, ny] = candidates[index];
+        for (int index = 0; index < candidate_count; ++index) {
+            const auto &candidate = candidates[index];
+            const int direction = candidate.direction;
+            const int nx = candidate.nx;
+            const int ny = candidate.ny;
             const double probability = total > 0.0 ? std::exp((scores[index] - max_score) / temperature) / total : 1.0;
             const SearchTower *tower_target = tower_at(nx, ny);
             result.options.push_back(MoveOption{direction, nx, ny, probability, danger_for_cell(nx, ny, tower_target != nullptr)});
@@ -1616,22 +1858,29 @@ class DefenseSimulator {
                 result.annotated_towers.push_back(annotated_towers[index]);
             }
         }
-        std::vector<std::size_t> order(result.options.size(), 0);
-        for (std::size_t index = 0; index < order.size(); ++index) {
+        int order[kMaxMoveCandidates]{};
+        const int option_count = result.options.size();
+        for (int index = 0; index < option_count; ++index) {
             order[index] = index;
         }
-        std::sort(order.begin(), order.end(), [&](std::size_t lhs, std::size_t rhs) {
-            if (result.options[lhs].probability != result.options[rhs].probability) {
-                return result.options[lhs].probability > result.options[rhs].probability;
+        for (int left = 0; left < option_count; ++left) {
+            int best = left;
+            for (int right = left + 1; right < option_count; ++right) {
+                const auto &best_option = result.options[order[best]];
+                const auto &candidate_option = result.options[order[right]];
+                if (candidate_option.probability > best_option.probability ||
+                    (candidate_option.probability == best_option.probability && candidate_option.danger > best_option.danger)) {
+                    best = right;
+                }
             }
-            return result.options[lhs].danger > result.options[rhs].danger;
-        });
+            if (best != left) {
+                std::swap(order[left], order[best]);
+            }
+        }
 
         MoveOptionsResult sorted;
-        sorted.options.reserve(result.options.size());
-        sorted.annotated_cells.reserve(result.annotated_cells.size());
-        sorted.annotated_towers.reserve(result.annotated_towers.size());
-        for (std::size_t index : order) {
+        for (int pos = 0; pos < option_count; ++pos) {
+            const int index = order[pos];
             sorted.options.push_back(result.options[index]);
             if (index < result.annotated_cells.size()) {
                 sorted.annotated_cells.push_back(result.annotated_cells[index]);
@@ -1641,8 +1890,8 @@ class DefenseSimulator {
             }
         }
 
-        if (static_cast<int>(sorted.options.size()) > config().move_option_limit) {
-            sorted.options.resize(static_cast<std::size_t>(config().move_option_limit));
+        if (sorted.options.size() > config().move_option_limit) {
+            sorted.options.resize(config().move_option_limit);
             if (sorted.annotated_cells.size() > sorted.options.size()) {
                 sorted.annotated_cells.resize(sorted.options.size());
             }
@@ -1662,7 +1911,7 @@ class DefenseSimulator {
         return sorted;
     }
 
-    std::vector<MoveOption> move_options_for(const SearchAnt &ant) const {
+    FixedList<MoveOption, kMaxMoveCandidates> move_options_for(const SearchAnt &ant) const {
         return evaluate_move_options(ant).options;
     }
 
@@ -1673,33 +1922,33 @@ class DefenseSimulator {
         }
         double threshold = rng.next_double();
         double cumulative = 0.0;
-        int chosen_index = static_cast<int>(evaluated.options.size()) - 1;
-        for (int index = 0; index < static_cast<int>(evaluated.options.size()); ++index) {
-            cumulative += evaluated.options[static_cast<std::size_t>(index)].probability;
+        int chosen_index = evaluated.options.size() - 1;
+        for (int index = 0; index < evaluated.options.size(); ++index) {
+            cumulative += evaluated.options[index].probability;
             if (threshold <= cumulative) {
                 chosen_index = index;
                 break;
             }
         }
         if (record_annotation) {
-            const auto &option = evaluated.options[static_cast<std::size_t>(chosen_index)];
-            const int cell_x = chosen_index < static_cast<int>(evaluated.annotated_cells.size())
-                                   ? evaluated.annotated_cells[static_cast<std::size_t>(chosen_index)].first
+            const auto &option = evaluated.options[chosen_index];
+            const int cell_x = chosen_index < evaluated.annotated_cells.size()
+                                   ? evaluated.annotated_cells[chosen_index].first
                                    : -1;
-            const int cell_y = chosen_index < static_cast<int>(evaluated.annotated_cells.size())
-                                   ? evaluated.annotated_cells[static_cast<std::size_t>(chosen_index)].second
+            const int cell_y = chosen_index < evaluated.annotated_cells.size()
+                                   ? evaluated.annotated_cells[chosen_index].second
                                    : -1;
-            const int tower_id = chosen_index < static_cast<int>(evaluated.annotated_towers.size())
-                                     ? evaluated.annotated_towers[static_cast<std::size_t>(chosen_index)]
+            const int tower_id = chosen_index < evaluated.annotated_towers.size()
+                                     ? evaluated.annotated_towers[chosen_index]
                                      : -1;
             record_move_annotation(option.direction, cell_x, cell_y, tower_id);
         }
-        return evaluated.options[static_cast<std::size_t>(chosen_index)].direction;
+        return evaluated.options[chosen_index].direction;
     }
 
     void record_move_annotation_for_direction(const SearchAnt &ant, int chosen_direction) const {
         const auto evaluated = evaluate_move_options(ant);
-        for (std::size_t index = 0; index < evaluated.options.size(); ++index) {
+        for (int index = 0; index < evaluated.options.size(); ++index) {
             if (evaluated.options[index].direction != chosen_direction) {
                 continue;
             }
@@ -1713,7 +1962,7 @@ class DefenseSimulator {
 
     int random_legal_move(const SearchAnt &ant, FastRng &rng) const {
         const auto candidates = legal_move_candidates(ant);
-        return std::get<0>(candidates[static_cast<std::size_t>(rng.next_int(static_cast<int>(candidates.size())))]);
+        return candidates[rng.next_int(candidates.size())].direction;
     }
 
     void attack_tower_from_ant(SearchAnt &ant, SearchTower &tower) {
@@ -1722,7 +1971,7 @@ class DefenseSimulator {
                 if (!other.alive()) {
                     continue;
                 }
-                if (hex_distance(tower.x, tower.y, other.x, other.y) > kCombatSelfDestructRange) {
+                if (cell_distance_fast(tower.x, tower.y, other.x, other.y) > kCombatSelfDestructRange) {
                     continue;
                 }
                 other.hp -= kCombatSelfDestructDamage;
@@ -1757,9 +2006,18 @@ class DefenseSimulator {
     }
 
     void purge_dead_towers() {
-        const auto next_end = std::remove_if(towers.begin(), towers.end(), [](const SearchTower &tower) { return tower.hp <= 0; });
-        if (next_end != towers.end()) {
-            towers.erase(next_end, towers.end());
+        int write_index = 0;
+        for (int read_index = 0; read_index < towers.size(); ++read_index) {
+            if (towers[read_index].hp <= 0) {
+                continue;
+            }
+            if (write_index != read_index) {
+                towers[write_index] = towers[read_index];
+            }
+            ++write_index;
+        }
+        if (write_index != towers.size()) {
+            towers.resize(write_index);
             invalidate_tower_lookup();
             mark_risk_fields_dirty();
         }
@@ -1847,12 +2105,12 @@ class DefenseSimulator {
             };
 
             if (tower.tower_type == TowerType::Mortar) {
-                SearchAnt *center = find_ant(target_id);
+                        SearchAnt *center = find_ant(target_id);
                 if (center != nullptr) {
                     const int cx = center->x;
                     const int cy = center->y;
                     for (auto &ant : ants) {
-                        if (ant.alive() && hex_distance(ant.x, ant.y, cx, cy) <= tower.attack_range()) {
+                        if (ant.alive() && cell_distance_fast(ant.x, ant.y, cx, cy) <= tower.attack_range()) {
                             apply_tower_hit(tower, ant, rng);
                         }
                     }
@@ -1879,7 +2137,12 @@ class DefenseSimulator {
         }
     }
 
-    void move_phase(FastRng &rng, const std::vector<std::pair<int, int>> &forced_moves = {}) {
+    void move_phase(FastRng &rng) {
+        FixedList<ForcedMove, kMaxImportantAnts> empty_forced_moves;
+        move_phase(rng, empty_forced_moves);
+    }
+
+    void move_phase(FastRng &rng, const FixedList<ForcedMove, kMaxImportantAnts> &forced_moves) {
         bool need_enhanced_cache = false;
         for (const auto &ant : ants) {
             if (!ant.alive() || ant.too_old() || ant.is_frozen) {
@@ -1894,9 +2157,9 @@ class DefenseSimulator {
             ensure_move_cache(true);
         }
         auto forced_move_for = [&](int ant_id) {
-            for (const auto &[forced_id, direction] : forced_moves) {
-                if (forced_id == ant_id) {
-                    return direction;
+            for (int index = 0; index < forced_moves.size(); ++index) {
+                if (forced_moves[index].ant_id == ant_id) {
+                    return forced_moves[index].direction;
                 }
             }
             return kNoMove;
@@ -1916,45 +2179,59 @@ class DefenseSimulator {
             }
             resolve_ant_step(ant, move);
         }
-        if (need_enhanced_cache) {
+        if (!config().ignore_periodic_random_move &&
+            need_enhanced_cache && kTeleportInterval > 0 && (round_index + 1) % kTeleportInterval == 0) {
             clear_move_cache();
         }
     }
 
     void teleport_phase(FastRng &rng) {
+        if (config().ignore_periodic_random_move) {
+            return;
+        }
         if (kTeleportInterval <= 0 || (round_index + 1) % kTeleportInterval != 0) {
             return;
         }
-        std::vector<int> eligible_ids;
-        eligible_ids.reserve(ants.size());
+        int eligible_ids[kMaxSimAnts]{};
+        int eligible_count = 0;
         for (const auto &ant : ants) {
             if (!ant.alive() || ant.too_old() || ant.behavior == AntBehavior::ControlFree) {
                 continue;
             }
-            eligible_ids.push_back(ant.ant_id);
+            eligible_ids[eligible_count++] = ant.ant_id;
         }
-        if (eligible_ids.empty()) {
+        if (eligible_count <= 0) {
             return;
         }
-        int teleport_count = std::max(1, static_cast<int>(std::llround(static_cast<double>(eligible_ids.size()) * kTeleportRatio)));
-        while (static_cast<int>(eligible_ids.size()) > teleport_count) {
-            eligible_ids.erase(eligible_ids.begin() + static_cast<long>(rng.next_int(static_cast<int>(eligible_ids.size()))));
+        int teleport_count = std::max(1, static_cast<int>(std::llround(static_cast<double>(eligible_count) * kTeleportRatio)));
+        if (teleport_count > eligible_count) {
+            teleport_count = eligible_count;
         }
-        for (int ant_id : eligible_ids) {
+        for (int index = 0; index < teleport_count; ++index) {
+            const int pick = index + rng.next_int(eligible_count - index);
+            std::swap(eligible_ids[index], eligible_ids[pick]);
+        }
+        for (int index = 0; index < teleport_count; ++index) {
+            const int ant_id = eligible_ids[index];
             for (int step = 0; step < 3; ++step) {
-                auto it = std::find_if(ants.begin(), ants.end(), [&](const SearchAnt &ant) { return ant.ant_id == ant_id; });
-                if (it == ants.end() || !it->alive() || it->too_old()) {
+                SearchAnt *selected = nullptr;
+                for (auto &ant : ants) {
+                    if (ant.ant_id == ant_id) {
+                        selected = &ant;
+                        break;
+                    }
+                }
+                if (selected == nullptr || !selected->alive() || selected->too_old()) {
                     break;
                 }
-                const int move = rng.next_int(3) < 2 ? random_legal_move(*it, rng) : sample_move(*it, rng);
-                resolve_ant_step(*it, move);
+                const int move = rng.next_int(3) < 2 ? random_legal_move(*selected, rng) : sample_move(*selected, rng);
+                resolve_ant_step(*selected, move);
             }
         }
     }
 
     void manage_ants() {
-        std::vector<SearchAnt> next;
-        next.reserve(ants.size());
+        FixedList<SearchAnt, kMaxSimAnts> next;
         const auto [base_x, base_y] = kPlayerBases[player];
         for (auto &ant : ants) {
             if (ant.x == base_x && ant.y == base_y && ant.alive()) {
@@ -1973,7 +2250,7 @@ class DefenseSimulator {
             }
             next.push_back(ant);
         }
-        ants.swap(next);
+        ants = next;
     }
 
     void spawn_enemy_ant(FastRng &rng) {
@@ -2033,7 +2310,7 @@ class DefenseSimulator {
         }
     }
 
-    void drift_effects(FastRng &rng, std::vector<SearchEffect> &effects) {
+    void drift_effects(FastRng &rng, FixedList<SearchEffect, kMaxSimEffects> &effects) {
         for (auto &effect : effects) {
             if (!effect.active()) {
                 continue;
@@ -2041,19 +2318,19 @@ class DefenseSimulator {
             if (effect.weapon_type != SuperWeaponType::LightningStorm && effect.weapon_type != SuperWeaponType::EmpBlaster) {
                 continue;
             }
-            std::vector<std::pair<int, int>> cells;
-            cells.reserve(7);
-            cells.emplace_back(effect.x, effect.y);
+            IntPair cells[7]{};
+            int cell_count = 0;
+            cells[cell_count++] = IntPair{effect.x, effect.y};
             for (int direction = 0; direction < 6; ++direction) {
                 const int nx = effect.x + kOffset[effect.y & 1][direction][0];
                 const int ny = effect.y + kOffset[effect.y & 1][direction][1];
                 if (is_valid_pos(nx, ny)) {
-                    cells.emplace_back(nx, ny);
+                    cells[cell_count++] = IntPair{nx, ny};
                 }
             }
-            const auto &[nx, ny] = cells[static_cast<std::size_t>(rng.next_int(static_cast<int>(cells.size())))];
-            effect.x = nx;
-            effect.y = ny;
+            const IntPair &selected = cells[rng.next_int(cell_count)];
+            effect.x = selected.first;
+            effect.y = selected.second;
         }
     }
 
@@ -2063,14 +2340,19 @@ class DefenseSimulator {
         if (lightning_cooldown > 0) {
             --lightning_cooldown;
         }
-        auto decay = [](std::vector<SearchEffect> &effects) {
-            for (auto &effect : effects) {
+        auto decay = [](FixedList<SearchEffect, kMaxSimEffects> &effects) {
+            int write_index = 0;
+            for (int read_index = 0; read_index < effects.size(); ++read_index) {
+                SearchEffect effect = effects[read_index];
                 if (effect.remaining_turns > 0) {
                     --effect.remaining_turns;
                 }
+                if (effect.remaining_turns <= 0) {
+                    continue;
+                }
+                effects[write_index++] = effect;
             }
-            effects.erase(std::remove_if(effects.begin(), effects.end(), [](const SearchEffect &effect) { return effect.remaining_turns <= 0; }),
-                          effects.end());
+            effects.resize(write_index);
         };
         decay(my_effects);
         decay(enemy_effects);
@@ -2083,7 +2365,12 @@ class DefenseSimulator {
         }
     }
 
-    void simulate_round(FastRng &rng, const std::vector<std::pair<int, int>> &forced_moves = {}) {
+    void simulate_round(FastRng &rng) {
+        FixedList<ForcedMove, kMaxImportantAnts> empty_forced_moves;
+        simulate_round(rng, empty_forced_moves);
+    }
+
+    void simulate_round(FastRng &rng, const FixedList<ForcedMove, kMaxImportantAnts> &forced_moves) {
         if (terminal) {
             return;
         }
@@ -2184,9 +2471,12 @@ class DefenseSimulator {
             if (tower->tower_type == TowerType::Basic) {
                 coins += static_cast<double>(tower_build_cost_for_count(static_cast<int>(towers.size()) - 1)) * kTowerDowngradeRefundRatio *
                          static_cast<double>(std::max(tower->hp, 0)) / std::max(1, tower->max_hp());
-                towers.erase(std::remove_if(towers.begin(), towers.end(),
-                                            [&](const SearchTower &item) { return item.tower_id == operation.arg0; }),
-                             towers.end());
+                for (int index = 0; index < towers.size(); ++index) {
+                    if (towers[index].tower_id == operation.arg0) {
+                        towers.erase_at(index);
+                        break;
+                    }
+                }
                 invalidate_tower_lookup();
                 mark_risk_fields_dirty();
                 return true;
@@ -2228,12 +2518,8 @@ inline DefenseSimulator make_defense_simulator(const PublicState &state, const N
     sim.next_tower_id = state.next_tower_id;
     sim.lightning_cooldown = state.weapon_cooldowns[player][static_cast<int>(SuperWeaponType::LightningStorm)];
 
-    std::unordered_map<int, NativeAntHiddenState> hidden;
-    if (simulator != nullptr) {
-        for (const auto &row : simulator->ant_hidden_states()) {
-            hidden.emplace(row.ant_id, row);
-        }
-    }
+    const std::vector<NativeAntHiddenState> hidden_rows =
+        simulator != nullptr ? simulator->ant_hidden_states() : std::vector<NativeAntHiddenState>{};
 
     for (const auto &tower : state.towers) {
         if (tower.player != player) {
@@ -2255,16 +2541,22 @@ inline DefenseSimulator make_defense_simulator(const PublicState &state, const N
         item.last_move = ant.last_move;
         item.behavior = ant.behavior;
         item.kind = ant.kind;
-        auto it = hidden.find(ant.ant_id);
-        if (it != hidden.end()) {
-            item.shield = it->second.shield;
-            item.defend = it->second.defend;
-            item.control_free_on_break = it->second.evasion_control_free_on_break;
-            item.is_frozen = it->second.is_frozen;
-            item.behavior_rounds = it->second.behavior_rounds;
-            item.behavior_expiry = it->second.behavior_expiry;
-            item.target_x = it->second.target_x;
-            item.target_y = it->second.target_y;
+        const NativeAntHiddenState *hidden = nullptr;
+        for (const auto &row : hidden_rows) {
+            if (row.ant_id == ant.ant_id) {
+                hidden = &row;
+                break;
+            }
+        }
+        if (hidden != nullptr) {
+            item.shield = hidden->shield;
+            item.defend = hidden->defend;
+            item.control_free_on_break = hidden->evasion_control_free_on_break;
+            item.is_frozen = hidden->is_frozen;
+            item.behavior_rounds = hidden->behavior_rounds;
+            item.behavior_expiry = hidden->behavior_expiry;
+            item.target_x = hidden->target_x;
+            item.target_y = hidden->target_y;
         } else {
             item.shield = 0;
             item.defend = false;
@@ -2293,7 +2585,7 @@ inline DefenseSimulator make_defense_simulator(const PublicState &state, const N
 inline double ant_threat_score(const DefenseSimulator &sim, const SearchAnt &ant) {
     const auto &cfg = config();
     const auto [base_x, base_y] = kPlayerBases[sim.player];
-    const int base_distance = hex_distance(ant.x, ant.y, base_x, base_y);
+    const int base_distance = cell_distance_fast(ant.x, ant.y, base_x, base_y);
     const double hp_ratio = static_cast<double>(std::max(ant.hp, 0)) / std::max(1, ant.max_hp());
     const double behavior_scale = behavior_threat_scale(ant.behavior);
     double threat = cfg.base_ant_threat_cap * ant_base_distance_factor(base_distance) * hp_ratio * behavior_scale;
@@ -2307,7 +2599,7 @@ inline double ant_threat_score(const DefenseSimulator &sim, const SearchAnt &ant
         }
         static constexpr double kTowerRiskByDistance[6] = {0.0, 1.0, 0.60, 0.35, 0.20, 0.10};
         for (const auto &tower : sim.towers) {
-            const int distance = hex_distance(ant.x, ant.y, tower.x, tower.y);
+            const int distance = cell_distance_fast(ant.x, ant.y, tower.x, tower.y);
             if (distance > 5) {
                 continue;
             }
@@ -2355,19 +2647,38 @@ inline double ant_selection_threat(const DefenseSimulator &sim, const SearchAnt 
     return ant_threat_score(sim, ant);
 }
 
-inline std::vector<const SearchAnt *> important_ants(const DefenseSimulator &sim) {
-    std::vector<const SearchAnt *> ordered;
-    ordered.reserve(static_cast<std::size_t>(config().important_ant_limit));
+inline FixedList<const SearchAnt *, kMaxImportantAnts> important_ants(const DefenseSimulator &sim) {
+    FixedList<const SearchAnt *, kMaxImportantAnts> ordered;
+    const int limit = std::min(config().important_ant_limit, kMaxImportantAnts);
     for (const auto &ant : sim.ants) {
         if (!ant.alive()) {
             continue;
         }
-        ordered.push_back(&ant);
-        std::sort(ordered.begin(), ordered.end(), [&](const SearchAnt *lhs, const SearchAnt *rhs) {
-            return ant_selection_threat(sim, *lhs) > ant_selection_threat(sim, *rhs);
-        });
-        if (static_cast<int>(ordered.size()) > config().important_ant_limit) {
-            ordered.resize(static_cast<std::size_t>(config().important_ant_limit));
+        const double current_threat = ant_selection_threat(sim, ant);
+        if (ordered.size() < limit) {
+            ordered.push_back(&ant);
+        } else {
+            int worst = 0;
+            for (int index = 1; index < ordered.size(); ++index) {
+                if (ant_selection_threat(sim, *ordered[index]) < ant_selection_threat(sim, *ordered[worst])) {
+                    worst = index;
+                }
+            }
+            if (current_threat <= ant_selection_threat(sim, *ordered[worst])) {
+                continue;
+            }
+            ordered[worst] = &ant;
+        }
+        for (int left = 0; left < ordered.size(); ++left) {
+            int best = left;
+            for (int right = left + 1; right < ordered.size(); ++right) {
+                if (ant_selection_threat(sim, *ordered[right]) > ant_selection_threat(sim, *ordered[best])) {
+                    best = right;
+                }
+            }
+            if (best != left) {
+                std::swap(ordered[left], ordered[best]);
+            }
         }
     }
     return ordered;
@@ -2379,31 +2690,30 @@ inline std::vector<ComboRolloutSpec> rollout_combos_for(const DefenseSimulator &
         return {ComboRolloutSpec{}};
     }
 
-    std::vector<std::vector<MoveOption>> options;
-    options.reserve(key_ants.size());
-    for (const SearchAnt *ant : key_ants) {
-        options.push_back(sim.move_options_for(*ant));
-        if (options.back().empty()) {
-            options.back().push_back(MoveOption{kNoMove, ant->x, ant->y, 1.0, 0.0});
+    FixedList<MoveOption, kMaxMoveCandidates> options[kMaxImportantAnts]{};
+    for (int index = 0; index < key_ants.size(); ++index) {
+        const SearchAnt *ant = key_ants[index];
+        options[index] = sim.move_options_for(*ant);
+        if (options[index].empty()) {
+            options[index].push_back(MoveOption{kNoMove, ant->x, ant->y, 1.0, 0.0});
         }
     }
 
     std::vector<ComboRolloutSpec> combos;
-    std::vector<std::pair<int, int>> forced;
-    forced.reserve(key_ants.size());
-    std::function<void(std::size_t, double, double)> dfs = [&](std::size_t index, double probability, double danger) {
+    FixedList<ForcedMove, kMaxImportantAnts> forced;
+    auto dfs = [&](auto &&self, int index, double probability, double danger) -> void {
         if (index >= key_ants.size()) {
             combos.push_back(ComboRolloutSpec{forced, probability, danger, 1});
             return;
         }
         for (const auto &option : options[index]) {
-            forced.emplace_back(key_ants[index]->ant_id, option.direction);
-            dfs(index + 1, probability * option.probability,
-                danger + option.danger * ant_selection_threat(sim, *key_ants[index]));
+            forced.push_back(ForcedMove{key_ants[index]->ant_id, option.direction});
+            self(self, index + 1, probability * option.probability,
+                 danger + option.danger * ant_selection_threat(sim, *key_ants[index]));
             forced.pop_back();
         }
     };
-    dfs(0, 1.0, 0.0);
+    dfs(dfs, 0, 1.0, 0.0);
 
     if (combos.empty()) {
         return {ComboRolloutSpec{}};
@@ -2462,6 +2772,11 @@ inline std::vector<ComboRolloutSpec> rollout_combos_for(const DefenseSimulator &
 
 inline OffensiveExpectation compute_offense_expectation(const PublicState &state, int player) {
     OffensiveExpectation out;
+    if (config().offense_rollouts <= 0) {
+        (void)state;
+        (void)player;
+        return out;
+    }
     bool has_live_ant = false;
     for (const auto &ant : state.ants) {
         if (ant.player == player && ant.is_alive()) {
@@ -2498,7 +2813,11 @@ inline OffensiveExpectation compute_offense_expectation(const PublicState &state
 }
 
 inline double build_slot_score(const PublicState &state, int player, int x, int y) {
-    return tower_position_bonus(player, x, y) + state.slot_priority(player, x, y) * 0.001;
+    (void)state;
+    const int code = old_ai_position_code_at(player, x, y);
+    const int bounded_code = code >= 0 ? code : kPositionCodeCount;
+    return tower_position_bonus(player, x, y) +
+           std::max(0.0, static_cast<double>(kPositionCodeCount - bounded_code)) * 0.001;
 }
 
 inline std::vector<OperationCandidate> generate_build_candidates(const PublicState &state, int player) {
@@ -2533,6 +2852,8 @@ inline std::vector<OperationCandidate> generate_upgrade_candidates(const PublicS
             targets = {TowerType::Heavy, TowerType::Mortar, TowerType::Quick};
         } else if (tower.tower_type == TowerType::Heavy) {
             targets = {TowerType::Bewitch};
+        } else if (tower.tower_type == TowerType::Mortar) {
+            targets = {TowerType::Pulse};
         } else if (tower.tower_type == TowerType::Quick) {
             targets = {TowerType::QuickPlus};
         }
@@ -2585,11 +2906,11 @@ inline std::vector<OperationCandidate> top_generic_candidates(const PublicState 
     std::sort(candidates.begin(), candidates.end(), [](const OperationCandidate &lhs, const OperationCandidate &rhs) {
         return lhs.heuristic > rhs.heuristic;
     });
-    std::unordered_map<std::string, bool> seen;
+    std::unordered_set<std::string> seen;
     std::vector<OperationCandidate> unique;
     unique.reserve(candidates.size());
     for (const auto &candidate : candidates) {
-        if (seen.emplace(op_key(candidate.operation), true).second) {
+        if (seen.emplace(op_key(candidate.operation)).second) {
             unique.push_back(candidate);
         }
     }
@@ -2715,10 +3036,17 @@ inline TerminalEvaluationBreakdown simulate_combo(
         if (step == 1 && plan.has_second && sim.can_apply_operation(plan.second, plan.blocked_x, plan.blocked_y, plan.blocked_tower_id)) {
             sim.apply_operation(plan.second);
         }
-        sim.simulate_round(rng, step == 0 ? combo.forced_moves : std::vector<std::pair<int, int>>{});
+        if (step == 0) {
+            sim.simulate_round(rng, combo.forced_moves);
+        } else {
+            sim.simulate_round(rng);
+        }
         sim.coins += offense.money_gain_by_round[static_cast<std::size_t>(step)];
     }
-    return terminal_evaluation_breakdown(sim);
+    TerminalEvaluationBreakdown breakdown = terminal_evaluation_breakdown(sim);
+    breakdown.terminal_bonus_score += plan.terminal_bonus;
+    breakdown.total += plan.terminal_bonus;
+    return breakdown;
 }
 
 struct ProgressivePlanEvaluation {
@@ -2891,6 +3219,7 @@ inline TerminalEvaluationBreakdown progressive_plan_breakdown(const ProgressiveP
         contribution.ant_threat_score *= sample_scale;
         contribution.money_raw *= sample_scale;
         contribution.money_score *= sample_scale;
+        contribution.terminal_bonus_score *= sample_scale;
         contribution.total *= sample_scale;
         weighted += contribution;
         sampled_weight += combo_weight;
@@ -2906,6 +3235,7 @@ inline TerminalEvaluationBreakdown progressive_plan_breakdown(const ProgressiveP
         weighted.ant_threat_score *= inv;
         weighted.money_raw *= inv;
         weighted.money_score *= inv;
+        weighted.terminal_bonus_score *= inv;
         weighted.total *= inv;
     }
     return weighted;
@@ -2974,36 +3304,229 @@ inline void advance_progressive_plan_evaluation(
     evaluation.terminal_breakdown = progressive_plan_breakdown(evaluation);
 }
 
-inline std::vector<std::pair<int, int>> lightning_centers(const PublicState &state, int player) {
+constexpr int kLightningPredictionDepth = 2;
+constexpr int kLightningPredictionBranchCapacity = 64;
+constexpr int kLightningClusterSeparation = 2;
+
+struct LightningPredictionBranch {
+    int x = -1;
+    int y = -1;
+    int last_move = kNoMove;
+    double probability = 0.0;
+};
+
+inline void add_lightning_heat(double (&heat)[kMapSize][kMapSize], int x, int y, double value) {
+    if (!is_valid_pos(x, y) || value <= 0.0) {
+        return;
+    }
+    heat[x][y] += value;
+}
+
+inline double lightning_ant_presence_weight(const SearchAnt &ant) {
+    const double hp_ratio = static_cast<double>(std::max(ant.hp, 0)) / std::max(1, ant.max_hp());
+    const double behavior_scale = behavior_threat_scale(ant.behavior);
+    const double kind_weight = ant.kind == AntKind::Combat ? 4.5 : 1.6;
+    return (kind_weight + hp_ratio) * behavior_scale;
+}
+
+inline void merge_lightning_prediction_branch(
+    FixedList<LightningPredictionBranch, kLightningPredictionBranchCapacity> &branches,
+    int x,
+    int y,
+    int last_move,
+    double probability) {
+    if (probability <= 0.0) {
+        return;
+    }
+    for (int index = 0; index < branches.size(); ++index) {
+        if (branches[index].x == x && branches[index].y == y && branches[index].last_move == last_move) {
+            branches[index].probability += probability;
+            return;
+        }
+    }
+    branches.push_back(LightningPredictionBranch{x, y, last_move, probability});
+}
+
+inline void add_lightning_ant_heat(
+    const DefenseSimulator &sim,
+    const SearchAnt &ant,
+    double (&heat)[kMapSize][kMapSize]) {
+    static constexpr double kStepWeight[kLightningPredictionDepth + 1] = {1.0, 0.8, 0.6};
+
+    const auto [base_x, base_y] = kPlayerBases[sim.player];
+    const double base_weight = lightning_ant_presence_weight(ant);
+    add_lightning_heat(heat, ant.x, ant.y, base_weight * kStepWeight[0]);
+
+    FixedList<LightningPredictionBranch, kLightningPredictionBranchCapacity> frontier;
+    frontier.push_back(LightningPredictionBranch{ant.x, ant.y, ant.last_move, 1.0});
+
+    for (int step = 1; step <= kLightningPredictionDepth; ++step) {
+        FixedList<LightningPredictionBranch, kLightningPredictionBranchCapacity> next;
+        for (int index = 0; index < frontier.size(); ++index) {
+            const auto &branch = frontier[index];
+            if (branch.probability <= 0.0) {
+                continue;
+            }
+            if (branch.x == base_x && branch.y == base_y) {
+                add_lightning_heat(heat, branch.x, branch.y, base_weight * branch.probability * kStepWeight[step]);
+                continue;
+            }
+
+            SearchAnt projected = ant;
+            projected.x = branch.x;
+            projected.y = branch.y;
+            projected.last_move = branch.last_move;
+
+            const auto options = sim.move_options_for(projected);
+            if (options.empty()) {
+                add_lightning_heat(heat, branch.x, branch.y, base_weight * branch.probability * kStepWeight[step]);
+                merge_lightning_prediction_branch(next, branch.x, branch.y, branch.last_move, branch.probability);
+                continue;
+            }
+            for (int option_index = 0; option_index < options.size(); ++option_index) {
+                const auto &option = options[option_index];
+                const double probability = branch.probability * option.probability;
+                add_lightning_heat(heat, option.nx, option.ny, base_weight * probability * kStepWeight[step]);
+                merge_lightning_prediction_branch(next, option.nx, option.ny, option.direction, probability);
+            }
+        }
+        frontier = next;
+    }
+}
+
+inline int lightning_tower_strikes_within_horizon(int horizon) {
+    const int duration = weapon_stats(SuperWeaponType::LightningStorm).duration;
+    const int capped_horizon = std::max(0, std::min(horizon, duration));
+    int strikes = 0;
+    for (int step = 0; step < capped_horizon; ++step) {
+        const int remaining_turns = duration - step;
+        if (lightning_tower_strike_turn(remaining_turns)) {
+            ++strikes;
+        }
+    }
+    return strikes;
+}
+
+inline double enemy_tower_lightning_damage_score(const PublicState &state, int player, int x, int y) {
     const int enemy = 1 - player;
+    const int damage = lightning_tower_strikes_within_horizon(config().lightning_horizon) * kLightningTowerDamage;
+    if (damage <= 0) {
+        return 0.0;
+    }
+
+    int enemy_tower_count = 0;
+    for (const auto &tower : state.towers) {
+        if (tower.player == enemy && tower.hp > 0) {
+            ++enemy_tower_count;
+        }
+    }
+    if (enemy_tower_count <= 0) {
+        return 0.0;
+    }
+
+    double score = 0.0;
+    const int attack_range = weapon_stats(SuperWeaponType::LightningStorm).attack_range;
+    for (const auto &tower : state.towers) {
+        if (tower.player != enemy || tower.hp <= 0) {
+            continue;
+        }
+        if (cell_distance_fast(x, y, tower.x, tower.y) > attack_range) {
+            continue;
+        }
+        const SearchTower before{tower.tower_id, tower.x, tower.y, tower.tower_type, tower.hp, tower.cooldown};
+        const SearchTower after{tower.tower_id, tower.x, tower.y, tower.tower_type, std::max(0, tower.hp - damage), tower.cooldown};
+        const double before_value = tower_estimated_salvage_value(before, enemy_tower_count);
+        const double after_value = tower_estimated_salvage_value(after, enemy_tower_count);
+        score += (before_value - after_value) * config().tower_value_weight;
+    }
+    return score;
+}
+
+inline double lightning_ant_cluster_score(double (&heat)[kMapSize][kMapSize], int x, int y, int range) {
+    double score = 0.0;
+    for (int tx = 0; tx < kMapSize; ++tx) {
+        for (int ty = 0; ty < kMapSize; ++ty) {
+            if (heat[tx][ty] <= 0.0) {
+                continue;
+            }
+            if (cell_distance_fast(x, y, tx, ty) > range) {
+                continue;
+            }
+            score += heat[tx][ty];
+        }
+    }
+    return score;
+}
+
+inline std::vector<std::pair<int, int>> lightning_centers(const PublicState &state, const DefenseSimulator &root, int player) {
     struct ScoredCell {
         int x = -1;
         int y = -1;
         double score = 0.0;
     };
+
+    double ant_heat[kMapSize][kMapSize]{};
+    for (const auto &ant : root.ants) {
+        if (!ant.alive()) {
+            continue;
+        }
+        add_lightning_ant_heat(root, ant, ant_heat);
+    }
+
     std::vector<ScoredCell> cells;
-    std::unordered_map<std::string, bool> seen;
-    for (const auto &ant : state.ants) {
-        if (ant.player != enemy || !ant.is_alive()) {
-            continue;
+    for (int x = 0; x < kMapSize; ++x) {
+        for (int y = 0; y < kMapSize; ++y) {
+            if (!is_valid_pos(x, y)) {
+                continue;
+            }
+            if (distance_to_boundary(x, y) < 3) {
+                continue;
+            }
+            const double ant_score = lightning_ant_cluster_score(
+                ant_heat, x, y, weapon_stats(SuperWeaponType::LightningStorm).attack_range);
+            const double tower_score = enemy_tower_lightning_damage_score(state, player, x, y);
+            const double total_score = ant_score + tower_score;
+            if (total_score <= 0.0) {
+                continue;
+            }
+            cells.push_back(ScoredCell{x, y, total_score});
         }
-        if (distance_to_boundary(ant.x, ant.y) < 3) {
-            continue;
-        }
-        const std::string key = std::to_string(ant.x) + ":" + std::to_string(ant.y);
-        if (!seen.emplace(key, true).second) {
-            continue;
-        }
-        cells.push_back(ScoredCell{ant.x, ant.y, visible_cluster_score(state, player, ant.x, ant.y, 3)});
     }
-    std::sort(cells.begin(), cells.end(), [](const ScoredCell &lhs, const ScoredCell &rhs) { return lhs.score > rhs.score; });
-    if (static_cast<int>(cells.size()) > config().lightning_center_limit) {
-        cells.resize(static_cast<std::size_t>(config().lightning_center_limit));
-    }
+
+    std::sort(cells.begin(), cells.end(), [](const ScoredCell &lhs, const ScoredCell &rhs) {
+        if (lhs.score != rhs.score) {
+            return lhs.score > rhs.score;
+        }
+        return std::tie(lhs.x, lhs.y) < std::tie(rhs.x, rhs.y);
+    });
+
     std::vector<std::pair<int, int>> out;
-    out.reserve(cells.size());
-    for (const auto &cell : cells) {
-        out.emplace_back(cell.x, cell.y);
+    std::vector<bool> used(cells.size(), false);
+    out.reserve(std::min(static_cast<int>(cells.size()), config().lightning_center_limit));
+
+    for (std::size_t index = 0; index < cells.size(); ++index) {
+        bool overlapped = false;
+        for (const auto &[sx, sy] : out) {
+            if (cell_distance_fast(cells[index].x, cells[index].y, sx, sy) <= kLightningClusterSeparation) {
+                overlapped = true;
+                break;
+            }
+        }
+        if (overlapped) {
+            continue;
+        }
+        out.emplace_back(cells[index].x, cells[index].y);
+        used[index] = true;
+        if (static_cast<int>(out.size()) >= config().lightning_center_limit) {
+            return out;
+        }
+    }
+
+    for (std::size_t index = 0; index < cells.size() && static_cast<int>(out.size()) < config().lightning_center_limit; ++index) {
+        if (used[index]) {
+            continue;
+        }
+        out.emplace_back(cells[index].x, cells[index].y);
     }
     return out;
 }
@@ -3013,11 +3536,13 @@ inline double evaluate_lightning_center(
     int x,
     int y,
     const OffensiveExpectation &offense,
-    std::uint64_t seed_base) {
+    std::uint64_t seed_base,
+    double terminal_bonus) {
     SearchPlan plan;
     plan.name = "lightning";
     plan.has_first = true;
     plan.first = Operation(OperationType::UseLightningStorm, x, y);
+    plan.terminal_bonus = terminal_bonus;
     plan.penalty = 0.0;
     double total = 0.0;
     for (int rollout = 0; rollout < config().lightning_rollouts_per_center; ++rollout) {
@@ -3049,15 +3574,17 @@ inline SearchPlan best_lightning_plan(
         state.coins[player] < weapon_stats(SuperWeaponType::LightningStorm).cost) {
         return best;
     }
-    for (const auto &[x, y] : lightning_centers(state, player)) {
+    for (const auto &[x, y] : lightning_centers(state, root, player)) {
         const Operation operation(OperationType::UseLightningStorm, x, y);
         if (!state.can_apply_operation(player, operation)) {
             continue;
         }
-        const double score = evaluate_lightning_center(root, x, y, offense, mix_seed(seed_base, static_cast<std::uint64_t>(x * 97 + y * 131)));
+        const double tower_bonus = enemy_tower_lightning_damage_score(state, player, x, y);
+        const double score = evaluate_lightning_center(
+            root, x, y, offense, mix_seed(seed_base, static_cast<std::uint64_t>(x * 97 + y * 131)), tower_bonus);
         if (score > best_score) {
             best_score = score;
-            best = SearchPlan{"lightning", true, operation, false, {}, -1, -1, -1, score, 0.0};
+            best = SearchPlan{"lightning", true, operation, false, {}, -1, -1, -1, tower_bonus, score, 0.0};
         }
     }
     if (best_score > -std::numeric_limits<double>::infinity()) {
@@ -3114,13 +3641,13 @@ inline std::vector<Operation> decide_random_search_baseline(
     std::sort(plans.begin(), plans.end(), [](const SearchPlan &lhs, const SearchPlan &rhs) {
         return lhs.heuristic > rhs.heuristic;
     });
-    std::unordered_map<std::string, bool> seen_plan;
+    std::unordered_set<std::string> seen_plan;
     for (std::size_t index = 0; index < plans.size(); ++index) {
         const SearchPlan &plan = plans[index];
         std::string key = plan.has_first ? op_key(plan.first) : "hold";
         key += "/";
         key += plan.has_second ? op_key(plan.second) : "hold";
-        if (!seen_plan.emplace(key, true).second) {
+        if (!seen_plan.emplace(key).second) {
             continue;
         }
         ++unique_plan_count;
@@ -3239,19 +3766,11 @@ inline std::vector<Operation> decide_random_search_baseline(
                     << ",\"mean_ant_threat_score\":" << item.terminal.ant_threat_score
                     << ",\"mean_money_raw\":" << item.terminal.money_raw
                     << ",\"mean_money_score\":" << item.terminal.money_score
-                    << ",\"pen_generic\":" << item.penalty_breakdown.generic
-                    << ",\"pen_build\":" << item.penalty_breakdown.build
-                    << ",\"pen_upgrade\":" << item.penalty_breakdown.upgrade
+                    << ",\"mean_terminal_bonus_score\":" << item.terminal.terminal_bonus_score
                     << ",\"pen_downgrade\":" << item.penalty_breakdown.downgrade
                     << ",\"pen_lightning\":" << item.penalty_breakdown.lightning
-                    << ",\"pen_cost_scaled\":" << item.penalty_breakdown.cost_scaled
-                    << ",\"pen_peace_extra\":" << item.penalty_breakdown.peace_extra
-                    << ",\"pen_ring1_build\":" << item.penalty_breakdown.ring1_build
-                    << ",\"pen_two_step\":" << item.penalty_breakdown.two_step
                     << ",\"pen_hold_bias\":" << item.penalty_breakdown.hold_bias
-                    << ",\"pen_heavy_discount\":" << item.penalty_breakdown.heavy_discount
                     << ",\"pen_emergency_discount\":" << item.penalty_breakdown.emergency_discount
-                    << ",\"pen_other\":" << item.penalty_breakdown.other
                     << ",\"score\":" << item.score
                     << "}\n";
             }

@@ -17,6 +17,14 @@
   - 负责协议收发、持久化 `NativeSimulator` 与状态同步
 - `Makefile`
   - 构建 `build/ai_cpp_heavy_baseline`
+- `../../antgame_cpp_sdk/include/antgame_sdk/position_slots.hpp`
+  - 旧版位置名定义，后续讨论位置时以它为准
+- `../../antgame_cpp_sdk/include/antgame_sdk/random_search_params.hpp`
+  - 当前搜索和估值的关键参数入口
+- `../tools/eval_cpp_partial_selfplay.py`
+  - partial self-play 调试入口
+- `../tools/plot_old_ai_positions.py`
+  - 旧版位置名地图可视化工具
 
 ## 3. 构建
 
@@ -46,8 +54,24 @@ bash package_ai.sh cpp_heavy_baseline
 - 主搜索只考虑我方塔/敌方蚂蚁/我方闪电/敌方已激活超武
 - 仅搜索 `Build/Upgrade/Downgrade/Lightning/Hold`
 - 当前不考虑任何基地升级
+- 位置系统统一改为旧版位置名
+  - `BASE/C1/C2/C3/L1/L2/L3/R1/R2/R3/...`
 - `Upgrade` 当前只作为单回合动作搜索
 - 双回合只保留：
   - 核心九格 `C1/C2/C3/L1/L2/L3/R1/R2/R3` 上的 `Build -> Upgrade`
   - `Downgrade -> Followup`，且若第二步是建塔，也只允许核心九格
-- 用共享进攻 EV 与终点估值驱动动作选择
+- 当前不使用进攻补值，仅用防守 rollout 终点评估驱动动作选择
+
+## 7. 当前验证
+
+- `../../antgame_cpp_sdk/tests/test_cpp_sdk.py`
+  - 当前重构后 `11 passed`
+- `../../antgame_cpp_sdk/build/sdk_smoke`
+  - 当前重构后 `cpp_sdk smoke ok`
+- 小样本 partial self-play 调试
+  - 当前重构后仍能正常打印 `plan` / `decision` 日志
+
+仓库清理约定：
+
+- `Game1/antgame_ai_cpp` 下的 `eval_*` / `tmp_*` / `partial_debug_*` / 位置图输出都视为临时生成物
+- 这些文件不应再进版本库

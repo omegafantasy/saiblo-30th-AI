@@ -22,6 +22,17 @@ namespace rs = antgame::sdk::random_search_detail;
 
 namespace {
 
+int json_int_or(const json &obj, const char *key, int fallback) {
+    if (!obj.is_object() || !obj.contains(key)) {
+        return fallback;
+    }
+    const auto &value = obj[key];
+    if (!value.is_number_integer()) {
+        return fallback;
+    }
+    return value.get<int>();
+}
+
 Operation parse_operation_spec(const std::string &spec) {
     std::vector<int> parts;
     std::stringstream ss(spec);
@@ -54,14 +65,14 @@ std::vector<Operation> parse_replay_ops(const json &value) {
         if (!item.is_object()) {
             continue;
         }
-        const int type = item.value("type", -1);
-        const int id = item.value("id", -1);
-        const int args = item.value("args", -1);
+        const int type = json_int_or(item, "type", -1);
+        const int id = json_int_or(item, "id", -1);
+        const int args = json_int_or(item, "args", -1);
         int x = -1;
         int y = -1;
         if (item.contains("pos") && item["pos"].is_object()) {
-            x = item["pos"].value("x", -1);
-            y = item["pos"].value("y", -1);
+            x = json_int_or(item["pos"], "x", -1);
+            y = json_int_or(item["pos"], "y", -1);
         }
         const auto op_type = static_cast<OperationType>(type);
         switch (op_type) {
@@ -93,11 +104,36 @@ NativeSimulator replay_to_round(const json &records, int target_round) {
     if (!records.is_array() || records.empty()) {
         throw std::runtime_error("invalid replay records");
     }
-    const std::uint64_t seed = records[0].value("seed", 0ULL);
+    std::uint64_t seed = 0ULL;
+    std::size_t start_index = 0;
+    for (std::size_t index = 0; index < records.size(); ++index) {
+        const auto &record = records.at(index);
+        if (!record.is_object()) {
+            continue;
+        }
+        if (record.contains("seed") && record["seed"].is_number_unsigned()) {
+            seed = record["seed"].get<std::uint64_t>();
+            start_index = index;
+            break;
+        }
+        if (record.contains("seed") && record["seed"].is_number_integer()) {
+            seed = static_cast<std::uint64_t>(record["seed"].get<long long>());
+            start_index = index;
+            break;
+        }
+    }
     NativeSimulator simulator(seed);
     for (int round = 0; round < target_round; ++round) {
-        const auto ops0 = parse_replay_ops(records.at(static_cast<std::size_t>(round)).value("op0", json::array()));
-        const auto ops1 = parse_replay_ops(records.at(static_cast<std::size_t>(round)).value("op1", json::array()));
+        const std::size_t record_index = start_index + static_cast<std::size_t>(round);
+        if (record_index >= records.size()) {
+            break;
+        }
+        const auto &record = records.at(record_index);
+        if (!record.is_object()) {
+            continue;
+        }
+        const auto ops0 = parse_replay_ops(record.value("op0", json::array()));
+        const auto ops1 = parse_replay_ops(record.value("op1", json::array()));
         simulator.resolve_turn(ops0, ops1);
     }
     return simulator;
@@ -169,7 +205,7 @@ rs::TerminalEvaluationBreakdown direct_mc_plan(
             sim.apply_operation(plan.first);
         }
         rs::FastRng rng(rs::mix_seed(seed_base, static_cast<std::uint64_t>(rollout + 1)));
-        for (int step = 0; step < rs::config().defense_horizon && !sim.terminal; ++step) {
+        for (int step = 0; step < antgame::sdk::config().defense_horizon && !sim.terminal; ++step) {
             if (step == 1 && plan.has_second &&
                 sim.can_apply_operation(plan.second, plan.blocked_x, plan.blocked_y, plan.blocked_tower_id)) {
                 sim.apply_operation(plan.second);
@@ -219,7 +255,7 @@ rs::TerminalEvaluationBreakdown native_mc_plan(
                 throw std::runtime_error("native first operation became illegal");
             }
         }
-        for (int step = 0; step < rs::config().defense_horizon && !native.terminal(); ++step) {
+        for (int step = 0; step < antgame::sdk::config().defense_horizon && !native.terminal(); ++step) {
             const auto result = native.advance_round();
             if (result.terminal) {
                 break;
@@ -279,6 +315,25 @@ int main(int argc, char **argv) {
               << ",\"combat_pressure\":" << threat.combat_pressure
               << ",\"tower_pressure\":" << threat.tower_pressure
               << ",\"rollouts\":" << rollouts
+              << ",\"towers\":[";
+    bool first_tower = true;
+    for (const auto &tower : state.towers) {
+        if (tower.player != player || tower.hp <= 0) {
+            continue;
+        }
+        if (!first_tower) {
+            std::cout << ',';
+        }
+        first_tower = false;
+        std::cout << "{"
+                  << "\"id\":" << tower.tower_id
+                  << ",\"type\":" << static_cast<int>(tower.tower_type)
+                  << ",\"hp\":" << tower.hp
+                  << ",\"x\":" << tower.x
+                  << ",\"y\":" << tower.y
+                  << "}";
+    }
+    std::cout << "]"
               << "}\n";
 
     const auto offense = rs::compute_offense_expectation(state, player);
@@ -309,19 +364,10 @@ int main(int argc, char **argv) {
                   << ",\"tower_bonus_score\":" << terminal.tower_bonus_score
                   << ",\"ant_threat_score\":" << terminal.ant_threat_score
                   << ",\"money_score\":" << terminal.money_score
-                  << ",\"pen_generic\":" << penalty.generic
-                  << ",\"pen_build\":" << penalty.build
-                  << ",\"pen_upgrade\":" << penalty.upgrade
                   << ",\"pen_downgrade\":" << penalty.downgrade
                   << ",\"pen_lightning\":" << penalty.lightning
-                  << ",\"pen_cost_scaled\":" << penalty.cost_scaled
-                  << ",\"pen_peace_extra\":" << penalty.peace_extra
-                  << ",\"pen_ring1_build\":" << penalty.ring1_build
-                  << ",\"pen_two_step\":" << penalty.two_step
                   << ",\"pen_hold_bias\":" << penalty.hold_bias
-                  << ",\"pen_heavy_discount\":" << penalty.heavy_discount
                   << ",\"pen_emergency_discount\":" << penalty.emergency_discount
-                  << ",\"pen_other\":" << penalty.other
                   << ",\"native_score_before_penalty\":" << native_terminal.total
                   << ",\"native_score\":" << (native_terminal.total - penalty.total)
                   << ",\"native_base_hp_raw\":" << native_terminal.base_hp_raw

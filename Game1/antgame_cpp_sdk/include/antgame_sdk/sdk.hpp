@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "antgame_sdk/position_slots.hpp"
+
 namespace antgame::sdk {
 
 constexpr int kPlayerCount = 2;
@@ -336,34 +338,8 @@ inline std::vector<std::pair<int, int>> neighbors(int x, int y) {
     return out;
 }
 
-inline const std::array<std::array<std::pair<int, int>, 35>, 2> &strategic_slot_order() {
-    static const std::array<std::array<std::pair<int, int>, 35>, 2> slots = {{
-        {{{2, 9},  {4, 9},  {5, 9},  {5, 7},  {6, 9},  {5, 11}, {5, 6},  {6, 7},  {6, 11},
-          {5, 12}, {4, 3},  {5, 3},  {7, 8},  {7, 10}, {4, 15}, {5, 15}, {4, 2},  {6, 4},
-          {7, 5},  {8, 7},  {8, 11}, {7, 13}, {6, 14}, {4, 16}, {6, 1},  {6, 2},  {6, 16},
-          {6, 17}, {7, 1},  {8, 4},  {8, 14}, {7, 17}, {8, 2},  {8, 16}, {3, 9}}},
-        {{{16, 9}, {14, 9}, {13, 9}, {13, 7}, {12, 9}, {13, 11}, {12, 6}, {12, 7}, {12, 11},
-          {12, 12}, {14, 3}, {13, 3}, {10, 8}, {10, 10}, {14, 15}, {13, 15}, {13, 2}, {11, 4},
-          {11, 5}, {10, 7}, {10, 11}, {11, 13}, {11, 14}, {13, 16}, {12, 1}, {11, 2}, {11, 16},
-          {12, 17}, {11, 1}, {9, 4}, {9, 14}, {11, 17}, {9, 2}, {9, 16}, {15, 9}}},
-    }};
-    return slots;
-}
-
-inline double centerline_weight(int x, int y) {
-    if ((x == 2 || x == 16) && y == 9) {
-        return 1.0;
-    }
-    if ((x == 4 || x == 14) && y == 9) {
-        return 1.1;
-    }
-    if ((x == 5 || x == 13) && y == 9) {
-        return 1.15;
-    }
-    if ((x == 6 || x == 12) && y == 9) {
-        return 1.2;
-    }
-    return 1.0;
+inline constexpr const std::array<std::array<std::pair<int, int>, kPositionCodeCount>, 2> &strategic_slot_order() {
+    return kOldAiPositions;
 }
 
 struct Operation {
@@ -514,7 +490,7 @@ class PublicState {
     PublicState clone() const { return *this; }
 
     std::vector<std::pair<int, int>> strategic_slots(int player) const {
-        const auto &slots = strategic_slot_order()[std::clamp(player, 0, 1)];
+        const auto &slots = old_ai_positions(player);
         return std::vector<std::pair<int, int>>(slots.begin(), slots.end());
     }
 
@@ -689,16 +665,10 @@ class PublicState {
     }
 
     double slot_priority(int player, int x, int y) const {
-        const auto &slots = strategic_slot_order()[std::clamp(player, 0, 1)];
-        int order = static_cast<int>(slots.size());
-        for (std::size_t index = 0; index < slots.size(); ++index) {
-            if (slots[index].first == x && slots[index].second == y) {
-                order = static_cast<int>(index);
-                break;
-            }
-        }
-        double priority = std::max(0.0, 24.0 - static_cast<double>(order) * 0.6);
-        priority *= centerline_weight(x, y);
+        const int order = old_ai_position_code_at(player, x, y);
+        const int bounded_order = order >= 0 ? order : kPositionCodeCount;
+        double priority = std::max(0.0, 24.0 - static_cast<double>(bounded_order) * 0.6);
+        priority *= centerline_slot_weight(bounded_order);
         const auto [base_x, base_y] = kPlayerBases[player];
         priority += static_cast<double>(hex_distance(x, y, base_x, base_y)) * 0.4;
         return priority;
