@@ -43,11 +43,15 @@ docs/generated/
 Game1/antgame_ai_cpp/eval_batch_*/
 Game1/antgame_ai_cpp/eval_partial_*/
 Game1/antgame_ai_cpp/eval_strength_*/
+Game1/antgame_ai_cpp/eval_*/
 Game1/antgame_ai_cpp/eval_*_summary.json
+Game1/antgame_ai_cpp/tmp_*/
 Game1/antgame_ai_cpp/tmp_eval_*/
 Game1/antgame_ai_cpp/tmp_partial_*/
 Game1/antgame_ai_cpp/tmp_probe_*/
 Game1/antgame_ai_cpp/tmp_refactor_*/
+Game1/antgame_ai_cpp/tmp_lure_strategy_*/
+Game1/antgame_ai_cpp/tmp_lure_*/
 Game1/antgame_ai_cpp/eval_complete_samples/
 Game1/antgame_ai_cpp/eval_complete_samples_game_main
 Game1/antgame_ai_cpp/partial_debug_seed*/

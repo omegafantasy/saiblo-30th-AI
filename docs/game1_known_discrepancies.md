@@ -78,6 +78,23 @@
 - 后续重构时，搜索单位应从单操作改为“同回合有序 op-list”
 - 未来 rollout 中应支持按模拟态自适应地产生下一回合 op-list，而不是只承诺固定 second op
 
+### 2.5 官方 `game` 二进制当前不执行 `config.max_rounds`
+
+现状：
+
+- `Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py` 会把 `--max-rounds` 写进 init 包的 `config.max_rounds`
+- 但当前 `Game1/Ant-Game/game/output/main` 并不会据此提前截断正式对局
+- 已确认案例：
+  - `Game1/antgame_ai_cpp/eval_lure_256_cap_2026_04_21`
+  - 启动参数显式传了 `--max-rounds 256`
+  - 实际 replay 仍分别跑到了 `396 / 381 / 403 / 450` 回合
+
+结果：
+
+- 看到 `summary.json` 里的 `max_rounds` 字段时，不要默认以为 replay 真被硬截到了该值
+- 若需要“严格前 256 回合”的强度结论，应对 replay 和 decision log 做前 `256` 回合裁切后再统计
+- 若未来要做真正受控的固定回合评测，应在评测驱动层本地强制截断，或改用会主动执行 round cap 的 SDK 环境
+
 ## 3. 已对齐的历史分叉
 
 以下两项此前确实存在 Python / native 认识不一致，现在统一按 Python 语义处理：

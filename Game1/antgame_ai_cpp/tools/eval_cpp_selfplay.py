@@ -347,6 +347,7 @@ def run_match(
     game_bin: Path,
     out_dir: Path,
     debug_mode: str | None,
+    max_rounds: int | None,
 ) -> dict[str, Any]:
     workdir = out_dir / f"seed_{seed:04d}"
     if workdir.exists():
@@ -390,6 +391,8 @@ def run_match(
             "config": {"random_seed": seed},
             "replay": str(replay_path),
         }
+        if max_rounds is not None:
+            init["config"]["max_rounds"] = int(max_rounds)
         write_all(game.stdin, packet(init))
 
         while True:
@@ -544,6 +547,7 @@ def main() -> int:
     parser.add_argument("--target", default=DEFAULT_TARGET)
     parser.add_argument("--debug-seeds", default="", help="Seeds that use full per-plan debug logging")
     parser.add_argument("--game-bin", type=Path, default=DEFAULT_GAME_BIN)
+    parser.add_argument("--max-rounds", type=int, default=None)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
@@ -574,7 +578,15 @@ def main() -> int:
         future_map = {}
         for seed in seeds:
             debug_mode = "plans" if seed in debug_seeds else "summary"
-            future = executor.submit(run_match, seed, packaged_ai_dir, game_bin, output_dir / "matches", debug_mode)
+            future = executor.submit(
+                run_match,
+                seed,
+                packaged_ai_dir,
+                game_bin,
+                output_dir / "matches",
+                debug_mode,
+                args.max_rounds,
+            )
             future_map[future] = seed
         for future in as_completed(future_map):
             seed = future_map[future]
@@ -604,6 +616,7 @@ def main() -> int:
             "target": args.target,
             "game_bin": str(game_bin),
             "packaged_ai_dir": str(packaged_ai_dir),
+            "max_rounds": args.max_rounds,
         },
         "aggregate": aggregate_summary,
         "failures": failures,

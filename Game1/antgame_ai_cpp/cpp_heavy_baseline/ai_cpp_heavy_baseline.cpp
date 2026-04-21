@@ -1,17 +1,17 @@
 #include <iostream>
 #include <vector>
 
-#include "antgame_sdk/random_search_baseline.hpp"
+#include "antgame_sdk/lure_strategy.hpp"
 #include "antgame_sdk/native_sim.hpp"
 #include "antgame_sdk/sdk.hpp"
 
 using antgame::sdk::NativeSimulator;
+using antgame::sdk::LureStrategyDecisionContext;
+using antgame::sdk::LureStrategySession;
 using antgame::sdk::Operation;
 using antgame::sdk::ProtocolIO;
 using antgame::sdk::PublicRoundState;
 using antgame::sdk::PublicState;
-using antgame::sdk::RandomSearchDecisionContext;
-using antgame::sdk::RandomSearchSession;
 
 namespace {
 
@@ -20,7 +20,7 @@ struct AiRuntime {
     int opponent = 1;
     PublicState public_state;
     NativeSimulator simulator;
-    RandomSearchSession session;
+    LureStrategySession session;
     bool opponent_ops_already_applied = false;
 
     explicit AiRuntime(int player_in, unsigned long long seed_in)
@@ -59,12 +59,12 @@ bool receive_and_sync_round(AiRuntime &runtime, ProtocolIO &io) {
 }
 
 std::vector<Operation> compute_turn(AiRuntime &runtime) {
-    RandomSearchDecisionContext ctx;
+    LureStrategyDecisionContext ctx;
     ctx.state = &runtime.public_state;
     ctx.simulator = &runtime.simulator;
     ctx.player = runtime.player;
     ctx.opponent_ops_already_applied = runtime.opponent_ops_already_applied;
-    return antgame::sdk::decide_random_search_baseline(ctx, &runtime.session);
+    return antgame::sdk::decide_lure_strategy(ctx, &runtime.session);
 }
 
 void perform_self_turn(AiRuntime &runtime, ProtocolIO &io) {

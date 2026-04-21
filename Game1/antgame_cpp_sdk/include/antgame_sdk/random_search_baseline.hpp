@@ -943,6 +943,7 @@ class DefenseSimulator {
     int next_tower_id = 0;
     int lightning_cooldown = 0;
     bool terminal = false;
+    bool ignore_enemy_spawns = false;
 
     FixedList<SearchTower, kMaxSimTowers> towers;
     FixedList<SearchAnt, kMaxSimAnts> ants;
@@ -2378,7 +2379,9 @@ class DefenseSimulator {
         move_phase(rng, forced_moves);
         teleport_phase(rng);
         manage_ants();
-        spawn_enemy_ant(rng);
+        if (!ignore_enemy_spawns) {
+            spawn_enemy_ant(rng);
+        }
         increase_ant_age();
         update_income();
         update_effects(rng);
