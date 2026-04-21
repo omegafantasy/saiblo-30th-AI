@@ -2855,7 +2855,7 @@ inline std::vector<OperationCandidate> generate_upgrade_candidates(const PublicS
         } else if (tower.tower_type == TowerType::Mortar) {
             targets = {TowerType::Pulse};
         } else if (tower.tower_type == TowerType::Quick) {
-            targets = {TowerType::QuickPlus};
+            targets = {TowerType::QuickPlus, TowerType::Sniper};
         }
         for (TowerType target : targets) {
             Operation operation(OperationType::UpgradeTower, tower.tower_id, static_cast<int>(target));

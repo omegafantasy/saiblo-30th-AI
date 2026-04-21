@@ -46,6 +46,7 @@ bash package_ai.sh cpp_heavy_baseline
 - 规则真值仍以 `../../Ant-Game/` 为准
 - 外置 SDK 位于 `../../antgame_cpp_sdk/`
 - 若 `Ant-Game` 更新，需要先同步确认 SDK 与 baseline 仍然匹配
+- 当前已确认官方基础收入为每 `2` 回合 `+3`
 - 当前已按最新规则同步：超武部署当回合立即生效，后手同回合会受前手 `EMP` 影响
 
 ## 6. 当前策略轮廓

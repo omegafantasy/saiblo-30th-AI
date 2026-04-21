@@ -191,6 +191,8 @@ bash package_ai.sh cpp_heavy_baseline
 
 当前规则同步备注：
 
+- 官方基础收入节奏是每 `2` 回合 `+3`
+- `sdk.hpp` 中当前对应常量为 `kBasicIncome = 3`、`kBasicIncomeInterval = 2`
 - 超武在玩家操作阶段部署后立即生效
 - `Lightning Storm` 部署当下就会先结算一次敌蚁伤害，同回合攻击阶段不会重复结算
 - 玩家 `0` 本回合释放的 `EMP`，可以直接让玩家 `1` 同回合在覆盖区内的建/升/降塔失败
@@ -207,7 +209,7 @@ bash package_ai.sh cpp_heavy_baseline
     - `Basic -> Heavy / Mortar / Quick`
     - `Heavy -> Bewitch`
     - `Mortar -> Pulse`
-    - `Quick -> QuickPlus`
+    - `Quick -> QuickPlus / Sniper`
 - 双回合搜索当前只保留：
   - 核心九格 `Build -> Upgrade`
   - `Downgrade -> Followup`，且第二步若为建塔也只允许核心九格
@@ -221,8 +223,11 @@ bash package_ai.sh cpp_heavy_baseline
   - 先做簇去重，再保留最多 `10` 个候选中心
   - 每中心 `20` 次 rollout，`10` 回合 horizon
 - 核心位置奖励当前为：
-  - `C1=50, C2=50, C3=30`
-  - `L1=R1=30, L2=R2=20, L3=R3=15`
+  - `C1=60, C2=30, C3=15`
+  - `L1=20, L2=10, L3=10`
+  - `R1=20, R2=10, R3=10`
+  - `LL1=30, LL2=10, LL3=10`
+  - `RR1=30, RR2=10, RR3=10`
 - 首版实现使用外置轻量防守模拟，`NativeSimulator` 主要保留给校验、进攻 EV 采样与 replay 复算
 
 当前轻量防守模拟的主要提速手段：

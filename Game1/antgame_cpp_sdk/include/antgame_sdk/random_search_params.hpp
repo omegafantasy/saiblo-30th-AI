@@ -38,15 +38,21 @@ struct RandomSearchTuning {
     double bewitched_threat_scale = 0.25;
     double control_free_threat_scale = 1.0;
 
-    double c1_bonus = 50.0;
-    double c2_bonus = 50.0;
-    double c3_bonus = 30.0;
-    double l1_bonus = 30.0;
-    double l2_bonus = 20.0;
-    double l3_bonus = 15.0;
-    double r1_bonus = 30.0;
-    double r2_bonus = 20.0;
-    double r3_bonus = 15.0;
+    double c1_bonus = 60.0;
+    double c2_bonus = 30.0;
+    double c3_bonus = 15.0;
+    double l1_bonus = 20.0;
+    double l2_bonus = 10.0;
+    double l3_bonus = 10.0;
+    double r1_bonus = 20.0;
+    double r2_bonus = 10.0;
+    double r3_bonus = 10.0;
+    double ll1_bonus = 30.0;
+    double ll2_bonus = 10.0;
+    double ll3_bonus = 10.0;
+    double rr1_bonus = 30.0;
+    double rr2_bonus = 10.0;
+    double rr3_bonus = 10.0;
 };
 
 inline constexpr RandomSearchTuning kRandomSearchTuning{};
@@ -75,6 +81,18 @@ inline constexpr double random_search_position_bonus(int code) {
         return kRandomSearchTuning.r2_bonus;
     case R3:
         return kRandomSearchTuning.r3_bonus;
+    case LL1:
+        return kRandomSearchTuning.ll1_bonus;
+    case LL2:
+        return kRandomSearchTuning.ll2_bonus;
+    case LL3:
+        return kRandomSearchTuning.ll3_bonus;
+    case RR1:
+        return kRandomSearchTuning.rr1_bonus;
+    case RR2:
+        return kRandomSearchTuning.rr2_bonus;
+    case RR3:
+        return kRandomSearchTuning.rr3_bonus;
     default:
         return 0.0;
     }
