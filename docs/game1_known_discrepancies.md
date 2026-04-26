@@ -70,15 +70,16 @@
   - `拆塔 -> 闪电 -> 建塔`
   - `双拆塔 -> 双建塔`
 - 当前 `lure_strategy.hpp` 已经支持部分同回合 op-list
-  - `base × lure`
-  - `lightning` 前置 `hold / downgrade / sell`
+  - `lure` 的 `sell + build`
+  - 纯回收类 `base` 与 `lure` 的组合
+  - 受限 base swap
   - 少量 `C1` followup
 - 但它仍不是完整官方操作列表空间
 
 结果：
 
 - 当前 baseline 已能表达一部分“先卖诱饵再异地重建”
-- 但仍很难表达更复杂的 `sell -> lightning -> build` 与多塔多点联动
+- 但仍不能表达 `sell -> lightning`、`sell -> lightning -> build` 与更复杂多塔多点联动
 - rollout 中目前只保留“贴身自动回收”，不做完整主动计划生成
 
 建议：

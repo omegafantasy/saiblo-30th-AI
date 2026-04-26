@@ -13,6 +13,8 @@ const appState = {
   boardViews: {},
 };
 
+const STRATEGY_ROLLOUT_COUNT = 50;
+
 const dom = {};
 const layoutState = {
   activeDivider: null,
@@ -1319,6 +1321,7 @@ async function computeActions() {
       replay_path: dom.replayPath.value.trim(),
       round: Number(dom.roundInput.value || 0),
       player: Number(dom.playerSelect.value || 0),
+      rollout_count: STRATEGY_ROLLOUT_COUNT,
     });
     appState.selectedPlanKey = appState.actions.plans[0]?.key || null;
     appState.boardMode = "root";
@@ -1348,7 +1351,8 @@ async function loadRollouts() {
       round: Number(dom.roundInput.value || 0),
       player: Number(dom.playerSelect.value || 0),
       plan_key: appState.selectedPlanKey,
-      sample_count: 20,
+      rollout_count: STRATEGY_ROLLOUT_COUNT,
+      sample_count: STRATEGY_ROLLOUT_COUNT,
     });
     const bestSample = [...(appState.rollouts.samples || [])].sort((lhs, rhs) => {
       const lhsWeight = sampleWeight(lhs);
@@ -1380,6 +1384,7 @@ async function loadTrace() {
       round: Number(dom.roundInput.value || 0),
       player: Number(dom.playerSelect.value || 0),
       plan_key: appState.selectedPlanKey,
+      rollout_count: STRATEGY_ROLLOUT_COUNT,
       sample_index: appState.selectedSampleIndex,
       sample_count: Math.max(1, appState.rollouts?.samples?.length || 0),
     });

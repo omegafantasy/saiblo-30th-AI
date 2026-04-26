@@ -4,7 +4,7 @@
 
 ## 1. 真值边界
 
-- 规则、运行时、测试、SDK 真值在 `Game1/Ant-Game/`
+- 规则、官方运行时与官方测试真值在 `Game1/Ant-Game/`
 - 外置 C++ SDK 在 `Game1/antgame_cpp_sdk/`
 - 当前保留的 C++ AI 源码在 `Game1/antgame_ai_cpp/`
 - `Game1/Ant-Game/README.md` 只能当入口说明，不再单独充当规则真值
@@ -252,12 +252,13 @@ native 当前整回合主流程：
 - 若要对可疑动作做单回合策略审计，应使用 `Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp`
 - 若要对轻量模拟做 native 多 rollout 对拍，应使用 `Game1/antgame_cpp_sdk/examples/sdk_defense_parity.cpp`
 - 当前基线策略重点：
-  - `base × lure + lightning` 根节点搜索
+  - `hold + base + lure + recycle_base*lure + lightning` 根节点搜索
   - 简化终点评估，默认偏向少操作
   - 搜索 `Build/Upgrade/Downgrade/Lightning` 及少量同回合 op-list
   - 当前不考虑基地升级
   - 主防守搜索忽略我方蚂蚁，也暂时禁用进攻补值
-  - `C1` 主线当前以 `Mortar / Quick / Sniper` 为主
+  - `C1` 主线当前以 `Heavy / Quick / Sniper` 为主
+  - 闪电当前是单闪电候选，所有合法中心用 UCB 分配 rollout，不带前置降级/拆塔
   - future rollout 只保留战斗蚁贴身时的 reactive 回收，不再完整生成未来主动计划
   - 终点评估关注基地血量、塔剩余价值、敌蚂蚁威胁和钱
 
@@ -270,6 +271,15 @@ native 当前整回合主流程：
 - `DefenseSimulator::clone()` 不复制派生 move cache / lookup cache
 - 当前最大内层热点仍是增强移动的反向路径规划
 - 若做对拍，应优先选择不跨 10 回合随机移动窗口的起点和 horizon
+
+2026-04-27 对拍记录：
+
+- 32 个 512 回合 self-play replay 中后期 case
+- 每个 case `1000` rollout、`6` 回合窗口
+- 起点均避开跨 10 回合周期随机移动
+- fast/native 终点评分平均绝对差约 `12.04`
+- 基地血平均绝对差约 `0.049`
+- 32 个 case 中包含 4 个 active effect 根状态，未发现结构性偏差
 
 ## 16. 胜负判定
 

@@ -3,42 +3,66 @@
 namespace antgame::sdk {
 
 struct LureStrategyTuning {
-    int rollout_count = 20;
+    int rollout_count = 50;
     int rollout_forced_ant_limit = 5;
     int search_horizon = 6;
     int lightning_horizon = 10;
-    int lightning_center_limit = 10;
-    int lightning_projection_horizon = 2;
-    int lightning_projection_samples = 3;
-    int lightning_cluster_separation = 2;
-    int lightning_min_boundary_distance = 3;
-    int forced_lure_sell_distance = 1;
-    int c1_quick_transition_coin_threshold = 230;
-    double projected_state_decay = 0.72;
 
-    double base_hold_bonus = 50.0;
-    double lure_hold_bonus = 60.0;
+    // Lightning uses UCB over all legal centers with distance_to_boundary >= lightning_min_boundary_distance:
+    // UCB = mean_score + lightning_ucb_exploration * sqrt(log(total_samples + 1) / samples_at_cell).
+    int lightning_ucb_total_rollouts = 500;
+    double lightning_ucb_exploration = 100.0;
+    int lightning_min_boundary_distance = 4;
+
+    int forced_lure_sell_distance = 1;
+    int max_non_lure_towers = 2;
+    int c1_quick_transition_coin_threshold = 210;
+
+    // root_score(plan) = mean_rollout_score(plan) + plan_heuristic(plan).
+    // plan_heuristic = base_heuristic + lure_heuristic + lightning_heuristic - operation_penalty.
+    double hold_bonus = 60.0;
+
     double c1_build_bonus = 50.0;
     double c1_heavy_bonus = 60.0;
     double c1_heavy_side_trans_bonus = -300.0;
     double c1_quick_trans_bonus = 100.0;
-    double c1_sniper_trans_bonus = 1000.0;
+    double c1_sniper_trans_bonus = 200.0;
 
+    double downgrade_refund_penalty_scale = 0.0;
+
+    // terminal_score =
+    //   base_hp * base_hp_weight
+    // + full_tower_salvage_coin * tower_value_weight
+    // + coin * money_weight
+    // + c1_terminal_bonus
+    // - worker_threat
+    // - combat_threat.
+    //
+    // full_tower_salvage_coin is the estimated coin value after optimally downgrading all towers
+    // to basic and selling basic towers in descending HP order.
     double base_hp_weight = 200.0;
     double tower_value_weight = 10.0;
     double money_weight = 10.0;
 
+    // worker_threat = sum(worker_threat_unit * hp / max_hp / max(1, distance_to_own_base)).
     double worker_threat_unit = 160.0;
+
+    // combat_threat = sum(max(base_threat, core_tower_anchor_threat) * behavior_scale).
     double combat_base_threat_unit = 300.0;
     double combat_anchor_threat_coin_ratio = 0.2;
+    int combat_anchor_ring_distance = 1;
     double combat_anchor_ring1_bonus_ratio = 0.2;
+
     double randomized_threat_scale = 0.6;
     double bewitched_threat_scale = 0.3;
 
+    // lightning_bonus is added to terminal_score:
+    //   enemy_super_bonus + enemy_tower_damage_value + combat_threat_reduction * ratio
+    // + shield_break_bonus + hp_damage_bonus + kill_bonus.
     double lightning_enemy_super_bonus = 120.0;
-    double lightning_combat_threat_ratio = 0.1;
-    double lightning_shield_break_bonus = 30.0;
-    double lightning_damage_bonus_per_hp = 2.0;
+    double lightning_combat_threat_ratio = 0.0;
+    double lightning_shield_break_bonus = 25.0;
+    double lightning_damage_bonus_per_hp = 1.5;
     double lightning_kill_bonus = 0.0;
     double lightning_tower_value_ratio = 0.5;
 };

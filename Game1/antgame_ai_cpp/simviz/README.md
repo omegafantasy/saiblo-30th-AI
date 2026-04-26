@@ -42,7 +42,7 @@ http://127.0.0.1:8765
    - 再下方显示 replay 实际操作、root 摘要，以及 `base / lure / lightning` 独立候选全集
 2. 中栏 `Actions + Rollout Samples`
    - `Actions` 展示当前策略在线复算得到的全部候选
-   - 点击某个 action 后，在线计算该候选的 20 个 rollout 样本
+   - 点击某个 action 后，在线计算该候选的 rollout 样本，默认数量跟随当前 `rollout_count`
    - `Actions` 表中的 `Total` 以普通数值显示，不使用科学计数法
    - `Rollout Samples` 中的 `Weight` 显示的是当前策略真正用于加权的样本权重
      - 即首回合重点蚂蚁所选动作真实概率的乘积
@@ -70,8 +70,9 @@ http://127.0.0.1:8765
 - 当前策略对该回合全部候选行动的打分
 - `base / lure / lightning` 原始候选全集，便于检查是否“没显示”还是“根本没生成”
 - 每个 rollout sample 的总分、归一化权重、终点核心分项
-- `base / lure / lightning` 原始候选全集，便于检查是前端没显示，还是当前生成层根本没产生该候选
 - 每步 trace 的起始/终止盘面、操作、蚂蚁动作分配、候选方向概率、最终估值分项
+- 多步 base followup 会在 trace 中逐未来回合显示，例如 `sell -> build -> upgrade`
+- 闪电候选会显示当前策略实际使用的合法中心全集；当前策略使用 UCB 在这些中心间分配 rollout，不再使用“10 个簇中心 + 邻格重搜”
 
 ## 交互
 
@@ -105,6 +106,7 @@ http://127.0.0.1:8765
 - `Unified Board` 切到 `Root / Action` 时，显示的也是当前策略内部的模拟视角
 - `Sample Trace` 使用的是当前策略内部的防守模拟视角
 - 其中重点保留的是“己方塔、敌方蚂蚁、相关特效”等策略关心的信息
+- 策略未来模拟不生成未来基地蚂蚁，因此不会显示未来由基地新刷出的蚂蚁
 - 快速模拟默认忽略每 10 回合随机移动机制，因此跨 10 回合窗口的 trace 不适合拿来做严格 native 对拍
 - 若要做规则级真值对拍，应使用 SDK 的 `sdk_defense_parity`，而不是只看页面上的单条 sample trace
 

@@ -256,7 +256,7 @@ rs::TerminalEvaluationBreakdown native_mc_plan(
             }
         }
         for (int step = 0; step < antgame::sdk::config().defense_horizon && !native.terminal(); ++step) {
-            const auto result = native.advance_round();
+            const auto result = native.advance_round_without_base_spawns();
             if (result.terminal) {
                 break;
             }

@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdint>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -308,6 +309,7 @@ json rollout_eval_to_json(const ls::RolloutEvaluation &value) {
     out["terminal"] = eval_breakdown_to_json(value.terminal);
     out["lightning_bonus_raw"] = value.lightning_bonus_raw;
     out["lightning_bonus_score"] = value.lightning_bonus_score;
+    out["reactive_operation_penalty"] = value.reactive_operation_penalty;
     out["total_score"] = value.total_score;
     return out;
 }
@@ -358,6 +360,146 @@ std::vector<Operation> parse_replay_operations(const json &ops_raw) {
     return operations;
 }
 
+PublicRoundState parse_replay_round_state(const json &raw_state, int round_index) {
+    PublicRoundState state;
+    state.round_index = round_index;
+
+    if (raw_state.contains("towers") && raw_state.at("towers").is_array()) {
+        for (const auto &row : raw_state.at("towers")) {
+            const int type = row.value("type", -1);
+            if (type < 0) {
+                continue;
+            }
+            state.towers.push_back(Tower{
+                row.value("id", -1),
+                row.value("player", -1),
+                row.value("pos", json::object()).value("x", -1),
+                row.value("pos", json::object()).value("y", -1),
+                static_cast<TowerType>(type),
+                row.value("cd", 0),
+                row.value("hp", tower_stats(static_cast<TowerType>(type)).max_hp),
+            });
+        }
+    }
+
+    if (raw_state.contains("ants") && raw_state.at("ants").is_array()) {
+        for (const auto &row : raw_state.at("ants")) {
+            Ant ant{
+                row.value("id", -1),
+                row.value("player", -1),
+                row.value("pos", json::object()).value("x", -1),
+                row.value("pos", json::object()).value("y", -1),
+                row.value("hp", 0),
+                row.value("level", 0),
+                row.value("age", 0),
+                static_cast<AntStatus>(row.value("status", 0)),
+                static_cast<AntBehavior>(row.value("behavior", 0)),
+                static_cast<AntKind>(row.value("kind", 0)),
+            };
+            ant.last_move = row.value("move", -1);
+            state.ants.push_back(ant);
+        }
+    }
+
+    const auto coins = raw_state.value("coins", std::vector<int>{kInitialCoins, kInitialCoins});
+    if (coins.size() >= 2) {
+        state.coins = {coins[0], coins[1]};
+    }
+    const auto camps = raw_state.value("camps", std::vector<int>{kBaseHp, kBaseHp});
+    if (camps.size() >= 2) {
+        state.camps_hp = {camps[0], camps[1]};
+    }
+    const auto speed_lv = raw_state.value("speedLv", std::vector<int>{0, 0});
+    if (speed_lv.size() >= 2) {
+        state.speed_lv = {speed_lv[0], speed_lv[1]};
+    }
+    const auto anthp_lv = raw_state.value("anthpLv", std::vector<int>{0, 0});
+    if (anthp_lv.size() >= 2) {
+        state.anthp_lv = {anthp_lv[0], anthp_lv[1]};
+    }
+
+    if (raw_state.contains("weaponCooldowns") && raw_state.at("weaponCooldowns").is_array()) {
+        int player = 0;
+        for (const auto &row : raw_state.at("weaponCooldowns")) {
+            if (player >= 2 || !row.is_array()) {
+                break;
+            }
+            if (row.size() == 4) {
+                state.weapon_cooldowns[player] = {0, row.at(0).get<int>(), row.at(1).get<int>(), row.at(2).get<int>(),
+                                                  row.at(3).get<int>()};
+            } else if (row.size() >= 5) {
+                state.weapon_cooldowns[player] = {row.at(0).get<int>(), row.at(1).get<int>(), row.at(2).get<int>(),
+                                                  row.at(3).get<int>(), row.at(4).get<int>()};
+            }
+            ++player;
+        }
+    }
+
+    if (raw_state.contains("activeEffects") && raw_state.at("activeEffects").is_array()) {
+        for (const auto &row : raw_state.at("activeEffects")) {
+            state.active_effects.push_back(WeaponEffect{
+                static_cast<SuperWeaponType>(row.value("type", 1)),
+                row.value("player", -1),
+                row.value("x", -1),
+                row.value("y", -1),
+                row.value("duration", 0),
+            });
+        }
+    }
+
+    return state;
+}
+
+void apply_replay_tower_delta(const json &raw_state, std::unordered_map<int, Tower> &towers_by_id) {
+    if (!raw_state.contains("towers") || !raw_state.at("towers").is_array()) {
+        return;
+    }
+    for (const auto &row : raw_state.at("towers")) {
+        const int tower_id = row.value("id", -1);
+        if (tower_id < 0) {
+            continue;
+        }
+        const int type = row.value("type", -1);
+        if (type < 0) {
+            towers_by_id.erase(tower_id);
+            continue;
+        }
+        towers_by_id[tower_id] = Tower{
+            tower_id,
+            row.value("player", -1),
+            row.value("pos", json::object()).value("x", -1),
+            row.value("pos", json::object()).value("y", -1),
+            static_cast<TowerType>(type),
+            row.value("cd", 0),
+            row.value("hp", tower_stats(static_cast<TowerType>(type)).max_hp),
+        };
+    }
+}
+
+std::vector<Tower> snapshot_replay_towers(const std::unordered_map<int, Tower> &towers_by_id) {
+    std::vector<Tower> towers;
+    towers.reserve(towers_by_id.size());
+    for (const auto &item : towers_by_id) {
+        towers.push_back(item.second);
+    }
+    std::sort(towers.begin(), towers.end(), [](const Tower &lhs, const Tower &rhs) {
+        if (lhs.player != rhs.player) {
+            return lhs.player < rhs.player;
+        }
+        return lhs.tower_id < rhs.tower_id;
+    });
+    return towers;
+}
+
+void advance_replay_tower_cooldowns(std::unordered_map<int, Tower> &towers_by_id) {
+    for (auto &item : towers_by_id) {
+        Tower &tower = item.second;
+        if (tower.cooldown > 0) {
+            --tower.cooldown;
+        }
+    }
+}
+
 ReplayRoundStart load_replay_round_start(const std::string &replay_path, int round) {
     std::ifstream fin(replay_path);
     if (!fin) {
@@ -378,12 +520,20 @@ ReplayRoundStart load_replay_round_start(const std::string &replay_path, int rou
     }
     ReplayRoundStart out(seed);
     out.round = round;
-
+    std::unordered_map<int, Tower> towers_by_id;
     for (int index = 0; index < round; ++index) {
         const auto &record = replay.at(static_cast<std::size_t>(index));
         const auto ops0 = parse_replay_operations(record.value("op0", json::array()));
         const auto ops1 = parse_replay_operations(record.value("op1", json::array()));
         out.native.resolve_turn(ops0, ops1);
+        if (record.contains("round_state") && record.at("round_state").is_object()) {
+            const auto &round_state = record.at("round_state");
+            advance_replay_tower_cooldowns(towers_by_id);
+            apply_replay_tower_delta(round_state, towers_by_id);
+            PublicRoundState public_state = parse_replay_round_state(round_state, index + 1);
+            public_state.towers = snapshot_replay_towers(towers_by_id);
+            out.native.sync_public_round_state(public_state);
+        }
     }
 
     if (round < static_cast<int>(replay.size())) {
@@ -438,8 +588,12 @@ json evaluated_plan_to_json(const PublicState &state, int player, const Evaluate
     out["base_heuristic"] = item.plan.base_heuristic;
     out["lure_heuristic"] = item.plan.lure_heuristic;
     out["lightning_heuristic"] = item.plan.lightning_heuristic;
+    out["operation_penalty"] = item.plan.operation_penalty;
+    out["lightning_static_bonus"] = item.plan.lightning_static_bonus;
     out["mean_rollout_score"] = item.mean_rollout_score;
     out["mean_score"] = item.mean_score;
+    out["rollout_count"] = item.rollout_count;
+    out["rollout_weight_sum"] = item.rollout_weight_sum;
     out["pretty"] = ls::pretty_ops_text(state, player, item.plan.ops);
     out["ops"] = json::array();
     for (const auto &operation : item.plan.ops) {
@@ -718,7 +872,7 @@ json plan_sample_trace(
         if (step == 0) {
             row["phase"] = "root";
             row["applied_operations_pretty"] = ls::pretty_ops_text(state, player, selected.plan.ops);
-        } else if (step == 1 && selected.plan.followup != ls::SinglePlan::Followup::None) {
+        } else if (step == 1 && !selected.plan.followup.empty()) {
             const auto followup_ops = ls::resolve_followup_operations(simulator, player, selected.plan.followup);
             ls::apply_operations(simulator, followup_ops);
             row["phase"] = "followup";
@@ -758,7 +912,8 @@ json plan_sample_trace(
             } else {
                 control.simulate_round(control_rng);
             }
-            lightning_bonus_raw = ls::lightning_counterfactual_bonus(simulator, control, player);
+            lightning_bonus_raw =
+                ls::lightning_counterfactual_bonus(simulator, control, player) + selected.plan.lightning_static_bonus;
             lightning_bonus_score = lightning_bonus_raw;
             lightning_bonus_computed = true;
         }

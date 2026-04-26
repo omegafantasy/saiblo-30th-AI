@@ -2749,6 +2749,9 @@ inline DefenseSimulator make_defense_simulator(const PublicState &state, const N
             }
         }
         if (hidden != nullptr) {
+            if (item.last_move < 0) {
+                item.last_move = hidden->last_move;
+            }
             item.shield = hidden->shield;
             item.defend = hidden->defend;
             item.control_free_on_break = hidden->evasion_control_free_on_break;
@@ -3003,7 +3006,7 @@ inline OffensiveExpectation compute_offense_expectation(const PublicState &state
         simulator.sync_public_round_state(round_state);
         double previous = static_cast<double>(round_state.coins[player]);
         for (int step = 0; step < config().offense_horizon; ++step) {
-            simulator.advance_round();
+            simulator.advance_round_without_base_spawns();
             const auto next_round = simulator.to_public_round_state();
             const double current = static_cast<double>(next_round.coins[player]);
             out.money_gain_by_round[static_cast<std::size_t>(step)] += current - previous;

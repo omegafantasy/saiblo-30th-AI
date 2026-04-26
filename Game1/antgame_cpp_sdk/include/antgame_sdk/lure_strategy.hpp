@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -30,8 +31,29 @@ struct LureStrategyDecisionContext {
 };
 
 struct LureStrategySession {
+    struct AntPositionMemory {
+        int x = -1;
+        int y = -1;
+    };
+
     std::array<int, 2> last_round_seen = {-1, -1};
     std::array<std::uint64_t, 2> decision_serial = {0, 0};
+    std::array<std::unordered_map<int, AntPositionMemory>, 2> previous_ant_positions{};
+    std::array<std::unordered_map<int, int>, 2> inferred_last_moves{};
+
+    static int infer_move_direction(int from_x, int from_y, int to_x, int to_y) {
+        if (from_x == to_x && from_y == to_y) {
+            return -1;
+        }
+        for (int direction = 0; direction < 6; ++direction) {
+            const int nx = from_x + kOffset[from_y & 1][direction][0];
+            const int ny = from_y + kOffset[from_y & 1][direction][1];
+            if (nx == to_x && ny == to_y) {
+                return direction;
+            }
+        }
+        return -1;
+    }
 
     void observe(const PublicState &state, int player) {
         if (last_round_seen[player] == state.round_index) {
@@ -39,6 +61,36 @@ struct LureStrategySession {
         }
         last_round_seen[player] = state.round_index;
         ++decision_serial[player];
+
+        std::unordered_map<int, int> current_moves;
+        current_moves.reserve(state.ants.size());
+        std::unordered_map<int, AntPositionMemory> current_positions;
+        current_positions.reserve(state.ants.size());
+        const auto &previous = previous_ant_positions[player];
+        for (const auto &ant : state.ants) {
+            if (!ant.is_alive()) {
+                continue;
+            }
+            int last_move = ant.last_move;
+            const auto it = previous.find(ant.ant_id);
+            if (it != previous.end()) {
+                last_move = infer_move_direction(it->second.x, it->second.y, ant.x, ant.y);
+            }
+            current_moves[ant.ant_id] = last_move;
+            current_positions[ant.ant_id] = AntPositionMemory{ant.x, ant.y};
+        }
+        inferred_last_moves[player] = std::move(current_moves);
+        previous_ant_positions[player] = std::move(current_positions);
+    }
+
+    void apply_inferred_last_moves(PublicState &state, int player) const {
+        const auto &moves = inferred_last_moves[player];
+        for (auto &ant : state.ants) {
+            const auto it = moves.find(ant.ant_id);
+            if (it != moves.end()) {
+                ant.last_move = it->second;
+            }
+        }
     }
 };
 
@@ -163,6 +215,57 @@ inline std::string ops_text(const std::vector<Operation> &operations) {
     return oss.str();
 }
 
+inline std::string enemy_ant_state_text(const PublicState &state, int player) {
+    std::ostringstream oss;
+    bool first = true;
+    for (const auto &ant : state.ants) {
+        if (ant.player == player || !ant.is_alive()) {
+            continue;
+        }
+        if (!first) {
+            oss << ';';
+        }
+        first = false;
+        oss << ant.ant_id << ':' << ant.x << ',' << ant.y << ':' << ant.hp << ':' << static_cast<int>(ant.kind) << ':'
+            << ant.last_move << ':' << ant.age << ':' << static_cast<int>(ant.behavior);
+    }
+    return oss.str();
+}
+
+inline std::string own_tower_state_text(const PublicState &state, int player) {
+    std::ostringstream oss;
+    bool first = true;
+    for (const auto &tower : state.towers) {
+        if (tower.player != player) {
+            continue;
+        }
+        if (!first) {
+            oss << ';';
+        }
+        first = false;
+        oss << tower.tower_id << ':' << tower.x << ',' << tower.y << ':' << static_cast<int>(tower.tower_type) << ':'
+            << tower.hp << ':' << tower.cooldown;
+    }
+    return oss.str();
+}
+
+inline std::string sim_enemy_ant_state_text(const rs::DefenseSimulator &simulator) {
+    std::ostringstream oss;
+    bool first = true;
+    for (const auto &ant : simulator.ants) {
+        if (!ant.alive()) {
+            continue;
+        }
+        if (!first) {
+            oss << ';';
+        }
+        first = false;
+        oss << ant.ant_id << ':' << ant.x << ',' << ant.y << ':' << ant.hp << ':' << static_cast<int>(ant.kind) << ':'
+            << ant.last_move << ':' << ant.age << ':' << static_cast<int>(ant.behavior);
+    }
+    return oss.str();
+}
+
 inline const Tower *find_tower_by_id(const PublicState &state, int tower_id) {
     for (const auto &tower : state.towers) {
         if (tower.tower_id == tower_id) {
@@ -242,11 +345,28 @@ inline std::string pretty_ops_text(const PublicState &state, int player, const s
         return "HOLD-0";
     }
     std::ostringstream oss;
+    std::unordered_map<int, std::pair<int, int>> built_towers;
+    int next_tower_id = state.next_tower_id;
     for (std::size_t index = 0; index < operations.size(); ++index) {
         if (index) {
             oss << ';';
         }
-        oss << pretty_op_text(state, player, operations[index]);
+        const Operation &operation = operations[index];
+        if (operation.op_type == OperationType::UpgradeTower || operation.op_type == OperationType::DowngradeTower) {
+            const Tower *tower = find_tower_by_id(state, operation.arg0);
+            const auto built_it = built_towers.find(operation.arg0);
+            if (tower == nullptr && built_it != built_towers.end()) {
+                oss << slot_label_or_coord(player, built_it->second.first, built_it->second.second) << '-'
+                    << action_number(operation);
+            } else {
+                oss << pretty_op_text(state, player, operation);
+            }
+        } else {
+            oss << pretty_op_text(state, player, operation);
+        }
+        if (operation.op_type == OperationType::BuildTower) {
+            built_towers.emplace(next_tower_id++, std::pair<int, int>{operation.arg0, operation.arg1});
+        }
     }
     return oss.str();
 }
@@ -424,9 +544,20 @@ inline int code_at(const rs::SearchTower &tower, int player) {
 inline bool is_base_slot_code(int code) {
     switch (code) {
     case C1:
-    case L1:
-    case R1:
     case C2:
+    case C3:
+    case L1:
+    case L2:
+    case L3:
+    case R1:
+    case R2:
+    case R3:
+    case LL1:
+    case LL2:
+    case LL3:
+    case RR1:
+    case RR2:
+    case RR3:
         return true;
     default:
         return false;
@@ -459,8 +590,8 @@ inline bool is_lure_slot_code(int code) {
     }
 }
 
-inline std::array<int, 3> near_base_codes() {
-    return {L1, R1, C2};
+inline std::array<int, 15> base_codes() {
+    return {C1, C2, C3, L1, L2, L3, R1, R2, R3, LL1, LL2, LL3, RR1, RR2, RR3};
 }
 
 inline std::array<int, 18> lure_codes() {
@@ -512,6 +643,69 @@ inline double tower_salvage_value(const PublicState &state, const Tower &tower, 
 
 inline double tower_salvage_value(const rs::SearchTower &tower, int tower_count_hint) {
     return rs::tower_estimated_salvage_value(tower, tower_count_hint);
+}
+
+inline double downgrade_operation_refund(const PublicState &state, int player, const Operation &operation) {
+    if (operation.op_type != OperationType::DowngradeTower) {
+        return 0.0;
+    }
+    const int refund = state.operation_income(player, operation);
+    return refund > 0 ? static_cast<double>(refund) : 0.0;
+}
+
+inline double downgrade_operation_refund(const rs::DefenseSimulator &simulator, const Operation &operation) {
+    if (operation.op_type != OperationType::DowngradeTower) {
+        return 0.0;
+    }
+    const rs::SearchTower *tower = simulator.tower_by_id(operation.arg0);
+    if (tower == nullptr || !tower->alive()) {
+        return 0.0;
+    }
+    return tower_salvage_value(*tower, static_cast<int>(simulator.towers.size()));
+}
+
+inline double downgrade_refund_penalty(double refund) {
+    return refund * lure_config().downgrade_refund_penalty_scale;
+}
+
+inline double downgrade_penalty_for_ops(
+    const PublicState &state,
+    int player,
+    const std::vector<Operation> &operations) {
+    if (lure_config().downgrade_refund_penalty_scale == 0.0) {
+        return 0.0;
+    }
+    double penalty = 0.0;
+    PublicState scratch = state.clone();
+    std::vector<Operation> accepted;
+    accepted.reserve(operations.size());
+    for (const auto &operation : sort_operations(state, operations)) {
+        if (!scratch.can_apply_operation(player, operation, accepted)) {
+            return penalty;
+        }
+        penalty += downgrade_refund_penalty(downgrade_operation_refund(scratch, player, operation));
+        scratch.apply_operation(player, operation);
+        accepted.push_back(operation);
+    }
+    return penalty;
+}
+
+inline double downgrade_penalty_for_ops(
+    const rs::DefenseSimulator &simulator,
+    const std::vector<Operation> &operations) {
+    if (lure_config().downgrade_refund_penalty_scale == 0.0) {
+        return 0.0;
+    }
+    double penalty = 0.0;
+    rs::DefenseSimulator scratch = simulator.clone();
+    for (const auto &operation : sort_operations(simulator, operations)) {
+        if (!scratch.can_apply_operation(operation)) {
+            return penalty;
+        }
+        penalty += downgrade_refund_penalty(downgrade_operation_refund(scratch, operation));
+        scratch.apply_operation(operation);
+    }
+    return penalty;
 }
 
 inline double tower_full_salvage_value(const PublicState &state, int player) {
@@ -578,10 +772,73 @@ inline double behavior_threat_scale(AntBehavior behavior) {
     return 1.0;
 }
 
-struct WeightedDefenseState {
-    rs::DefenseSimulator simulator;
-    double weight = 1.0;
+enum class FollowupType : int {
+    None = 0,
+    UpgradeAtCode = 1,
+    DowngradeAtCode = 2,
+    BuildAtCode = 3,
 };
+
+struct FollowupStep {
+    FollowupType type = FollowupType::None;
+    int code = -1;
+    TowerType target = TowerType::Basic;
+
+    bool empty() const {
+        return type == FollowupType::None;
+    }
+};
+
+struct FollowupAction {
+    static constexpr int kMaxSteps = 3;
+
+    std::array<FollowupStep, kMaxSteps> steps{};
+    int count = 0;
+
+    bool empty() const {
+        return count <= 0;
+    }
+
+    void push(FollowupStep step) {
+        if (step.empty() || count >= kMaxSteps) {
+            return;
+        }
+        steps[static_cast<std::size_t>(count++)] = step;
+    }
+};
+
+inline FollowupStep upgrade_step(int code, TowerType target) {
+    return FollowupStep{FollowupType::UpgradeAtCode, code, target};
+}
+
+inline FollowupStep downgrade_step(int code) {
+    return FollowupStep{FollowupType::DowngradeAtCode, code, TowerType::Basic};
+}
+
+inline FollowupStep build_step(int code) {
+    return FollowupStep{FollowupType::BuildAtCode, code, TowerType::Basic};
+}
+
+inline FollowupAction followup_sequence(std::initializer_list<FollowupStep> steps) {
+    FollowupAction out;
+    for (const FollowupStep &step : steps) {
+        out.push(step);
+    }
+    return out;
+}
+
+inline FollowupAction upgrade_followup(int code, TowerType target) {
+    return followup_sequence({upgrade_step(code, target)});
+}
+
+inline FollowupAction downgrade_followup(int code) {
+    return followup_sequence({downgrade_step(code)});
+}
+
+inline FollowupAction build_followup(int code, bool upgrade_to_heavy) {
+    return upgrade_to_heavy ? followup_sequence({build_step(code), upgrade_step(code, TowerType::Heavy)})
+                            : followup_sequence({build_step(code)});
+}
 
 inline double combat_threat_at(const PublicState &state, int player, const Ant &ant, int x, int y);
 inline double combat_threat_at(const rs::DefenseSimulator &simulator, int player, const rs::SearchAnt &ant, int x, int y);
@@ -635,42 +892,18 @@ inline bool enemy_super_effect_active(const PublicState &state, int player) {
     return false;
 }
 
-inline std::vector<WeightedDefenseState> project_future_states(
-    const rs::DefenseSimulator &root,
-    int horizon,
-    int samples,
-    std::uint64_t seed_salt) {
-    std::vector<WeightedDefenseState> out;
-    out.push_back(WeightedDefenseState{root.clone(), 1.0});
-    if (horizon <= 0 || samples <= 0) {
-        return out;
-    }
-
-    const double per_sample = 1.0 / static_cast<double>(std::max(samples, 1));
-    for (int sample = 0; sample < samples; ++sample) {
-        rs::DefenseSimulator branch = root.clone();
-        rs::FastRng rng(mix_seed(seed_salt, static_cast<std::uint64_t>((root.round_index + 1) * 131 + sample + 1)));
-        double weight = per_sample;
-        for (int step = 1; step <= horizon && !branch.terminal; ++step) {
-            branch.simulate_round(rng);
-            weight *= lure_config().projected_state_decay;
-            out.push_back(WeightedDefenseState{branch.clone(), weight});
-        }
-    }
-    return out;
-}
-
 struct SinglePlan {
-    enum class Followup : int {
-        None = 0,
-        C1UpgradeMortar = 1,
-        C1UpgradeQuick = 2,
-    };
+    SinglePlan() = default;
+    SinglePlan(std::string name_, std::vector<Operation> ops_, double heuristic_, FollowupAction followup_ = {})
+        : name(std::move(name_)),
+          ops(std::move(ops_)),
+          heuristic(heuristic_),
+          followup(followup_) {}
 
     std::string name;
     std::vector<Operation> ops;
     double heuristic = 0.0;
-    Followup followup = Followup::None;
+    FollowupAction followup;
 };
 
 struct CombinedPlan {
@@ -684,9 +917,11 @@ struct CombinedPlan {
     double base_heuristic = 0.0;
     double lure_heuristic = 0.0;
     double lightning_heuristic = 0.0;
+    double operation_penalty = 0.0;
+    double lightning_static_bonus = 0.0;
     bool has_lightning = false;
     int horizon = 0;
-    SinglePlan::Followup followup = SinglePlan::Followup::None;
+    FollowupAction followup;
 };
 
 struct RootPlanSet {
@@ -757,12 +992,14 @@ struct RolloutEvaluation {
     EvalBreakdown terminal;
     double lightning_bonus_raw = 0.0;
     double lightning_bonus_score = 0.0;
+    double reactive_operation_penalty = 0.0;
     double total_score = 0.0;
 
     RolloutEvaluation &operator+=(const RolloutEvaluation &other) {
         terminal += other.terminal;
         lightning_bonus_raw += other.lightning_bonus_raw;
         lightning_bonus_score += other.lightning_bonus_score;
+        reactive_operation_penalty += other.reactive_operation_penalty;
         total_score += other.total_score;
         return *this;
     }
@@ -772,6 +1009,7 @@ struct RolloutEvaluation {
         out.terminal = out.terminal.scaled(factor);
         out.lightning_bonus_raw *= factor;
         out.lightning_bonus_score *= factor;
+        out.reactive_operation_penalty *= factor;
         out.total_score *= factor;
         return out;
     }
@@ -800,43 +1038,93 @@ inline std::string summarize_plan_name(const SinglePlan &base, const SinglePlan 
     return oss.str();
 }
 
-inline const char *followup_name(SinglePlan::Followup followup) {
-    switch (followup) {
-    case SinglePlan::Followup::C1UpgradeMortar:
-        return "C1_to_Mortar";
-    case SinglePlan::Followup::C1UpgradeQuick:
-        return "C1_to_Quick";
-    case SinglePlan::Followup::None:
-    default:
+inline std::string followup_step_name(const FollowupStep &step) {
+    if (step.empty()) {
         return "";
+    }
+    if (step.type == FollowupType::DowngradeAtCode) {
+        return std::string(code_name(step.code)) + "_downgrade";
+    }
+    if (step.type == FollowupType::BuildAtCode) {
+        return std::string("build_") + code_name(step.code);
+    }
+    return std::string(code_name(step.code)) + "_to_" + tower_type_name(step.target);
+}
+
+inline std::string followup_name(const FollowupAction &followup) {
+    if (followup.empty()) {
+        return "";
+    }
+    std::ostringstream oss;
+    for (int index = 0; index < followup.count; ++index) {
+        if (index) {
+            oss << "_then_";
+        }
+        oss << followup_step_name(followup.steps[static_cast<std::size_t>(index)]);
+    }
+    return oss.str();
+}
+
+inline std::string followup_key(const FollowupAction &followup) {
+    if (followup.empty()) {
+        return "";
+    }
+    std::ostringstream oss;
+    for (int index = 0; index < followup.count; ++index) {
+        if (index) {
+            oss << '|';
+        }
+        const FollowupStep &step = followup.steps[static_cast<std::size_t>(index)];
+        oss << "F:" << static_cast<int>(step.type) << ':' << step.code << ':' << static_cast<int>(step.target);
+    }
+    return oss.str();
+}
+
+inline int followup_action_number(const FollowupStep &step) {
+    if (step.empty()) {
+        return 0;
+    }
+    if (step.type == FollowupType::DowngradeAtCode) {
+        return 5;
+    }
+    if (step.type == FollowupType::BuildAtCode) {
+        return 1;
+    }
+    switch (step.target) {
+    case TowerType::Heavy:
+        return 2;
+    case TowerType::Quick:
+        return 3;
+    case TowerType::Sniper:
+        return 4;
+    case TowerType::Pulse:
+        return 7;
+    case TowerType::Mortar:
+    case TowerType::MortarPlus:
+        return 8;
+    case TowerType::Bewitch:
+        return 9;
+    default:
+        return 10;
     }
 }
 
-inline std::string followup_key(SinglePlan::Followup followup) {
-    switch (followup) {
-    case SinglePlan::Followup::C1UpgradeMortar:
-        return "F:C1M";
-    case SinglePlan::Followup::C1UpgradeQuick:
-        return "F:C1Q";
-    case SinglePlan::Followup::None:
-    default:
+inline std::string followup_text(const FollowupAction &followup) {
+    if (followup.empty()) {
         return "";
     }
-}
-
-inline std::string followup_text(SinglePlan::Followup followup) {
-    switch (followup) {
-    case SinglePlan::Followup::C1UpgradeMortar:
-        return "C1-8";
-    case SinglePlan::Followup::C1UpgradeQuick:
-        return "C1-3";
-    case SinglePlan::Followup::None:
-    default:
-        return "";
+    std::ostringstream oss;
+    for (int index = 0; index < followup.count; ++index) {
+        if (index) {
+            oss << ';';
+        }
+        const FollowupStep &step = followup.steps[static_cast<std::size_t>(index)];
+        oss << code_name(step.code) << '-' << followup_action_number(step);
     }
+    return oss.str();
 }
 
-inline std::string plan_key(const std::vector<Operation> &operations, SinglePlan::Followup followup) {
+inline std::string plan_key(const std::vector<Operation> &operations, const FollowupAction &followup) {
     const std::string base = join_plan_key(operations);
     const std::string suffix = followup_key(followup);
     if (suffix.empty()) {
@@ -881,6 +1169,219 @@ inline void append_downgrade_candidate(
     if (!legalize_operations(simulator, {downgrade}).empty()) {
         plans.push_back(SinglePlan{name, {downgrade}, 0.0});
     }
+}
+
+inline bool base_build_enabled(int code) {
+    return code != C2 && code != C3;
+}
+
+inline bool c1_quick_route_enabled(int code) {
+    return code == C1;
+}
+
+inline bool c1_has_sniper(const PublicState &state, int player) {
+    const Tower *tower = tower_at_code(state, player, C1);
+    return tower != nullptr && tower->player == player && tower->tower_type == TowerType::Sniper;
+}
+
+inline bool c1_has_sniper(const rs::DefenseSimulator &simulator, int player) {
+    const rs::SearchTower *tower = tower_at_code(simulator, player, C1);
+    return tower != nullptr && tower->alive() && tower->tower_type == TowerType::Sniper;
+}
+
+inline std::vector<TowerType> base_build_upgrade_targets(int code, bool c1_sniper_ready) {
+    if (code == C1) {
+        return {TowerType::Heavy};
+    }
+    if (c1_sniper_ready) {
+        return {TowerType::Heavy, TowerType::Quick, TowerType::Mortar};
+    }
+    return {TowerType::Heavy, TowerType::Mortar};
+}
+
+inline std::vector<TowerType> base_existing_upgrade_targets(int code, bool c1_sniper_ready) {
+    if (code == C1) {
+        return {TowerType::Heavy, TowerType::Quick};
+    }
+    if (c1_sniper_ready) {
+        return {TowerType::Heavy, TowerType::Quick, TowerType::Mortar};
+    }
+    return {TowerType::Heavy, TowerType::Mortar};
+}
+
+inline bool can_sell_to_bottom_for_swap(TowerType type) {
+    const int raw = static_cast<int>(type);
+    return type == TowerType::Basic || (raw > 0 && raw < 10);
+}
+
+inline std::string swap_plan_name(int from_code, int to_code, TowerType upgrade_target) {
+    return std::string("base_swap_") + code_name(from_code) + "_to_" + code_name(to_code) +
+           "_" + tower_type_name(upgrade_target);
+}
+
+inline bool swap_needs_second_turn_sell(TowerType source_type) {
+    return source_type != TowerType::Basic;
+}
+
+inline FollowupAction swap_followup(TowerType source_type, int source_code, int target_code, TowerType upgrade_target) {
+    if (!swap_needs_second_turn_sell(source_type)) {
+        return FollowupAction{};
+    }
+    FollowupAction followup;
+    followup.push(downgrade_step(source_code));
+    if (upgrade_target != TowerType::Basic) {
+        followup.push(upgrade_step(target_code, upgrade_target));
+    }
+    return followup;
+}
+
+inline std::vector<Operation> swap_root_operations(
+    int player,
+    int source_tower_id,
+    int target_code,
+    TowerType upgrade_target,
+    int predicted_tower_id,
+    TowerType source_type) {
+    std::vector<Operation> ops;
+    ops.reserve(upgrade_target == TowerType::Basic || source_type != TowerType::Basic ? 2 : 3);
+    ops.push_back(Operation(OperationType::DowngradeTower, source_tower_id));
+    ops.push_back(build_at_code(player, target_code));
+    if (source_type == TowerType::Basic && upgrade_target != TowerType::Basic) {
+        ops.push_back(Operation(OperationType::UpgradeTower, predicted_tower_id, static_cast<int>(upgrade_target)));
+    }
+    return ops;
+}
+
+inline void append_base_swap_candidates(
+    const PublicState &state,
+    int player,
+    const Tower &source,
+    int source_code,
+    std::vector<SinglePlan> &plans) {
+    if (!can_sell_to_bottom_for_swap(source.tower_type)) {
+        return;
+    }
+    const Operation down(OperationType::DowngradeTower, source.tower_id);
+    if (legalize_operations(state, player, {down}).empty()) {
+        return;
+    }
+    const bool c1_sniper_ready = c1_has_sniper(state, player);
+    for (int target_code : base_codes()) {
+        if (target_code == source_code || !base_build_enabled(target_code) ||
+            tower_at_code(state, player, target_code) != nullptr) {
+            continue;
+        }
+        const auto basic_ops = swap_root_operations(
+            player,
+            source.tower_id,
+            target_code,
+            TowerType::Basic,
+            state.next_tower_id,
+            source.tower_type);
+        if (!legalize_operations(state, player, basic_ops).empty()) {
+            plans.push_back(SinglePlan{
+                swap_plan_name(source_code, target_code, TowerType::Basic),
+                basic_ops,
+                0.0,
+                swap_followup(source.tower_type, source_code, target_code, TowerType::Basic),
+            });
+        }
+        for (TowerType target_type : base_build_upgrade_targets(target_code, c1_sniper_ready)) {
+            const auto ops = swap_root_operations(
+                player,
+                source.tower_id,
+                target_code,
+                target_type,
+                state.next_tower_id,
+                source.tower_type);
+            if (!legalize_operations(state, player, ops).empty()) {
+                plans.push_back(SinglePlan{
+                    swap_plan_name(source_code, target_code, target_type),
+                    ops,
+                    0.0,
+                    swap_followup(source.tower_type, source_code, target_code, target_type),
+                });
+            }
+        }
+    }
+}
+
+inline void append_base_swap_candidates(
+    const rs::DefenseSimulator &simulator,
+    int player,
+    const rs::SearchTower &source,
+    int source_code,
+    std::vector<SinglePlan> &plans) {
+    if (!can_sell_to_bottom_for_swap(source.tower_type)) {
+        return;
+    }
+    const Operation down(OperationType::DowngradeTower, source.tower_id);
+    if (legalize_operations(simulator, {down}).empty()) {
+        return;
+    }
+    const bool c1_sniper_ready = c1_has_sniper(simulator, player);
+    for (int target_code : base_codes()) {
+        if (target_code == source_code || !base_build_enabled(target_code) ||
+            tower_at_code(simulator, player, target_code) != nullptr) {
+            continue;
+        }
+        const auto basic_ops = swap_root_operations(
+            player,
+            source.tower_id,
+            target_code,
+            TowerType::Basic,
+            simulator.next_tower_id,
+            source.tower_type);
+        if (!legalize_operations(simulator, basic_ops).empty()) {
+            plans.push_back(SinglePlan{
+                swap_plan_name(source_code, target_code, TowerType::Basic),
+                basic_ops,
+                0.0,
+                swap_followup(source.tower_type, source_code, target_code, TowerType::Basic),
+            });
+        }
+        for (TowerType target_type : base_build_upgrade_targets(target_code, c1_sniper_ready)) {
+            const auto ops = swap_root_operations(
+                player,
+                source.tower_id,
+                target_code,
+                target_type,
+                simulator.next_tower_id,
+                source.tower_type);
+            if (!legalize_operations(simulator, ops).empty()) {
+                plans.push_back(SinglePlan{
+                    swap_plan_name(source_code, target_code, target_type),
+                    ops,
+                    0.0,
+                    swap_followup(source.tower_type, source_code, target_code, target_type),
+                });
+            }
+        }
+    }
+}
+
+inline int non_lure_tower_count(const PublicState &state, int player) {
+    int count = 0;
+    for (const auto &tower : state.towers) {
+        if (tower.player == player && !is_lure_slot_code(code_at(tower, player))) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+inline int non_lure_tower_count(const rs::DefenseSimulator &simulator, int player) {
+    int count = 0;
+    for (const auto &tower : simulator.towers) {
+        if (tower.alive() && !is_lure_slot_code(code_at(tower, player))) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+inline double c1_build_heuristic(int code) {
+    return code == C1 ? lure_config().c1_build_bonus : 0.0;
 }
 
 inline const Tower *forced_lure_sell_target(const PublicState &state, int player) {
@@ -980,85 +1481,108 @@ inline const rs::SearchTower *forced_reactive_sell_target(const rs::DefenseSimul
 
 inline std::vector<SinglePlan> generate_base_candidates(const PublicState &state, int player) {
     std::vector<SinglePlan> plans;
-    plans.push_back(SinglePlan{"base_hold", {}, lure_config().base_hold_bonus});
+    plans.push_back(SinglePlan{"base_hold", {}, 0.0});
 
-    const int coins = state.coins[player];
-    const Tower *c1 = tower_at_code(state, player, C1);
+    const int base_tower_count = non_lure_tower_count(state, player);
+    const bool can_build_more = base_tower_count < lure_config().max_non_lure_towers;
+    const bool can_expand_existing = base_tower_count <= lure_config().max_non_lure_towers;
+    const bool c1_sniper_ready = c1_has_sniper(state, player);
+    std::vector<const Tower *> downgrade_towers;
 
-    if (c1 == nullptr) {
-        const Operation build = build_at_code(player, C1);
-        if (!legalize_operations(state, player, {build}).empty()) {
-            plans.push_back(SinglePlan{"base_build_C1", {build}, lure_config().c1_build_bonus});
-            plans.push_back(SinglePlan{
-                "base_build_C1_then_Mortar",
-                {build},
-                lure_config().c1_build_bonus,
-                SinglePlan::Followup::C1UpgradeMortar,
-            });
-            plans.push_back(SinglePlan{
-                "base_build_C1_then_Quick",
-                {build},
-                lure_config().c1_build_bonus,
-                SinglePlan::Followup::C1UpgradeQuick,
-            });
-        }
-        return plans;
-    }
-
-    append_downgrade_candidate(state, player, c1, "base_C1_downgrade", plans);
-
-    if (c1->tower_type != TowerType::Sniper) {
-        if (c1->tower_type == TowerType::Basic) {
-            if (coins < lure_config().c1_quick_transition_coin_threshold) {
-                const Operation upgrade(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(TowerType::Mortar));
-                if (!legalize_operations(state, player, {upgrade}).empty()) {
-                    plans.push_back(SinglePlan{"base_C1_to_Mortar", {upgrade}, 0.0});
-                }
-            } else {
-                const Operation upgrade(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(TowerType::Quick));
-                if (!legalize_operations(state, player, {upgrade}).empty()) {
-                    plans.push_back(SinglePlan{"base_C1_to_Quick", {upgrade}, 0.0});
-                }
-                const Operation mortar_upgrade(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(TowerType::Mortar));
-                if (!legalize_operations(state, player, {mortar_upgrade}).empty()) {
-                    plans.push_back(SinglePlan{"base_C1_to_Mortar", {mortar_upgrade}, 0.0});
-                }
-            }
-        } else if (c1->tower_type == TowerType::Quick) {
-            const Operation upgrade(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(TowerType::Sniper));
-            if (!legalize_operations(state, player, {upgrade}).empty()) {
-                plans.push_back(SinglePlan{"base_C1_to_Sniper", {upgrade}, 0.0});
-            }
-        } else if (c1->tower_type == TowerType::Mortar) {
-            plans.push_back(SinglePlan{
-                "base_C1_downgrade_then_Quick",
-                {Operation(OperationType::DowngradeTower, c1->tower_id)},
-                0.0,
-                SinglePlan::Followup::C1UpgradeQuick,
-            });
-        }
-        return plans;
-    }
-
-    for (int code : near_base_codes()) {
+    for (int code : base_codes()) {
         const Tower *tower = tower_at_code(state, player, code);
         if (tower == nullptr) {
-            const Operation build = build_at_code(player, code);
-            if (!legalize_operations(state, player, {build}).empty()) {
-                plans.push_back(SinglePlan{"base_build_" + code_name(code), {build}, 0.0});
+            if (can_build_more && base_build_enabled(code)) {
+                const Operation build = build_at_code(player, code);
+                if (!legalize_operations(state, player, {build}).empty()) {
+                    plans.push_back(SinglePlan{
+                        "base_build_" + code_name(code),
+                        {build},
+                        c1_build_heuristic(code),
+                    });
+                    for (TowerType target_type : base_build_upgrade_targets(code, c1_sniper_ready)) {
+                        plans.push_back(SinglePlan{
+                            "base_build_" + code_name(code) + "_then_" + tower_type_name(target_type),
+                            {build},
+                            c1_build_heuristic(code),
+                            upgrade_followup(code, target_type),
+                        });
+                    }
+                }
             }
             continue;
         }
+        if (tower->player != player) {
+            continue;
+        }
+
+        downgrade_towers.push_back(tower);
         append_downgrade_candidate(state, player, tower, "base_" + code_name(code) + "_downgrade", plans);
+        append_base_swap_candidates(state, player, *tower, code, plans);
+        if (tower->tower_type != TowerType::Basic) {
+            const Operation down(OperationType::DowngradeTower, tower->tower_id);
+            if (!legalize_operations(state, player, {down}).empty()) {
+                plans.push_back(SinglePlan{
+                    "base_" + code_name(code) + "_downgrade_then_downgrade",
+                    {down},
+                    0.0,
+                    downgrade_followup(code),
+                });
+            }
+            if (tower->tower_type == TowerType::Heavy && c1_quick_route_enabled(code)) {
+                plans.push_back(SinglePlan{
+                    "base_" + code_name(code) + "_downgrade_then_Quick",
+                    {down},
+                    0.0,
+                    upgrade_followup(code, TowerType::Quick),
+                });
+            }
+        }
+
+        if (!can_expand_existing) {
+            continue;
+        }
         if (tower->tower_type == TowerType::Basic) {
-            const Operation upgrade(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(TowerType::Quick));
-            if (!legalize_operations(state, player, {upgrade}).empty()) {
-                plans.push_back(SinglePlan{"base_" + code_name(code) + "_to_Quick", {upgrade}, 0.0});
+            for (TowerType target_type : base_existing_upgrade_targets(code, c1_sniper_ready)) {
+                const Operation upgrade(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(target_type));
+                if (!legalize_operations(state, player, {upgrade}).empty()) {
+                    plans.push_back(SinglePlan{
+                        "base_" + code_name(code) + "_to_" + tower_type_name(target_type),
+                        {upgrade},
+                        0.0,
+                    });
+                    if (target_type == TowerType::Quick && c1_quick_route_enabled(code)) {
+                        plans.push_back(SinglePlan{
+                            "base_" + code_name(code) + "_to_Quick_then_Sniper",
+                            {upgrade},
+                            0.0,
+                            upgrade_followup(code, TowerType::Sniper),
+                        });
+                    }
+                }
             }
         } else if (tower->tower_type == TowerType::Quick) {
-            const Operation upgrade(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(TowerType::Sniper));
-            if (!legalize_operations(state, player, {upgrade}).empty()) {
-                plans.push_back(SinglePlan{"base_" + code_name(code) + "_to_Sniper", {upgrade}, 0.0});
+            const Operation sniper(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(TowerType::Sniper));
+            if (!legalize_operations(state, player, {sniper}).empty()) {
+                plans.push_back(SinglePlan{"base_" + code_name(code) + "_to_Sniper", {sniper}, 0.0});
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i + 1 < downgrade_towers.size(); ++i) {
+        for (std::size_t j = i + 1; j < downgrade_towers.size(); ++j) {
+            std::vector<Operation> ops = {
+                Operation(OperationType::DowngradeTower, downgrade_towers[i]->tower_id),
+                Operation(OperationType::DowngradeTower, downgrade_towers[j]->tower_id),
+            };
+            ops = legalize_operations(state, player, ops);
+            if (ops.size() == 2) {
+                plans.push_back(SinglePlan{
+                    "base_" + code_name(code_at(*downgrade_towers[i], player)) + "_and_" +
+                        code_name(code_at(*downgrade_towers[j], player)) + "_downgrade",
+                    ops,
+                    0.0,
+                });
             }
         }
     }
@@ -1068,66 +1592,105 @@ inline std::vector<SinglePlan> generate_base_candidates(const PublicState &state
 
 inline std::vector<SinglePlan> generate_base_candidates(const rs::DefenseSimulator &simulator, int player) {
     std::vector<SinglePlan> plans;
-    plans.push_back(SinglePlan{"base_hold", {}, lure_config().base_hold_bonus});
+    plans.push_back(SinglePlan{"base_hold", {}, 0.0});
 
-    const int coins = static_cast<int>(std::floor(simulator.coins + 1e-9));
-    const rs::SearchTower *c1 = tower_at_code(simulator, player, C1);
+    const int base_tower_count = non_lure_tower_count(simulator, player);
+    const bool can_build_more = base_tower_count < lure_config().max_non_lure_towers;
+    const bool can_expand_existing = base_tower_count <= lure_config().max_non_lure_towers;
+    const bool c1_sniper_ready = c1_has_sniper(simulator, player);
+    std::vector<const rs::SearchTower *> downgrade_towers;
 
-    if (c1 == nullptr) {
-        const Operation build = build_at_code(player, C1);
-        if (!legalize_operations(simulator, {build}).empty()) {
-            plans.push_back(SinglePlan{"base_build_C1", {build}, lure_config().c1_build_bonus});
-        }
-        return plans;
-    }
-
-    append_downgrade_candidate(simulator, player, c1, "base_C1_downgrade", plans);
-
-    if (c1->tower_type != TowerType::Sniper) {
-        if (c1->tower_type == TowerType::Basic) {
-            if (coins < lure_config().c1_quick_transition_coin_threshold) {
-                const Operation mortar(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(TowerType::Mortar));
-                if (!legalize_operations(simulator, {mortar}).empty()) {
-                    plans.push_back(SinglePlan{"base_C1_to_Mortar", {mortar}, 0.0});
-                }
-            } else {
-                const Operation quick(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(TowerType::Quick));
-                if (!legalize_operations(simulator, {quick}).empty()) {
-                    plans.push_back(SinglePlan{"base_C1_to_Quick", {quick}, 0.0});
-                }
-                const Operation mortar(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(TowerType::Mortar));
-                if (!legalize_operations(simulator, {mortar}).empty()) {
-                    plans.push_back(SinglePlan{"base_C1_to_Mortar", {mortar}, 0.0});
-                }
-            }
-        } else if (c1->tower_type == TowerType::Quick) {
-            const Operation sniper(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(TowerType::Sniper));
-            if (!legalize_operations(simulator, {sniper}).empty()) {
-                plans.push_back(SinglePlan{"base_C1_to_Sniper", {sniper}, 0.0});
-            }
-        }
-        return plans;
-    }
-
-    for (int code : near_base_codes()) {
+    for (int code : base_codes()) {
         const rs::SearchTower *tower = tower_at_code(simulator, player, code);
         if (tower == nullptr) {
-            const Operation build = build_at_code(player, code);
-            if (!legalize_operations(simulator, {build}).empty()) {
-                plans.push_back(SinglePlan{"base_build_" + code_name(code), {build}, 0.0});
+            if (can_build_more && base_build_enabled(code)) {
+                const Operation build = build_at_code(player, code);
+                if (!legalize_operations(simulator, {build}).empty()) {
+                    plans.push_back(SinglePlan{
+                        "base_build_" + code_name(code),
+                        {build},
+                        c1_build_heuristic(code),
+                    });
+                    for (TowerType target_type : base_build_upgrade_targets(code, c1_sniper_ready)) {
+                        plans.push_back(SinglePlan{
+                            "base_build_" + code_name(code) + "_then_" + tower_type_name(target_type),
+                            {build},
+                            c1_build_heuristic(code),
+                            upgrade_followup(code, target_type),
+                        });
+                    }
+                }
             }
             continue;
         }
+
+        downgrade_towers.push_back(tower);
         append_downgrade_candidate(simulator, player, tower, "base_" + code_name(code) + "_downgrade", plans);
+        append_base_swap_candidates(simulator, player, *tower, code, plans);
+        if (tower->tower_type != TowerType::Basic) {
+            const Operation down(OperationType::DowngradeTower, tower->tower_id);
+            if (!legalize_operations(simulator, {down}).empty()) {
+                plans.push_back(SinglePlan{
+                    "base_" + code_name(code) + "_downgrade_then_downgrade",
+                    {down},
+                    0.0,
+                    downgrade_followup(code),
+                });
+            }
+            if (tower->tower_type == TowerType::Heavy && c1_quick_route_enabled(code)) {
+                plans.push_back(SinglePlan{
+                    "base_" + code_name(code) + "_downgrade_then_Quick",
+                    {down},
+                    0.0,
+                    upgrade_followup(code, TowerType::Quick),
+                });
+            }
+        }
+
+        if (!can_expand_existing) {
+            continue;
+        }
         if (tower->tower_type == TowerType::Basic) {
-            const Operation quick(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(TowerType::Quick));
-            if (!legalize_operations(simulator, {quick}).empty()) {
-                plans.push_back(SinglePlan{"base_" + code_name(code) + "_to_Quick", {quick}, 0.0});
+            for (TowerType target_type : base_existing_upgrade_targets(code, c1_sniper_ready)) {
+                const Operation upgrade(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(target_type));
+                if (!legalize_operations(simulator, {upgrade}).empty()) {
+                    plans.push_back(SinglePlan{
+                        "base_" + code_name(code) + "_to_" + tower_type_name(target_type),
+                        {upgrade},
+                        0.0,
+                    });
+                    if (target_type == TowerType::Quick && c1_quick_route_enabled(code)) {
+                        plans.push_back(SinglePlan{
+                            "base_" + code_name(code) + "_to_Quick_then_Sniper",
+                            {upgrade},
+                            0.0,
+                            upgrade_followup(code, TowerType::Sniper),
+                        });
+                    }
+                }
             }
         } else if (tower->tower_type == TowerType::Quick) {
             const Operation sniper(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(TowerType::Sniper));
             if (!legalize_operations(simulator, {sniper}).empty()) {
                 plans.push_back(SinglePlan{"base_" + code_name(code) + "_to_Sniper", {sniper}, 0.0});
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i + 1 < downgrade_towers.size(); ++i) {
+        for (std::size_t j = i + 1; j < downgrade_towers.size(); ++j) {
+            std::vector<Operation> ops = {
+                Operation(OperationType::DowngradeTower, downgrade_towers[i]->tower_id),
+                Operation(OperationType::DowngradeTower, downgrade_towers[j]->tower_id),
+            };
+            ops = legalize_operations(simulator, ops);
+            if (ops.size() == 2) {
+                plans.push_back(SinglePlan{
+                    "base_" + code_name(code_at(*downgrade_towers[i], player)) + "_and_" +
+                        code_name(code_at(*downgrade_towers[j], player)) + "_downgrade",
+                    ops,
+                    0.0,
+                });
             }
         }
     }
@@ -1146,7 +1709,7 @@ inline std::vector<SinglePlan> generate_lure_candidates(const PublicState &state
     }
 
     std::vector<SinglePlan> plans;
-    plans.push_back(SinglePlan{"lure_hold", {}, lure_config().lure_hold_bonus});
+    plans.push_back(SinglePlan{"lure_hold", {}, 0.0});
 
     std::vector<const Tower *> lure_towers;
     static_cast<void>(simulator);
@@ -1210,7 +1773,7 @@ inline std::vector<SinglePlan> generate_lure_candidates(const rs::DefenseSimulat
     }
 
     std::vector<SinglePlan> plans;
-    plans.push_back(SinglePlan{"lure_hold", {}, lure_config().lure_hold_bonus});
+    plans.push_back(SinglePlan{"lure_hold", {}, 0.0});
 
     std::vector<const rs::SearchTower *> lure_towers;
 
@@ -1300,61 +1863,16 @@ inline double enemy_tower_lightning_damage_score(const PublicState &state, int p
     return score;
 }
 
-inline double lightning_cell_score(
-    const PublicState &state,
-    const std::vector<WeightedDefenseState> &projections,
-    int player,
-    int x,
-    int y) {
-    double score = enemy_tower_lightning_damage_score(state, player, x, y);
-    if (enemy_super_effect_active(state, player)) {
-        score += lure_config().lightning_enemy_super_bonus;
-    }
-
-    for (std::size_t index = 0; index < projections.size(); ++index) {
-        const auto &view = projections[index];
-        for (const auto &ant : view.simulator.ants) {
-            if (!ant.alive()) {
-                continue;
-            }
-            if (hex_distance(x, y, ant.x, ant.y) > weapon_stats(SuperWeaponType::LightningStorm).attack_range) {
-                continue;
-            }
-            if (ant.kind == AntKind::Combat) {
-                score += view.weight * combat_threat_at(view.simulator, player, ant, ant.x, ant.y) *
-                         lure_config().lightning_combat_threat_ratio;
-                if (index == 0 && ant.shield > 0) {
-                    score += lure_config().lightning_shield_break_bonus;
-                }
-            }
-        }
-    }
-    return score;
-}
-
 inline std::vector<SinglePlan> generate_lightning_center_candidates(
     const PublicState &state,
     const rs::DefenseSimulator *simulator,
     int player) {
     std::vector<SinglePlan> plans;
+    static_cast<void>(simulator);
     if (state.weapon_cooldowns[player][static_cast<int>(SuperWeaponType::LightningStorm)] > 0) {
         return plans;
     }
 
-    struct CellScore {
-        double score = 0.0;
-        int x = -1;
-        int y = -1;
-    };
-    const auto projections = simulator != nullptr
-                                 ? project_future_states(
-                                       *simulator,
-                                       lure_config().lightning_projection_horizon,
-                                       lure_config().lightning_projection_samples,
-                                       0x4c49474854ULL)
-                                 : std::vector<WeightedDefenseState>{};
-    std::vector<CellScore> scored;
-    scored.reserve(kMapSize * kMapSize);
     for (int x = 0; x < kMapSize; ++x) {
         for (int y = 0; y < kMapSize; ++y) {
             if (!is_valid_pos(x, y)) {
@@ -1363,41 +1881,16 @@ inline std::vector<SinglePlan> generate_lightning_center_candidates(
             if (distance_to_boundary(x, y) < lure_config().lightning_min_boundary_distance) {
                 continue;
             }
-            const double score = lightning_cell_score(state, projections, player, x, y);
-            if (score <= 0.0) {
+            const Operation operation(OperationType::UseLightningStorm, x, y);
+            if (legalize_operations(state, player, {operation}).empty()) {
                 continue;
             }
-            scored.push_back(CellScore{score, x, y});
+            plans.push_back(SinglePlan{
+                "lightning_" + std::to_string(x) + "_" + std::to_string(y),
+                {operation},
+                0.0,
+            });
         }
-    }
-    std::sort(scored.begin(), scored.end(), [](const CellScore &lhs, const CellScore &rhs) {
-        return lhs.score > rhs.score;
-    });
-
-    std::vector<CellScore> selected;
-    for (const auto &cell : scored) {
-        bool too_close = false;
-        for (const auto &keep : selected) {
-            if (hex_distance(cell.x, cell.y, keep.x, keep.y) <= lure_config().lightning_cluster_separation) {
-                too_close = true;
-                break;
-            }
-        }
-        if (too_close) {
-            continue;
-        }
-        selected.push_back(cell);
-        if (static_cast<int>(selected.size()) >= lure_config().lightning_center_limit) {
-            break;
-        }
-    }
-
-    for (const auto &cell : selected) {
-        plans.push_back(SinglePlan{
-            "lightning_" + std::to_string(cell.x) + "_" + std::to_string(cell.y),
-            {Operation(OperationType::UseLightningStorm, cell.x, cell.y)},
-            cell.score,
-        });
     }
     return plans;
 }
@@ -1405,13 +1898,8 @@ inline std::vector<SinglePlan> generate_lightning_center_candidates(
 inline std::vector<SinglePlan> generate_lightning_prep_candidates(const PublicState &state, int player) {
     std::vector<SinglePlan> plans;
     plans.push_back(SinglePlan{"lightning_hold", {}, 0.0});
-    for (const auto &tower : state.towers) {
-        if (tower.player != player) {
-            continue;
-        }
-        const std::string action = tower.tower_type == TowerType::Basic ? "lightning_sell_" : "lightning_downgrade_";
-        append_downgrade_candidate(state, player, &tower, action + tower_slot_name(tower, player), plans);
-    }
+    static_cast<void>(state);
+    static_cast<void>(player);
     return plans;
 }
 
@@ -1431,106 +1919,212 @@ inline RootPlanSet generate_root_plans(
     out.lightning_center_candidates = lightning_center;
     out.base_count = static_cast<int>(base.size());
     out.lure_count = static_cast<int>(lure.size());
-    out.lightning_count = static_cast<int>(lightning_prep.size() * lightning_center.size());
-    out.raw_combo_count = out.base_count * out.lure_count;
+    out.lightning_count = static_cast<int>(lightning_center.size());
+    out.raw_combo_count = out.base_count + out.lure_count;
     out.raw_plan_count = out.raw_combo_count + out.lightning_count;
+    int base_lure_combo_count = 0;
 
     std::vector<CombinedPlan> &plans = out.plans;
     std::unordered_map<std::string, std::size_t> seen;
+    const SinglePlan no_lightning{"no_lightning", {}, 0.0};
+
+    auto add_plan = [&](const std::string &name,
+                        const std::string &base_name,
+                        const std::string &lure_name,
+                        const std::string &lightning_name,
+                        const std::vector<Operation> &raw_ops,
+                        double base_heuristic,
+                        double lure_heuristic,
+                        double lightning_heuristic,
+                        bool has_lightning,
+                        int horizon,
+                        FollowupAction followup) {
+        std::vector<Operation> combined = legalize_operations(state, player, raw_ops);
+        if (!raw_ops.empty() && combined.empty()) {
+            return;
+        }
+        const std::string key = plan_key(combined, followup);
+        const double operation_penalty = downgrade_penalty_for_ops(state, player, combined);
+        const double heuristic = base_heuristic + lure_heuristic + lightning_heuristic - operation_penalty;
+        double lightning_static_bonus = 0.0;
+        if (has_lightning && !combined.empty() && enemy_super_effect_active(state, player)) {
+            lightning_static_bonus += lure_config().lightning_enemy_super_bonus;
+        }
+        if (has_lightning) {
+            for (const auto &operation : combined) {
+                if (operation.op_type == OperationType::UseLightningStorm) {
+                    lightning_static_bonus +=
+                        enemy_tower_lightning_damage_score(state, player, operation.arg0, operation.arg1);
+                }
+            }
+        }
+        auto it = seen.find(key);
+        if (it == seen.end()) {
+            CombinedPlan item;
+            item.key = key;
+            item.name = name;
+            item.base_name = base_name;
+            item.lure_name = lure_name;
+            item.lightning_name = lightning_name;
+            item.ops = std::move(combined);
+            item.heuristic = heuristic;
+            item.base_heuristic = base_heuristic;
+            item.lure_heuristic = lure_heuristic;
+            item.lightning_heuristic = lightning_heuristic;
+            item.operation_penalty = operation_penalty;
+            item.lightning_static_bonus = lightning_static_bonus;
+            item.has_lightning = has_lightning;
+            item.horizon = horizon;
+            item.followup = followup;
+            seen.emplace(key, plans.size());
+            plans.push_back(std::move(item));
+            return;
+        }
+        if (heuristic > plans[it->second].heuristic) {
+            plans[it->second].name = name;
+            plans[it->second].base_name = base_name;
+            plans[it->second].lure_name = lure_name;
+            plans[it->second].lightning_name = lightning_name;
+            plans[it->second].heuristic = heuristic;
+            plans[it->second].base_heuristic = base_heuristic;
+            plans[it->second].lure_heuristic = lure_heuristic;
+            plans[it->second].lightning_heuristic = lightning_heuristic;
+            plans[it->second].operation_penalty = operation_penalty;
+            plans[it->second].lightning_static_bonus = lightning_static_bonus;
+            plans[it->second].has_lightning = has_lightning;
+            plans[it->second].horizon = horizon;
+            plans[it->second].followup = followup;
+        }
+    };
+
+    const auto is_hold = [](const SinglePlan &plan) {
+        return plan.ops.empty() && plan.followup.empty();
+    };
+    const auto is_downgrade_only_followup = [](const FollowupAction &followup) {
+        for (int index = 0; index < followup.count; ++index) {
+            if (followup.steps[static_cast<std::size_t>(index)].type != FollowupType::DowngradeAtCode) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto is_recycle_only = [&](const SinglePlan &plan) {
+        if (plan.ops.empty() || !is_downgrade_only_followup(plan.followup)) {
+            return false;
+        }
+        for (const auto &operation : plan.ops) {
+            if (operation.op_type != OperationType::DowngradeTower) {
+                return false;
+            }
+        }
+        return true;
+    };
+    bool has_base_hold = false;
+    bool has_lure_hold = false;
     for (const auto &base_plan : base) {
+        if (is_hold(base_plan)) {
+            has_base_hold = true;
+        }
+    }
+    for (const auto &lure_plan : lure) {
+        if (is_hold(lure_plan)) {
+            has_lure_hold = true;
+        }
+    }
+    if (has_base_hold || has_lure_hold) {
+        add_plan(
+            "base_hold+lure_hold",
+            has_base_hold ? "base_hold" : "none",
+            has_lure_hold ? "lure_hold" : "none",
+            no_lightning.name,
+            {},
+            lure_config().hold_bonus,
+            0.0,
+            0.0,
+            false,
+            lure_config().search_horizon,
+            FollowupAction{});
+    }
+
+    for (const auto &base_plan : base) {
+        if (is_hold(base_plan)) {
+            continue;
+        }
+        add_plan(
+            base_plan.name,
+            base_plan.name,
+            "none",
+            no_lightning.name,
+            base_plan.ops,
+            base_plan.heuristic,
+            0.0,
+            0.0,
+            false,
+            lure_config().search_horizon,
+            base_plan.followup);
+    }
+
+    for (const auto &lure_plan : lure) {
+        if (is_hold(lure_plan)) {
+            continue;
+        }
+        add_plan(
+            lure_plan.name,
+            "none",
+            lure_plan.name,
+            no_lightning.name,
+            lure_plan.ops,
+            0.0,
+            lure_plan.heuristic,
+            0.0,
+            false,
+            lure_config().search_horizon,
+            lure_plan.followup);
+    }
+
+    for (const auto &base_plan : base) {
+        if (!is_recycle_only(base_plan)) {
+            continue;
+        }
         for (const auto &lure_plan : lure) {
-            std::vector<Operation> raw;
-            raw.insert(raw.end(), base_plan.ops.begin(), base_plan.ops.end());
-            raw.insert(raw.end(), lure_plan.ops.begin(), lure_plan.ops.end());
-            std::vector<Operation> combined = legalize_operations(state, player, raw);
-            if (!raw.empty() && combined.empty()) {
+            if (is_hold(lure_plan)) {
                 continue;
             }
-            const SinglePlan no_lightning{"no_lightning", {}, 0.0};
-            const std::string key = plan_key(combined, base_plan.followup);
-            const double heuristic = base_plan.heuristic + lure_plan.heuristic;
-            auto it = seen.find(key);
-            if (it == seen.end()) {
-                CombinedPlan item;
-                item.key = key;
-                item.name = summarize_plan_name(base_plan, lure_plan, no_lightning);
-                item.base_name = base_plan.name;
-                item.lure_name = lure_plan.name;
-                item.lightning_name = no_lightning.name;
-                item.ops = std::move(combined);
-                item.heuristic = heuristic;
-                item.base_heuristic = base_plan.heuristic;
-                item.lure_heuristic = lure_plan.heuristic;
-                item.lightning_heuristic = 0.0;
-                item.has_lightning = false;
-                item.horizon = lure_config().search_horizon;
-                item.followup = base_plan.followup;
-                seen.emplace(key, plans.size());
-                plans.push_back(std::move(item));
-            } else if (heuristic > plans[it->second].heuristic) {
-                plans[it->second].name = summarize_plan_name(base_plan, lure_plan, no_lightning);
-                plans[it->second].base_name = base_plan.name;
-                plans[it->second].lure_name = lure_plan.name;
-                plans[it->second].lightning_name = no_lightning.name;
-                plans[it->second].heuristic = heuristic;
-                plans[it->second].base_heuristic = base_plan.heuristic;
-                plans[it->second].lure_heuristic = lure_plan.heuristic;
-                plans[it->second].lightning_heuristic = 0.0;
-                plans[it->second].has_lightning = false;
-                plans[it->second].horizon = lure_config().search_horizon;
-                plans[it->second].followup = base_plan.followup;
-            }
+            ++base_lure_combo_count;
+            std::vector<Operation> ops = base_plan.ops;
+            ops.insert(ops.end(), lure_plan.ops.begin(), lure_plan.ops.end());
+            add_plan(
+                base_plan.name + "+" + lure_plan.name,
+                base_plan.name,
+                lure_plan.name,
+                no_lightning.name,
+                ops,
+                base_plan.heuristic,
+                lure_plan.heuristic,
+                0.0,
+                false,
+                lure_config().search_horizon,
+                base_plan.followup);
         }
     }
 
-    for (const auto &prep_plan : lightning_prep) {
-        for (const auto &center_plan : lightning_center) {
-            std::vector<Operation> raw_lightning;
-            raw_lightning.insert(raw_lightning.end(), prep_plan.ops.begin(), prep_plan.ops.end());
-            raw_lightning.insert(raw_lightning.end(), center_plan.ops.begin(), center_plan.ops.end());
-            std::vector<Operation> lightning_ops = legalize_operations(state, player, raw_lightning);
-            if (!raw_lightning.empty() && lightning_ops.empty()) {
-                continue;
-            }
-            SinglePlan lightning_plan;
-            lightning_plan.name = prep_plan.name + '+' + center_plan.name;
-            lightning_plan.ops = center_plan.ops;
-            lightning_plan.heuristic = prep_plan.heuristic + center_plan.heuristic;
-            const std::string lightning_key = plan_key(lightning_ops, SinglePlan::Followup::None);
-            const double lightning_heuristic = lightning_plan.heuristic;
-            auto it = seen.find(lightning_key);
-            if (it == seen.end()) {
-                CombinedPlan item;
-                item.key = lightning_key;
-                item.name = lightning_plan.name;
-                item.base_name = "none";
-                item.lure_name = "none";
-                item.lightning_name = lightning_plan.name;
-                item.ops = std::move(lightning_ops);
-                item.heuristic = lightning_heuristic;
-                item.base_heuristic = 0.0;
-                item.lure_heuristic = 0.0;
-                item.lightning_heuristic = lightning_plan.heuristic;
-                item.has_lightning = true;
-                item.horizon = lure_config().lightning_horizon;
-                item.followup = SinglePlan::Followup::None;
-                seen.emplace(lightning_key, plans.size());
-                plans.push_back(std::move(item));
-            } else if (lightning_heuristic > plans[it->second].heuristic) {
-                plans[it->second].name = lightning_plan.name;
-                plans[it->second].base_name = "none";
-                plans[it->second].lure_name = "none";
-                plans[it->second].lightning_name = lightning_plan.name;
-                plans[it->second].heuristic = lightning_heuristic;
-                plans[it->second].base_heuristic = 0.0;
-                plans[it->second].lure_heuristic = 0.0;
-                plans[it->second].lightning_heuristic = lightning_plan.heuristic;
-                plans[it->second].has_lightning = true;
-                plans[it->second].horizon = lure_config().lightning_horizon;
-                plans[it->second].followup = SinglePlan::Followup::None;
-            }
-        }
+    for (const auto &center_plan : lightning_center) {
+        add_plan(
+            center_plan.name,
+            "none",
+            "none",
+            center_plan.name,
+            center_plan.ops,
+            0.0,
+            0.0,
+            center_plan.heuristic,
+            true,
+            lure_config().lightning_horizon,
+            FollowupAction{});
     }
+
+    out.raw_combo_count = out.base_count + out.lure_count + base_lure_combo_count;
+    out.raw_plan_count = out.raw_combo_count + out.lightning_count;
 
     std::sort(plans.begin(), plans.end(), [](const CombinedPlan &lhs, const CombinedPlan &rhs) {
         if (lhs.heuristic != rhs.heuristic) {
@@ -1551,21 +2145,22 @@ inline std::vector<Operation> choose_reactive_turn_operations(const rs::DefenseS
     double best_heuristic = -std::numeric_limits<double>::infinity();
     std::vector<Operation> best_ops;
 
-    for (const auto &base_plan : base) {
-        for (const auto &lure_plan : lure) {
-            std::vector<Operation> raw;
-            raw.insert(raw.end(), base_plan.ops.begin(), base_plan.ops.end());
-            raw.insert(raw.end(), lure_plan.ops.begin(), lure_plan.ops.end());
-            std::vector<Operation> combined = legalize_operations(simulator, raw);
-            if (!raw.empty() && combined.empty()) {
-                continue;
-            }
-            const double heuristic = base_plan.heuristic + lure_plan.heuristic;
-            if (heuristic > best_heuristic) {
-                best_heuristic = heuristic;
-                best_ops = std::move(combined);
-            }
+    auto consider = [&](const SinglePlan &plan) {
+        std::vector<Operation> combined = legalize_operations(simulator, plan.ops);
+        if (!plan.ops.empty() && combined.empty()) {
+            return;
         }
+        const double heuristic = plan.heuristic - downgrade_penalty_for_ops(simulator, combined);
+        if (heuristic > best_heuristic) {
+            best_heuristic = heuristic;
+            best_ops = std::move(combined);
+        }
+    };
+    for (const auto &base_plan : base) {
+        consider(base_plan);
+    }
+    for (const auto &lure_plan : lure) {
+        consider(lure_plan);
     }
     return best_ops;
 }
@@ -1579,33 +2174,122 @@ inline bool apply_reactive_turn_operations(rs::DefenseSimulator &simulator, int 
     return true;
 }
 
-inline std::vector<Operation> resolve_followup_operations(
+inline double apply_reactive_turn_operations_with_penalty(rs::DefenseSimulator &simulator, int player) {
+    if (const rs::SearchTower *forced = forced_reactive_sell_target(simulator, player); forced != nullptr) {
+        const double penalty = downgrade_refund_penalty(tower_salvage_value(*forced, alive_tower_count(simulator)));
+        if (simulator.apply_operation(Operation(OperationType::DowngradeTower, forced->tower_id))) {
+            return penalty;
+        }
+    }
+    return 0.0;
+}
+
+inline std::vector<Operation> resolve_followup_step_operations(
     const rs::DefenseSimulator &simulator,
     int player,
-    SinglePlan::Followup followup) {
-    if (followup == SinglePlan::Followup::None) {
+    const FollowupStep &step) {
+    if (step.empty()) {
         return {};
     }
-    const rs::SearchTower *c1 = tower_at_code(simulator, player, C1);
-    if (c1 == nullptr || !c1->alive() || c1->tower_type != TowerType::Basic) {
-        return {};
+    if (step.type == FollowupType::BuildAtCode) {
+        return legalize_operations(simulator, {build_at_code(player, step.code)});
     }
 
-    TowerType target = TowerType::Basic;
-    switch (followup) {
-    case SinglePlan::Followup::C1UpgradeMortar:
-        target = TowerType::Mortar;
-        break;
-    case SinglePlan::Followup::C1UpgradeQuick:
-        target = TowerType::Quick;
-        break;
-    case SinglePlan::Followup::None:
+    const rs::SearchTower *tower = tower_at_code(simulator, player, step.code);
+    if (tower == nullptr || !tower->alive()) {
+        return {};
+    }
+    switch (step.type) {
+    case FollowupType::UpgradeAtCode: {
+        const Operation upgrade(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(step.target));
+        return legalize_operations(simulator, {upgrade});
+    }
+    case FollowupType::DowngradeAtCode: {
+        const Operation downgrade(OperationType::DowngradeTower, tower->tower_id);
+        return legalize_operations(simulator, {downgrade});
+    }
+    case FollowupType::BuildAtCode:
+    case FollowupType::None:
     default:
         return {};
     }
+}
 
-    const Operation upgrade(OperationType::UpgradeTower, c1->tower_id, static_cast<int>(target));
-    return legalize_operations(simulator, {upgrade});
+inline std::vector<Operation> resolve_followup_operations(
+    const rs::DefenseSimulator &simulator,
+    int player,
+    const FollowupAction &followup) {
+    if (followup.empty()) {
+        return {};
+    }
+    std::vector<Operation> raw_ops;
+    raw_ops.reserve(static_cast<std::size_t>(followup.count));
+
+    struct PendingBuild {
+        int code = -1;
+        int tower_id = -1;
+    };
+    std::array<PendingBuild, FollowupAction::kMaxSteps> pending_builds{};
+    int pending_build_count = 0;
+    int predicted_tower_id = simulator.next_tower_id;
+
+    auto pending_tower_id_at = [&](int code) {
+        for (int index = pending_build_count - 1; index >= 0; --index) {
+            if (pending_builds[static_cast<std::size_t>(index)].code == code) {
+                return pending_builds[static_cast<std::size_t>(index)].tower_id;
+            }
+        }
+        return -1;
+    };
+
+    for (int index = 0; index < followup.count; ++index) {
+        const FollowupStep &step = followup.steps[static_cast<std::size_t>(index)];
+        if (step.empty()) {
+            continue;
+        }
+        if (step.type == FollowupType::BuildAtCode) {
+            raw_ops.push_back(build_at_code(player, step.code));
+            if (pending_build_count < FollowupAction::kMaxSteps) {
+                pending_builds[static_cast<std::size_t>(pending_build_count++)] =
+                    PendingBuild{step.code, predicted_tower_id++};
+            }
+            continue;
+        }
+
+        const rs::SearchTower *tower = tower_at_code(simulator, player, step.code);
+        int tower_id = tower != nullptr && tower->alive() ? tower->tower_id : -1;
+        if (tower_id < 0 && step.type == FollowupType::UpgradeAtCode) {
+            tower_id = pending_tower_id_at(step.code);
+        }
+        if (tower_id < 0) {
+            continue;
+        }
+
+        if (step.type == FollowupType::UpgradeAtCode) {
+            raw_ops.emplace_back(OperationType::UpgradeTower, tower_id, static_cast<int>(step.target));
+        } else if (step.type == FollowupType::DowngradeAtCode) {
+            raw_ops.emplace_back(OperationType::DowngradeTower, tower_id);
+        }
+    }
+
+    rs::DefenseSimulator scratch = simulator.clone();
+    std::vector<Operation> accepted;
+    accepted.reserve(raw_ops.size());
+    bool required_recycle_failed = false;
+    for (const Operation &operation : sort_operations(simulator, raw_ops)) {
+        if (required_recycle_failed && operation.op_type == OperationType::UpgradeTower) {
+            continue;
+        }
+        if (scratch.can_apply_operation(operation)) {
+            scratch.apply_operation(operation);
+            accepted.push_back(operation);
+            continue;
+        }
+        if (operation.op_type == OperationType::DowngradeTower) {
+            required_recycle_failed = true;
+        }
+    }
+    return accepted;
 }
 
 inline double worker_threat_score(const PublicState &state, int player) {
@@ -1635,7 +2319,7 @@ inline double combat_anchor_threat_at(const PublicState &state, int player, int 
         const int distance = std::max(1, hex_distance(x, y, tower.x, tower.y));
         const double value = tower_salvage_value(state, tower, tower_count);
         double tower_threat = value * lure_config().combat_anchor_threat_coin_ratio / distance;
-        if (distance <= 1) {
+        if (distance <= lure_config().combat_anchor_ring_distance) {
             tower_threat += value * lure_config().combat_anchor_ring1_bonus_ratio;
         }
         threat = std::max(threat, tower_threat);
@@ -1679,7 +2363,7 @@ inline double combat_anchor_threat_at(const rs::DefenseSimulator &simulator, int
         const int distance = std::max(1, hex_distance(x, y, tower.x, tower.y));
         const double value = tower_salvage_value(tower, tower_count);
         double tower_threat = value * lure_config().combat_anchor_threat_coin_ratio / distance;
-        if (distance <= 1) {
+        if (distance <= lure_config().combat_anchor_ring_distance) {
             tower_threat += value * lure_config().combat_anchor_ring1_bonus_ratio;
         }
         threat = std::max(threat, tower_threat);
@@ -1895,15 +2579,17 @@ inline std::vector<Operation> strip_lightning_operations(const std::vector<Opera
 inline double lightning_counterfactual_bonus(
     const rs::DefenseSimulator &with_lightning,
     const rs::DefenseSimulator &without_lightning,
-    int /*player*/) {
+    int player) {
     double bonus = 0.0;
     for (const auto &ant : without_lightning.ants) {
         if (ant.kind != AntKind::Combat || !ant.alive()) {
             continue;
         }
+        const double before_threat = combat_threat_at(without_lightning, player, ant, ant.x, ant.y);
         const int without_shield = ant.shield;
         int with_shield = 0;
         int with_hp = 0;
+        double after_threat = 0.0;
         const rs::SearchAnt *with_ant = nullptr;
         for (const auto &candidate : with_lightning.ants) {
             if (candidate.ant_id == ant.ant_id && candidate.kind == AntKind::Combat && candidate.alive()) {
@@ -1914,8 +2600,10 @@ inline double lightning_counterfactual_bonus(
         if (with_ant != nullptr) {
             with_shield = with_ant->shield;
             with_hp = with_ant->hp;
+            after_threat = combat_threat_at(with_lightning, player, *with_ant, with_ant->x, with_ant->y);
         }
 
+        bonus += std::max(0.0, before_threat - after_threat) * lure_config().lightning_combat_threat_ratio;
         if (without_shield > 0 && with_shield < without_shield) {
             bonus += lure_config().lightning_shield_break_bonus;
         }
@@ -1930,8 +2618,8 @@ inline double lightning_counterfactual_bonus(
 
 inline double c1_state_bonus(TowerType tower_type, bool transition_phase) {
     switch (tower_type) {
-    case TowerType::Mortar:
-    case TowerType::MortarPlus:
+    case TowerType::Heavy:
+    case TowerType::HeavyPlus:
     case TowerType::Ice:
     case TowerType::Bewitch:
         return transition_phase ? lure_config().c1_heavy_side_trans_bonus : lure_config().c1_heavy_bonus;
@@ -1954,6 +2642,19 @@ inline double c1_root_bonus(const rs::DefenseSimulator &post_root, int player, d
     const bool transition_phase =
         root_coins > static_cast<double>(lure_config().c1_quick_transition_coin_threshold);
     return c1_state_bonus(c1->tower_type, transition_phase);
+}
+
+inline double c1_root_bonus_for_plan(
+    const rs::DefenseSimulator &post_root,
+    int player,
+    double root_coins,
+    const FollowupAction &followup) {
+    if (followup.empty()) {
+        return c1_root_bonus(post_root, player, root_coins);
+    }
+    rs::DefenseSimulator projected = post_root.clone();
+    apply_operations(projected, resolve_followup_operations(projected, player, followup));
+    return c1_root_bonus(projected, player, root_coins);
 }
 
 inline double c1_terminal_bonus(const rs::DefenseSimulator &, int) {
@@ -2011,22 +2712,24 @@ inline RolloutEvaluation rollout_plan_score(
         } else {
             control.simulate_round(control_rng);
         }
-        out.lightning_bonus_raw = lightning_counterfactual_bonus(simulator, control, player);
+        out.lightning_bonus_raw = lightning_counterfactual_bonus(simulator, control, player) + plan.lightning_static_bonus;
         out.lightning_bonus_score = out.lightning_bonus_raw;
     }
     int step = 1;
-    if (plan.followup != SinglePlan::Followup::None && step < plan.horizon && !simulator.terminal) {
+    if (!plan.followup.empty() && step < plan.horizon && !simulator.terminal) {
         const auto followup_ops = resolve_followup_operations(simulator, player, plan.followup);
         apply_operations(simulator, followup_ops);
         simulator.simulate_round(rng);
         ++step;
     }
+    double reactive_penalty = 0.0;
     for (; step < plan.horizon && !simulator.terminal; ++step) {
-        apply_reactive_turn_operations(simulator, player);
+        reactive_penalty += apply_reactive_turn_operations_with_penalty(simulator, player);
         simulator.simulate_round(rng);
     }
     out.terminal = evaluate_terminal(simulator, player);
-    out.total_score = out.terminal.total_score + out.lightning_bonus_score;
+    out.reactive_operation_penalty = reactive_penalty;
+    out.total_score = out.terminal.total_score + out.lightning_bonus_score - reactive_penalty;
     return out;
 }
 
@@ -2037,6 +2740,7 @@ struct EvaluatedPlan {
     double mean_rollout_score = -std::numeric_limits<double>::infinity();
     double mean_score = -std::numeric_limits<double>::infinity();
     double rollout_weight_sum = 0.0;
+    int rollout_count = 0;
 };
 
 inline std::vector<EvaluatedPlan> evaluate_root_plans(
@@ -2046,29 +2750,36 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
     std::uint64_t serial,
     int rollout_count,
     const RootPlanSet &root_plans) {
-    const int effective_rollouts = rollout_count > 0 ? rollout_count : std::max(1, lure_config().rollout_count);
     std::vector<EvaluatedPlan> evaluated;
     evaluated.reserve(root_plans.plans.size());
 
-    for (std::size_t index = 0; index < root_plans.plans.size(); ++index) {
-        const auto &plan = root_plans.plans[index];
+    auto evaluate_one = [&](
+                            std::size_t index,
+                            const CombinedPlan &plan,
+                            int effective_rollouts,
+                            std::uint64_t assignment_salt = 0) {
         EvaluatedPlan item;
         item.root_index = index;
         item.plan = plan;
+        item.rollout_count = effective_rollouts;
 
         rs::DefenseSimulator plan_root = defense_root.clone();
         if (!plan.ops.empty() && !apply_operations(plan_root, plan.ops)) {
             item.mean_rollout_score = -std::numeric_limits<double>::infinity();
             item.mean_score = -std::numeric_limits<double>::infinity();
-            evaluated.push_back(item);
-            continue;
+            return item;
         }
 
         const RolloutForcedPlan forced_plan = build_first_round_rollout_plan(
             plan_root,
             player,
             effective_rollouts,
-            plan_rollout_assignment_seed(state.seed, serial, index, plan.horizon, effective_rollouts));
+            plan_rollout_assignment_seed(
+                state.seed,
+                serial + assignment_salt,
+                index,
+                plan.horizon,
+                effective_rollouts));
 
         RolloutEvaluation weighted_total;
         double weight_sum = 0.0;
@@ -2086,7 +2797,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
                 defense_root,
                 player,
                 plan,
-                plan_rollout_seed(state.seed, serial, index, rollout, plan.horizon),
+                plan_rollout_seed(state.seed, serial, index, rollout + static_cast<int>(assignment_salt), plan.horizon),
                 forced_moves);
             if (!std::isfinite(sample.total_score)) {
                 valid = false;
@@ -2100,20 +2811,148 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
             item.mean_rollout_score = -std::numeric_limits<double>::infinity();
             item.mean_score = -std::numeric_limits<double>::infinity();
             item.rollout_weight_sum = 0.0;
-            evaluated.push_back(item);
-            continue;
+            return item;
         }
 
         item.rollout_weight_sum = weight_sum;
         item.mean_rollout = weighted_total.scaled(1.0 / weight_sum);
-        const double root_c1_bonus = c1_root_bonus(plan_root, player, defense_root.coins);
+        const double root_c1_bonus = c1_root_bonus_for_plan(plan_root, player, defense_root.coins, plan.followup);
         item.mean_rollout.terminal.c1_bonus_raw = root_c1_bonus;
         item.mean_rollout.terminal.c1_bonus_score = root_c1_bonus;
         item.mean_rollout.terminal.total_score += root_c1_bonus;
         item.mean_rollout.total_score += root_c1_bonus;
         item.mean_rollout_score = item.mean_rollout.total_score;
         item.mean_score = item.mean_rollout_score + plan.heuristic;
-        evaluated.push_back(item);
+        return item;
+    };
+
+    struct UcbArm {
+        std::size_t root_index = 0;
+        CombinedPlan plan;
+        RolloutForcedPlan forced_plan;
+        RolloutEvaluation weighted_total;
+        double weight_sum = 0.0;
+        double root_c1_bonus = 0.0;
+        int samples = 0;
+        bool valid = true;
+    };
+
+    std::vector<UcbArm> lightning_arms;
+
+    for (std::size_t index = 0; index < root_plans.plans.size(); ++index) {
+        const auto &plan = root_plans.plans[index];
+        const int normal_rollouts = rollout_count > 0 ? rollout_count : std::max(1, lure_config().rollout_count);
+        if (plan.has_lightning) {
+            UcbArm arm;
+            arm.root_index = index;
+            arm.plan = plan;
+            lightning_arms.push_back(std::move(arm));
+            continue;
+        }
+        evaluated.push_back(evaluate_one(index, plan, normal_rollouts));
+    }
+
+    if (!lightning_arms.empty() && lure_config().lightning_ucb_total_rollouts > 0) {
+        const int budget = std::max(1, lure_config().lightning_ucb_total_rollouts);
+        for (auto &arm : lightning_arms) {
+            rs::DefenseSimulator plan_root = defense_root.clone();
+            if (!arm.plan.ops.empty() && !apply_operations(plan_root, arm.plan.ops)) {
+                arm.valid = false;
+                continue;
+            }
+            arm.root_c1_bonus = c1_root_bonus_for_plan(plan_root, player, defense_root.coins, arm.plan.followup);
+            arm.forced_plan = build_first_round_rollout_plan(
+                plan_root,
+                player,
+                budget,
+                plan_rollout_assignment_seed(state.seed, serial, arm.root_index, arm.plan.horizon, budget));
+        }
+        auto arm_mean_score = [](const UcbArm &arm) {
+            return arm.weight_sum > 0.0
+                       ? arm.weighted_total.total_score / arm.weight_sum + arm.plan.heuristic
+                       : -std::numeric_limits<double>::infinity();
+        };
+        auto sample_arm = [&](UcbArm &arm) {
+            if (!arm.valid || arm.samples >= budget) {
+                return false;
+            }
+            const int rollout = arm.samples;
+            const double weight =
+                rollout < static_cast<int>(arm.forced_plan.samples.size())
+                    ? std::max(arm.forced_plan.samples[static_cast<std::size_t>(rollout)].probability, 1e-12)
+                    : 1.0;
+            const auto *forced_moves =
+                rollout < static_cast<int>(arm.forced_plan.samples.size())
+                    ? &arm.forced_plan.samples[static_cast<std::size_t>(rollout)].forced_moves
+                    : nullptr;
+            RolloutEvaluation sample = rollout_plan_score(
+                defense_root,
+                player,
+                arm.plan,
+                plan_rollout_seed(state.seed, serial, arm.root_index, rollout, arm.plan.horizon),
+                forced_moves);
+            if (!std::isfinite(sample.total_score)) {
+                arm.valid = false;
+                return false;
+            }
+            sample.terminal.c1_bonus_raw = arm.root_c1_bonus;
+            sample.terminal.c1_bonus_score = arm.root_c1_bonus;
+            sample.terminal.total_score += arm.root_c1_bonus;
+            sample.total_score += arm.root_c1_bonus;
+            arm.weighted_total += sample.scaled(weight);
+            arm.weight_sum += weight;
+            ++arm.samples;
+            return true;
+        };
+
+        int total_samples = 0;
+        for (auto &arm : lightning_arms) {
+            if (total_samples >= budget) {
+                break;
+            }
+            if (sample_arm(arm)) {
+                ++total_samples;
+            }
+        }
+        while (total_samples < budget) {
+            int best_index = -1;
+            double best_ucb = -std::numeric_limits<double>::infinity();
+            for (std::size_t arm_index = 0; arm_index < lightning_arms.size(); ++arm_index) {
+                const auto &arm = lightning_arms[arm_index];
+                if (arm.samples <= 0) {
+                    continue;
+                }
+                const double mean = arm_mean_score(arm);
+                const double explore =
+                    lure_config().lightning_ucb_exploration *
+                    std::sqrt(std::log(static_cast<double>(total_samples + 1)) / static_cast<double>(arm.samples));
+                const double ucb = mean + explore;
+                if (ucb > best_ucb) {
+                    best_ucb = ucb;
+                    best_index = static_cast<int>(arm_index);
+                }
+            }
+            if (best_index < 0) {
+                break;
+            }
+            auto &arm = lightning_arms[static_cast<std::size_t>(best_index)];
+            sample_arm(arm);
+            ++total_samples;
+        }
+        for (auto &arm : lightning_arms) {
+            if (arm.samples <= 0 || arm.weight_sum <= 0.0) {
+                continue;
+            }
+            EvaluatedPlan item;
+            item.root_index = arm.root_index;
+            item.plan = arm.plan;
+            item.rollout_count = arm.samples;
+            item.rollout_weight_sum = arm.weight_sum;
+            item.mean_rollout = arm.weighted_total.scaled(1.0 / arm.weight_sum);
+            item.mean_rollout_score = item.mean_rollout.total_score;
+            item.mean_score = item.mean_rollout_score + item.plan.heuristic;
+            evaluated.push_back(item);
+        }
     }
 
     std::sort(evaluated.begin(), evaluated.end(), [](const EvaluatedPlan &lhs, const EvaluatedPlan &rhs) {
@@ -2145,6 +2984,9 @@ inline std::vector<Operation> decide_lure_strategy(
     const auto decision_begin = std::chrono::steady_clock::now();
 
     PublicState state = context.state->clone();
+    if (session != nullptr) {
+        session->apply_inferred_last_moves(state, context.player);
+    }
     rs::DefenseSimulator defense_root = rs::make_defense_simulator(state, context.simulator, context.player);
     defense_root.ignore_enemy_spawns = true;
     const RootPlanSet root_plans = generate_root_plans(state, &defense_root, context.player);
@@ -2177,10 +3019,11 @@ inline std::vector<Operation> decide_lure_strategy(
                     << ",\"base_heuristic\":" << item.plan.base_heuristic
                     << ",\"lure_heuristic\":" << item.plan.lure_heuristic
                     << ",\"lightning_heuristic\":" << item.plan.lightning_heuristic
+                    << ",\"operation_penalty\":" << item.plan.operation_penalty
                     << ",\"heuristic\":" << item.plan.heuristic
                     << ",\"score_before_heuristic\":" << item.mean_rollout_score
                     << ",\"score_before_penalty\":" << item.mean_score
-                    << ",\"rollouts\":" << lure_config().rollout_count
+                    << ",\"rollouts\":" << item.rollout_count
                     << ",\"mean_base_hp_raw\":" << item.mean_rollout.terminal.base_hp_raw
                     << ",\"mean_base_hp_score\":" << item.mean_rollout.terminal.base_hp_score
                     << ",\"mean_tower_value_raw\":" << item.mean_rollout.terminal.tower_value_raw
@@ -2196,6 +3039,7 @@ inline std::vector<Operation> decide_lure_strategy(
                     << ",\"mean_terminal_score\":" << item.mean_rollout.terminal.total_score
                     << ",\"mean_lightning_bonus_raw\":" << item.mean_rollout.lightning_bonus_raw
                     << ",\"mean_lightning_bonus_score\":" << item.mean_rollout.lightning_bonus_score
+                    << ",\"mean_reactive_operation_penalty\":" << item.mean_rollout.reactive_operation_penalty
                     << ",\"score\":" << item.mean_score
                     << "}\n";
             }
@@ -2261,6 +3105,7 @@ inline std::vector<Operation> decide_lure_strategy(
             << ",\"best_base_heuristic\":" << best.base_heuristic
             << ",\"best_lure_heuristic\":" << best.lure_heuristic
             << ",\"best_lightning_heuristic\":" << best.lightning_heuristic
+            << ",\"best_operation_penalty\":" << best.operation_penalty
             << ",\"best_heuristic\":" << best.heuristic
             << ",\"best_score_before_heuristic\":" << best_eval.mean_rollout_score
             << ",\"best_mean_base_hp_raw\":" << best_eval.mean_rollout.terminal.base_hp_raw
@@ -2278,9 +3123,13 @@ inline std::vector<Operation> decide_lure_strategy(
             << ",\"best_mean_terminal_score\":" << best_eval.mean_rollout.terminal.total_score
             << ",\"best_mean_lightning_bonus_raw\":" << best_eval.mean_rollout.lightning_bonus_raw
             << ",\"best_mean_lightning_bonus_score\":" << best_eval.mean_rollout.lightning_bonus_score
+            << ",\"best_mean_reactive_operation_penalty\":" << best_eval.mean_rollout.reactive_operation_penalty
             << ",\"coins\":" << state.coins[context.player]
             << ",\"base_hp\":" << state.bases[context.player].hp
             << ",\"tower_count\":" << state.tower_count(context.player)
+            << ",\"root_enemy_ants\":\"" << debug_json_escape(enemy_ant_state_text(state, context.player)) << '"'
+            << ",\"sim_enemy_ants\":\"" << debug_json_escape(sim_enemy_ant_state_text(defense_root)) << '"'
+            << ",\"root_own_towers\":\"" << debug_json_escape(own_tower_state_text(state, context.player)) << '"'
             << ",\"enemy_ant_count\":" << enemy_ant_count
             << ",\"enemy_combat_ring1\":" << enemy_combat_ring1
             << ",\"enemy_combat_ring2\":" << enemy_combat_ring2

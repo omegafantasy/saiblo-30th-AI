@@ -209,6 +209,20 @@ void print_profile(const char *label, const rs::DefenseSimulatorProfile &profile
               << '\n';
 }
 
+ls::RootPlanSet filtered_root_plans(const ls::RootPlanSet &input, bool want_lightning) {
+    ls::RootPlanSet out;
+    out.plans.reserve(input.plans.size());
+    for (const auto &plan : input.plans) {
+        if (plan.has_lightning == want_lightning) {
+            out.plans.push_back(plan);
+        }
+    }
+    out.raw_plan_count = static_cast<int>(out.plans.size());
+    out.raw_combo_count = out.raw_plan_count;
+    out.lightning_count = want_lightning ? out.raw_plan_count : 0;
+    return out;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -240,6 +254,8 @@ int main(int argc, char **argv) {
     TimeSeries decision_us;
     TimeSeries generate_us;
     TimeSeries evaluate_us;
+    TimeSeries normal_eval_us;
+    TimeSeries lightning_eval_us;
     TimeSeries rollout_us;
     TimeSeries noop_us;
     TimeSeries native_us;
@@ -304,6 +320,40 @@ int main(int argc, char **argv) {
             continue;
         }
 
+        const ls::RootPlanSet normal_plans = filtered_root_plans(root_plans, false);
+        const ls::RootPlanSet lightning_plans = filtered_root_plans(root_plans, true);
+
+        double normal_evaluate_time = average_time_us(bench_iterations, [&](int iter) {
+            PublicState local_state = base_state.clone();
+            rs::DefenseSimulator local_root = rs::make_defense_simulator(local_state, &native_root, player);
+            local_root.ignore_enemy_spawns = true;
+            const auto local_eval = ls::evaluate_root_plans(
+                local_state,
+                local_root,
+                player,
+                static_cast<std::uint64_t>(iter),
+                antgame::sdk::lure_config().rollout_count,
+                normal_plans);
+            static_cast<void>(local_eval);
+        });
+
+        double lightning_evaluate_time = 0.0;
+        if (!lightning_plans.plans.empty()) {
+            lightning_evaluate_time = average_time_us(bench_iterations, [&](int iter) {
+                PublicState local_state = base_state.clone();
+                rs::DefenseSimulator local_root = rs::make_defense_simulator(local_state, &native_root, player);
+                local_root.ignore_enemy_spawns = true;
+                const auto local_eval = ls::evaluate_root_plans(
+                    local_state,
+                    local_root,
+                    player,
+                    static_cast<std::uint64_t>(iter),
+                    antgame::sdk::lure_config().rollout_count,
+                    lightning_plans);
+                static_cast<void>(local_eval);
+            });
+        }
+
         const ls::CombinedPlan best_plan = evaluated.front().plan;
 
         rs::DefenseSimulatorProfile rollout_profile;
@@ -333,13 +383,15 @@ int main(int argc, char **argv) {
             NativeSimulator native = native_root.clone();
             native.reseed_future(rs::mix_seed(base_state.seed, static_cast<std::uint64_t>(0x3f123bb5U + iter)));
             for (int step = 0; step < antgame::sdk::lure_config().search_horizon && !native.terminal(); ++step) {
-                native.advance_round();
+                native.advance_round_without_base_spawns();
             }
         });
 
         decision_us.push(decision_time);
         generate_us.push(generate_time);
         evaluate_us.push(evaluate_time);
+        normal_eval_us.push(normal_evaluate_time);
+        lightning_eval_us.push(lightning_evaluate_time);
         rollout_us.push(best_rollout_time);
         noop_us.push(noop_time);
         native_us.push(native_time);
@@ -392,6 +444,8 @@ int main(int argc, char **argv) {
                   << " decision_us=" << decision_time
                   << " gen_us=" << generate_time
                   << " eval_us=" << evaluate_time
+                  << " normal_eval_us=" << normal_evaluate_time
+                  << " lightning_eval_us=" << lightning_evaluate_time
                   << " best_rollout_us=" << best_rollout_time
                   << " noop6_us=" << noop_time
                   << " native6_us=" << native_time
@@ -404,6 +458,8 @@ int main(int argc, char **argv) {
               << " decision_max_us=" << decision_us.max()
               << " gen_avg_us=" << generate_us.avg()
               << " eval_avg_us=" << evaluate_us.avg()
+              << " normal_eval_avg_us=" << normal_eval_us.avg()
+              << " lightning_eval_avg_us=" << lightning_eval_us.avg()
               << " best_rollout_avg_us=" << rollout_us.avg()
               << " noop_avg_us=" << noop_us.avg()
               << " native_avg_us=" << native_us.avg()

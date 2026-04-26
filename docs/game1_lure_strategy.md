@@ -46,7 +46,8 @@
 - 若需要同回合 `sell + build`，会保证“先拆后建”
 - 若同回合需要拆多座塔，会优先拆当前血量更高的塔
 - 闪电作为独立候选搜索
-- 闪电候选允许先 `hold / downgrade / sell`，再释放闪电
+- 闪电候选当前只包含单次 `Lightning Storm`，不与 `base/lure` 或降级/拆塔组合
+- 闪电中心使用全合法中心 UCB 搜索，总预算由 `lightning_ucb_total_rollouts` 控制
 - future rollout 不再完整生成主动 `base × lure`，只保留贴身回收这类应急 reactive 动作
 
 ## 4. 当前代码刻意没有实现的部分
@@ -57,6 +58,7 @@
 
 - 更复杂的同回合 op-list 模板
 - `sell lure -> lightning -> build lure` 这种显式三段链
+- `downgrade/sell -> lightning` 这种闪电前置回收链
 - 主动 `EMP / Deflector / Evasion`
 - 更强的 lure 路径级控制
 - 基于位置表的 lure 槽位偏好学习
@@ -73,18 +75,21 @@
 
 当前 `C1` 路线仍是强结构化的：
 
-- `C1` 为空时，只考虑 `build C1`
+- `C1` 为空时，考虑 `build C1` 与 `build C1 -> Heavy`
 - `C1 Basic` 时：
-  - 钱较少优先走 `Mortar`
-  - 钱较多允许转 `Quick`
+  - 可升 `Heavy`
+  - 钱较多时允许转 `Quick`
 - `C1 Quick` 时允许转 `Sniper`
-- `C1 Sniper` 成型后，才开放 `L1 / R1 / C2` 的近基地补网
-- 当前还支持三类结构化 followup：
-  - `build C1 -> upgrade Mortar`
-  - `build C1 -> upgrade Quick`
-  - `downgrade Mortar -> upgrade Quick`
+- `C1 Heavy` 在过渡期可通过 `downgrade -> Quick` 切线
+- `C1 Sniper` 成型后，其他 base 槽位的二级塔候选放开到 `Heavy / Quick / Mortar`
+- 当前还支持结构化 followup：
+  - `build slot -> upgrade allowed level-2 tower`
+  - `Basic -> Quick -> Sniper`
+  - `Heavy(C1) -> downgrade -> Quick`
+  - `downgrade/sell source to bottom -> build another base slot`
+  - `downgrade/sell source to bottom -> build another base slot -> upgrade allowed level-2 tower`
 
-这里仍保留一个显式金币阈值，用来控制 `Mortar` 与 `Quick / Sniper` 路线切换。
+这里仍保留一个显式金币阈值，用来控制 `Heavy` 与 `Quick / Sniper` 路线切换。
 
 ## 6. 当前 lure 结构
 
@@ -111,12 +116,13 @@
 - 独立候选
 - 偏战斗蚁应急
 - 兼顾敌方塔伤害
-- 不与 `base × lure` 相乘
-- 但闪电候选自身可带一个前置 `downgrade / sell`，用于回收或凑钱
+- 不与 `base/lure` 相乘
+- 不带前置 `downgrade / sell`
+- 每个合法中心是一个 arm，UCB 在所有 arm 上分配 rollout
 
 当前闪电启发主要看：
 
-- 覆盖到的战斗蚁 threat
+- rollout 后相对无闪电对照组减少的战斗蚁 threat
 - 破盾收益
 - 敌方超武窗口
 - 对敌方塔造成的等效价值伤害
@@ -128,11 +134,21 @@
 当前 baseline 还有几个明确约束：
 
 - 当前只搜索单回合根动作，不再做旧版“两回合计划”
-- 例外：`C1` 主线保留少量显式 followup，用于表达建后升级与 `Mortar -> Quick` 转线
+- 例外：base 主线保留少量显式 followup，用于表达建后升级、`Quick -> Sniper` 与 `Heavy(C1) -> Quick` 转线
 - root 组合使用严格合法性判断
   - 组合里有一步非法，整组直接丢弃
 - rollout 后续回合仅使用贴身强制回收，不再主动贪心生成完整 `base × lure`
 - 所有直接影响评分的参数应统一暴露在 `lure_strategy_params.hpp`
+
+当前根节点候选集合实际是：
+
+- `hold`
+- 单独 `base`
+- 单独 `lure`
+- `recycle-only base + lure`
+- 单独 `lightning`
+
+它不是完整的 `base × lure × lightning`。
 
 ## 9. 后续优化方向
 

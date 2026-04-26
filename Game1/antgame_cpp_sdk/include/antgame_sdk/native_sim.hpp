@@ -12,6 +12,7 @@ namespace antgame::sdk {
 
 struct NativeAntHiddenState {
     int ant_id = -1;
+    int last_move = -1;
     int shield = 0;
     bool defend = false;
     bool evasion_control_free_on_break = false;
@@ -69,6 +70,7 @@ class NativeSimulator {
     void reseed_future(uint64_t seed);
     std::vector<Operation> apply_operation_list(int player, const std::vector<Operation> &operations);
     ResolveResult advance_round();
+    ResolveResult advance_round_without_base_spawns();
     ResolveResult resolve_turn(const std::vector<Operation> &ops0, const std::vector<Operation> &ops1);
     void sync_public_round_state(const PublicRoundState &state);
 

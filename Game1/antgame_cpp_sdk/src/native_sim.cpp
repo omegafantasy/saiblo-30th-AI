@@ -25,6 +25,19 @@ constexpr int kInitialCoin = 50;
 constexpr int kSpecialBehaviorDecayTurns = 5;
 constexpr std::uint64_t kRngMask = (1ULL << 48) - 1;
 constexpr std::uint64_t kRngMultiplier = 25214903917ULL;
+constexpr double kSpawnBehaviorProbs[4] = {0.4, 0.35, 0.10, 0.15};
+
+struct NativeSpawnProfile {
+    ::Ant::Kind kind;
+    ::Ant::Behavior behavior;
+};
+
+constexpr NativeSpawnProfile kSpawnProfiles[4] = {
+    {::Ant::Kind::Worker, ::Ant::Behavior::Default},
+    {::Ant::Kind::Worker, ::Ant::Behavior::Conservative},
+    {::Ant::Kind::Worker, ::Ant::Behavior::Randomized},
+    {::Ant::Kind::Combat, ::Ant::Behavior::Default},
+};
 
 ::Operation to_game_operation(const sdk::Operation &operation) {
     switch (operation.op_type) {
@@ -159,6 +172,26 @@ void mark_trail_cell(std::array<std::uint64_t, sdk::kTrailMaskWords> &mask, int 
     mask[static_cast<std::size_t>(bit_index / 64)] |= 1ULL << (bit_index % 64);
 }
 
+int infer_last_move_from_positions(int from_x, int from_y, int to_x, int to_y) {
+    if (from_x == to_x && from_y == to_y) {
+        return ::Ant::NoMove;
+    }
+    for (int direction = 0; direction < 6; ++direction) {
+        const int nx = from_x + sdk::kOffset[from_y & 1][direction][0];
+        const int ny = from_y + sdk::kOffset[from_y & 1][direction][1];
+        if (nx == to_x && ny == to_y) {
+            return direction;
+        }
+    }
+    return ::Ant::NoMove;
+}
+
+void append_trail_if_needed(Ant &ant, int x, int y) {
+    if (ant.trail_cells.empty() || ant.trail_cells.back().x != x || ant.trail_cells.back().y != y) {
+        ant.trail_cells.emplace_back(x, y);
+    }
+}
+
 int display_cooldown_to_round(const DefenseTower &tower, int cooldown) {
     const int speed = static_cast<int>(std::llround(tower.get_spd()));
     if (tower.get_spd() < 1.0) {
@@ -288,6 +321,7 @@ struct sdk::NativeSimulator::Impl {
         for (const auto &ant : game.ants) {
             sdk::NativeAntHiddenState row{
                 ant.get_id(),
+                ant.get_last_move(),
                 ant.shield,
                 ant.defend,
                 ant.evasion_control_free_on_break,
@@ -389,6 +423,158 @@ struct sdk::NativeSimulator::Impl {
         return out;
     }
 
+    NativeSpawnProfile draw_spawn_profile() {
+        const double roll = game.random_float();
+        double cumulative = 0.0;
+        for (int index = 0; index < 4; ++index) {
+            cumulative += kSpawnBehaviorProbs[index];
+            if (roll <= cumulative) {
+                return kSpawnProfiles[index];
+            }
+        }
+        return kSpawnProfiles[3];
+    }
+
+    std::pair<int, int> choose_tower_spawn_cell(const DefenseTower &tower) {
+        const Pos enemy = tower.get_player() ? Pos(PLAYER_0_BASE_CAMP_X, PLAYER_0_BASE_CAMP_Y)
+                                             : Pos(PLAYER_1_BASE_CAMP_X, PLAYER_1_BASE_CAMP_Y);
+        double best_score = -1e18;
+        std::pair<int, int> best = {tower.get_x(), tower.get_y()};
+        for (int direction = 0; direction < 6; ++direction) {
+            const int nx = tower.get_x() + sdk::kOffset[tower.get_y() & 1][direction][0];
+            const int ny = tower.get_y() + sdk::kOffset[tower.get_y() & 1][direction][1];
+            if (!game.ant_can_walk_to(nx, ny)) {
+                continue;
+            }
+            const int ant_level = tower.get_player() ? game.base_camp1.get_ant_level()
+                                                     : game.base_camp0.get_ant_level();
+            double score = -distance(Pos(nx, ny), enemy);
+            score -= game.crowding_penalty(::Ant(tower.get_player(), -1, nx, ny, ant_level), nx, ny);
+            if (score > best_score) {
+                best_score = score;
+                best = {nx, ny};
+            }
+        }
+        return best;
+    }
+
+    void spawn_ant_from_tower_without_base_spawn(
+        const DefenseTower &tower,
+        ::Ant::Kind kind,
+        ::Ant::Behavior behavior) {
+        const auto cell = choose_tower_spawn_cell(tower);
+        if (!game.ant_can_walk_to(cell.first, cell.second)) {
+            return;
+        }
+        const int ant_level = tower.get_player() ? game.base_camp1.get_ant_level()
+                                                 : game.base_camp0.get_ant_level();
+        game.ants.push_back(::Ant(tower.get_player(), game.ant_id, cell.first, cell.second, ant_level, kind));
+        game.ants.back().trail_cells = {Pos(cell.first, cell.second)};
+        game.ants.back().set_behavior(behavior);
+        if (kind == ::Ant::Kind::Combat) {
+            game.grant_emergency_evasion(game.ants.back(), 3, true);
+        }
+        ++game.ant_id;
+    }
+
+    void process_producer_towers_without_base_spawn() {
+        for (auto &tower : game.defensive_towers) {
+            if (tower.destroy() || !tower.is_producer()) {
+                continue;
+            }
+            ::Item it = game.item[!tower.get_player()][ItemType::EMPBlaster];
+            if (it.duration && distance(Pos(tower.get_x(), tower.get_y()), Pos(it.x, it.y)) <= 3) {
+                continue;
+            }
+            ++tower.round;
+            if (tower.get_type() == ::TowerType::ProducerMedic &&
+                tower.get_support_interval() > 0 &&
+                tower.round % tower.get_support_interval() == 0) {
+                const Pos enemy = tower.get_player() ? Pos(PLAYER_0_BASE_CAMP_X, PLAYER_0_BASE_CAMP_Y)
+                                                     : Pos(PLAYER_1_BASE_CAMP_X, PLAYER_1_BASE_CAMP_Y);
+                int frontline_distance = 1000000000;
+                for (auto &ant : game.ants) {
+                    if (ant.get_player() != tower.get_player()) {
+                        continue;
+                    }
+                    const auto status = ant.get_status();
+                    if (status != ::Ant::Status::Alive && status != ::Ant::Status::Frozen) {
+                        continue;
+                    }
+                    frontline_distance = std::min(frontline_distance, distance(Pos(ant.get_x(), ant.get_y()), enemy));
+                }
+                ::Ant *target = nullptr;
+                for (auto &ant : game.ants) {
+                    if (ant.get_player() != tower.get_player()) {
+                        continue;
+                    }
+                    const auto status = ant.get_status();
+                    if (status != ::Ant::Status::Alive && status != ::Ant::Status::Frozen) {
+                        continue;
+                    }
+                    const int ant_distance = distance(Pos(ant.get_x(), ant.get_y()), enemy);
+                    if (ant_distance > frontline_distance + 1) {
+                        continue;
+                    }
+                    if (target == nullptr ||
+                        (target->get_kind() != ::Ant::Kind::Combat && ant.get_kind() == ::Ant::Kind::Combat) ||
+                        (target->get_kind() == ant.get_kind() &&
+                         (ant.get_hp() < target->get_hp() ||
+                          (ant.get_hp() == target->get_hp() &&
+                           (ant_distance < distance(Pos(target->get_x(), target->get_y()), enemy) ||
+                            (ant_distance == distance(Pos(target->get_x(), target->get_y()), enemy) &&
+                             ant.get_id() < target->get_id())))))) {
+                        target = &ant;
+                    }
+                }
+                if (target != nullptr) {
+                    target->set_hp_true(target->get_hp_limit() - target->get_hp());
+                    target->add_evasion(1, true);
+                }
+            }
+            if (tower.round < tower.get_spawn_interval()) {
+                continue;
+            }
+            const NativeSpawnProfile profile = draw_spawn_profile();
+            spawn_ant_from_tower_without_base_spawn(tower, profile.kind, profile.behavior);
+            if (tower.get_type() == ::TowerType::ProducerSiege &&
+                game.random_float() <= tower.get_siege_spawn_chance()) {
+                spawn_ant_from_tower_without_base_spawn(tower, ::Ant::Kind::Combat, ::Ant::Behavior::Default);
+            }
+            tower.round = 0;
+        }
+    }
+
+    sdk::ResolveResult advance_round_without_base_spawns() {
+        if (!game.is_end) {
+            game.attack_ants();
+            game.move_ants();
+            game.teleport_ants();
+            game.update_pheromone();
+            const bool should_continue = game.manage_ants();
+            if (!should_continue) {
+                ++game.round;
+            } else {
+                process_producer_towers_without_base_spawn();
+                game.increase_ant_age();
+                game.update_coin();
+                game.update_items();
+                ++game.round;
+                if (game.round == MAX_ROUND) {
+                    game.is_end = true;
+                    game.judge_winner();
+                } else {
+                    game.judge_base_camp();
+                }
+            }
+        }
+        sync_terminal(game, terminal_flag, winner_value);
+        sdk::ResolveResult out;
+        out.terminal = terminal_flag;
+        out.winner = winner_value;
+        return out;
+    }
+
     void sync_public_round_state(const sdk::PublicRoundState &state) {
         const std::unordered_map<int, ::Ant> previous_ants = [&]() {
             std::unordered_map<int, ::Ant> ants_by_id;
@@ -439,26 +625,35 @@ struct sdk::NativeSimulator::Impl {
             game.ants.emplace_back(row.player, row.ant_id, row.x, row.y, row.level, kind);
             auto &ant = game.ants.back();
             auto it = previous_ants.find(row.ant_id);
+            const bool same_kind = it != previous_ants.end() && it->second.get_kind() == kind;
             if (it != previous_ants.end()) {
                 ant.trail_cells = it->second.trail_cells;
-                ant.last_move = it->second.last_move;
+                ant.last_move = row.last_move >= 0
+                                    ? row.last_move
+                                    : infer_last_move_from_positions(it->second.get_x(), it->second.get_y(), row.x, row.y);
+                if (ant.last_move != ::Ant::NoMove || it->second.get_x() != row.x || it->second.get_y() != row.y) {
+                    append_trail_if_needed(ant, row.x, row.y);
+                }
                 ant.path_len_total = it->second.path_len_total;
                 ant.age = row.age;
-                ant.shield = it->second.shield;
-                ant.defend = it->second.defend;
-                ant.evasion = it->second.evasion;
+                ant.shield = same_kind ? it->second.shield : 0;
+                ant.defend = same_kind ? it->second.defend : false;
+                ant.evasion = same_kind ? it->second.evasion : false;
+                ant.evasion_control_free_on_break = same_kind ? it->second.evasion_control_free_on_break : false;
             } else {
                 ant.age = row.age;
+                ant.last_move = row.last_move >= 0 ? row.last_move : ::Ant::NoMove;
                 ant.shield = 0;
                 ant.defend = false;
                 ant.evasion = false;
+                ant.evasion_control_free_on_break = false;
             }
             ant.pos_x = row.x;
             ant.pos_y = row.y;
             ant.hp = row.hp;
             ant.is_frozen = (row.status == sdk::AntStatus::Frozen);
             ant.all_frozen = ant.is_frozen;
-            if (it != previous_ants.end()) {
+            if (same_kind) {
                 ant.behavior = it->second.behavior;
                 ant.behavior_rounds = it->second.behavior_rounds;
                 ant.behavior_expiry = it->second.behavior_expiry;
@@ -623,6 +818,10 @@ std::vector<sdk::Operation> sdk::NativeSimulator::apply_operation_list(int playe
 
 sdk::ResolveResult sdk::NativeSimulator::advance_round() {
     return impl_->advance_round();
+}
+
+sdk::ResolveResult sdk::NativeSimulator::advance_round_without_base_spawns() {
+    return impl_->advance_round_without_base_spawns();
 }
 
 sdk::ResolveResult sdk::NativeSimulator::resolve_turn(const std::vector<sdk::Operation> &ops0,

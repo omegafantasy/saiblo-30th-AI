@@ -141,12 +141,20 @@ def snapshot_towers(towers_by_id: dict[int, dict]) -> list[dict]:
     return [deepcopy(tower) for _, tower in sorted(towers_by_id.items(), key=lambda item: (item[1].get("player", -1), item[0]))]
 
 
+def advance_reconstructed_tower_cooldowns(towers_by_id: dict[int, dict]) -> None:
+    for tower in towers_by_id.values():
+        cd = tower.get("cd")
+        if isinstance(cd, int) and cd > 0:
+            tower["cd"] = cd - 1
+
+
 def build_reconstructed_rounds(payload: list[dict]) -> list[dict]:
     reconstructed: list[dict] = []
     towers_by_id: dict[int, dict] = {}
     for record in payload:
         round_state = record.get("round_state", {})
         round_start_towers = snapshot_towers(towers_by_id)
+        advance_reconstructed_tower_cooldowns(towers_by_id)
         for tower in round_state.get("towers", []) or []:
             tower_id = int(tower.get("id", -1))
             if tower.get("type", -1) == -1:

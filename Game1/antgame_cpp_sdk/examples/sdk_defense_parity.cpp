@@ -296,7 +296,7 @@ RunEval run_native(
         PublicRoundState current = native.to_public_round_state();
         for (int step = 0; step < horizon; ++step) {
             if (!native.terminal()) {
-                native.advance_round();
+                native.advance_round_without_base_spawns();
                 current = native.to_public_round_state();
                 prune_defense_state(current, player, root_ant_ids, root_tower_ids);
                 native.sync_public_round_state(current);
