@@ -22,6 +22,7 @@ struct NativeAntHiddenState {
     int target_y = -1;
     bool has_pending_behavior = false;
     AntBehavior pending_behavior = AntBehavior::Default;
+    std::array<std::uint64_t, kTrailMaskWords> trail_mask{};
 };
 
 struct ResolveResult {
@@ -59,6 +60,7 @@ class NativeSimulator {
     bool terminal() const;
     int winner() const;
     std::vector<NativeAntHiddenState> ant_hidden_states() const;
+    std::array<std::array<double, kMapSize>, kMapSize> pheromone_for_player(int player) const;
     const std::string &movement_policy() const;
     uint64_t seed() const;
     bool cold_handle_rule_illegal() const;

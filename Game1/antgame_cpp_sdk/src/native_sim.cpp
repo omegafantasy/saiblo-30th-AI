@@ -151,6 +151,14 @@ int tower_level_from_type(::TowerType tower_type) {
     return static_cast<int>(tower_type) < 10 ? 1 : 2;
 }
 
+void mark_trail_cell(std::array<std::uint64_t, sdk::kTrailMaskWords> &mask, int x, int y) {
+    if (x < 0 || x >= sdk::kMapSize || y < 0 || y >= sdk::kMapSize) {
+        return;
+    }
+    const int bit_index = x * sdk::kMapSize + y;
+    mask[static_cast<std::size_t>(bit_index / 64)] |= 1ULL << (bit_index % 64);
+}
+
 int display_cooldown_to_round(const DefenseTower &tower, int cooldown) {
     const int speed = static_cast<int>(std::llround(tower.get_spd()));
     if (tower.get_spd() < 1.0) {
@@ -278,7 +286,7 @@ struct sdk::NativeSimulator::Impl {
         std::vector<sdk::NativeAntHiddenState> out;
         out.reserve(game.ants.size());
         for (const auto &ant : game.ants) {
-            out.push_back(sdk::NativeAntHiddenState{
+            sdk::NativeAntHiddenState row{
                 ant.get_id(),
                 ant.shield,
                 ant.defend,
@@ -290,7 +298,13 @@ struct sdk::NativeSimulator::Impl {
                 ant.target_y,
                 ant.has_pending_behavior,
                 static_cast<sdk::AntBehavior>(static_cast<int>(ant.pending_behavior)),
-            });
+                {},
+            };
+            for (const auto &cell : ant.get_trail_cells()) {
+                mark_trail_cell(row.trail_mask, cell.x, cell.y);
+            }
+            mark_trail_cell(row.trail_mask, ant.get_x(), ant.get_y());
+            out.push_back(row);
         }
         std::sort(out.begin(), out.end(), [](const sdk::NativeAntHiddenState &lhs, const sdk::NativeAntHiddenState &rhs) {
             return lhs.ant_id < rhs.ant_id;
@@ -566,6 +580,19 @@ int sdk::NativeSimulator::winner() const {
 
 std::vector<sdk::NativeAntHiddenState> sdk::NativeSimulator::ant_hidden_states() const {
     return impl_->ant_hidden_states();
+}
+
+std::array<std::array<double, sdk::kMapSize>, sdk::kMapSize> sdk::NativeSimulator::pheromone_for_player(int player) const {
+    std::array<std::array<double, sdk::kMapSize>, sdk::kMapSize> out{};
+    if (player < 0 || player >= 2) {
+        return out;
+    }
+    for (int x = 0; x < sdk::kMapSize; ++x) {
+        for (int y = 0; y < sdk::kMapSize; ++y) {
+            out[x][y] = static_cast<double>(impl_->game.map.map[x][y].pheromone[player]) / PHEROMONE_SCALE;
+        }
+    }
+    return out;
 }
 
 const std::string &sdk::NativeSimulator::movement_policy() const {

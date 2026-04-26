@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Game1 SimViz</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <div>
+        <h1>Game1 SimViz</h1>
+      </div>
+      <div class="status-pill" id="statusText">Idle</div>
+    </header>
+
+    <section class="panel controls">
+      <div class="controls-grid">
+        <label>
+          <span>Replay Path</span>
+          <input id="replayPath" type="text" spellcheck="false" value="/root/autodl-tmp/saiblo_iter/Game1/good.json" />
+        </label>
+        <label>
+          <span>Player</span>
+          <select id="playerSelect">
+            <option value="0">Player 0</option>
+            <option value="1">Player 1</option>
+          </select>
+        </label>
+        <label>
+          <span>Round</span>
+          <input id="roundInput" type="number" min="0" value="0" />
+        </label>
+        <div class="button-row">
+          <button id="loadReplayBtn">Load Replay</button>
+          <button id="computeActionsBtn">Compute Actions</button>
+        </div>
+      </div>
+      <input id="roundSlider" type="range" min="0" max="0" value="0" />
+    </section>
+
+    <main class="workspace">
+      <section class="column column-left">
+        <section class="panel board-panel board-panel-main">
+          <div class="section-header">
+            <h2>Unified Board</h2>
+            <div id="unifiedBoardHeader" class="meta-line"></div>
+          </div>
+          <div id="boardViewTabs" class="tab-row"></div>
+          <div id="unifiedBoard" class="board large-board"></div>
+          <div id="selectedActionInfo" class="summary-box empty-box">尚未选中 action。</div>
+          <div id="unifiedBoardMeta" class="summary-box empty-box">尚未载入盘面。</div>
+        </section>
+
+        <section class="panel info-panel">
+          <div class="section-header">
+            <h2>Replay / Root Info</h2>
+            <div id="replayRoundMeta" class="meta-line"></div>
+          </div>
+          <div class="ops-grid">
+            <div>
+              <h3>Replay op0</h3>
+              <div id="replayOps0" class="ops-list"></div>
+            </div>
+            <div>
+              <h3>Replay op1</h3>
+              <div id="replayOps1" class="ops-list"></div>
+            </div>
+          </div>
+          <div id="replayRootSummary" class="summary-box empty-box">尚未计算 root 候选。</div>
+          <div id="rootSourceSummary" class="summary-box empty-box">尚未载入独立候选。</div>
+        </section>
+      </section>
+
+      <div
+        id="dividerLeft"
+        class="column-divider"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize left and middle columns"
+        title="拖动调整左栏和中栏宽度"
+      ></div>
+
+      <section class="column column-middle">
+        <section class="panel table-panel">
+          <div class="section-header">
+            <h2>Actions</h2>
+            <div id="strategyMeta" class="meta-line"></div>
+          </div>
+          <div id="actionsSummary" class="summary-box empty-box">尚未计算候选行动。</div>
+          <div class="table-wrap flex-fill">
+            <table id="actionsTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Action</th>
+                  <th>Rollout</th>
+                  <th>Heuristic</th>
+                  <th>BaseHP</th>
+                  <th>Coins</th>
+                  <th>Threat</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel table-panel">
+          <div class="section-header">
+            <h2>Rollout Samples</h2>
+            <div id="samplesMeta" class="meta-line"></div>
+          </div>
+          <div class="table-wrap flex-fill">
+            <table id="samplesTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Total</th>
+                  <th>Weight</th>
+                  <th>BaseHP</th>
+                  <th>Coins</th>
+                  <th>Threat</th>
+                  <th>First Moves</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <div
+        id="dividerRight"
+        class="column-divider"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize middle and right columns"
+        title="拖动调整中栏和右栏宽度"
+      ></div>
+
+      <section class="column column-right">
+        <section class="panel trace-combined-panel">
+          <div class="section-header">
+            <h2>Trace</h2>
+            <div id="traceMeta" class="meta-line"></div>
+          </div>
+          <div id="traceStepTabs" class="tab-row"></div>
+          <div class="trace-rows">
+            <div class="trace-row trace-row-start">
+              <div class="trace-board-cell">
+                <div class="trace-row-title">Trace Start</div>
+                <div id="traceStartBoard" class="board trace-square-board"></div>
+              </div>
+              <div class="trace-side">
+                <div id="traceStartHeader" class="meta-line"></div>
+                <div id="traceStartMeta" class="summary-box empty-box">尚未载入 trace。</div>
+              </div>
+            </div>
+            <div class="trace-row trace-row-end">
+              <div class="trace-board-cell">
+                <div class="trace-row-title">Trace End</div>
+                <div id="traceEndBoard" class="board trace-square-board"></div>
+              </div>
+              <div class="trace-side">
+                <div id="traceEval" class="summary-box empty-box">尚未选择 rollout sample。</div>
+                <div id="traceStepMeta" class="summary-box empty-box">尚未载入 trace。</div>
+                <div id="movesMeta" class="meta-line"></div>
+                <div class="table-wrap flex-fill">
+                  <table id="movesTable">
+                    <thead>
+                      <tr>
+                        <th>Ant</th>
+                        <th>Kind</th>
+                        <th>Before</th>
+                        <th>Chosen</th>
+                        <th>Prob</th>
+                        <th>Source</th>
+                        <th>Top Options</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

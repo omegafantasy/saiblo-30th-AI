@@ -1,0 +1,959 @@
+#include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "../../Ant-Game/game/include/json.hpp"
+#include "antgame_sdk/lure_strategy.hpp"
+#include "antgame_sdk/native_sim.hpp"
+#include "antgame_sdk/sdk.hpp"
+
+using json = nlohmann::json;
+
+namespace antgame::sdk::examples {
+
+namespace ls = ::antgame::sdk::lure_strategy_detail;
+namespace rs = ::antgame::sdk::random_search_detail;
+
+struct ReplayRoundStart {
+    std::uint64_t seed = 0;
+    int round = 0;
+    json replay_record;
+    PublicState public_state;
+    NativeSimulator native;
+
+    explicit ReplayRoundStart(std::uint64_t seed_in)
+        : seed(seed_in), public_state(seed_in), native(seed_in) {}
+};
+
+using EvaluatedPlanWithIndex = ls::EvaluatedPlan;
+
+struct MoveTraceSummary {
+    json moves = json::array();
+    double log_probability = 0.0;
+};
+
+const char *tower_type_name(TowerType type) {
+    switch (type) {
+    case TowerType::Basic:
+        return "Basic";
+    case TowerType::Heavy:
+        return "Heavy";
+    case TowerType::Quick:
+        return "Quick";
+    case TowerType::Mortar:
+        return "Mortar";
+    case TowerType::Producer:
+        return "Producer";
+    case TowerType::HeavyPlus:
+        return "HeavyPlus";
+    case TowerType::Ice:
+        return "Ice";
+    case TowerType::Bewitch:
+        return "Bewitch";
+    case TowerType::QuickPlus:
+        return "QuickPlus";
+    case TowerType::Double:
+        return "Double";
+    case TowerType::Sniper:
+        return "Sniper";
+    case TowerType::MortarPlus:
+        return "MortarPlus";
+    case TowerType::Pulse:
+        return "Pulse";
+    case TowerType::Missile:
+        return "Missile";
+    case TowerType::ProducerFast:
+        return "ProducerFast";
+    case TowerType::ProducerSiege:
+        return "ProducerSiege";
+    case TowerType::ProducerMedic:
+        return "ProducerMedic";
+    default:
+        return "Unknown";
+    }
+}
+
+const char *behavior_name(AntBehavior behavior) {
+    switch (behavior) {
+    case AntBehavior::Default:
+        return "Default";
+    case AntBehavior::Conservative:
+        return "Conservative";
+    case AntBehavior::Random:
+        return "Random";
+    case AntBehavior::Bewitched:
+        return "Bewitched";
+    case AntBehavior::ControlFree:
+        return "ControlFree";
+    default:
+        return "Unknown";
+    }
+}
+
+const char *kind_name(AntKind kind) {
+    switch (kind) {
+    case AntKind::Worker:
+        return "Worker";
+    case AntKind::Combat:
+        return "Combat";
+    default:
+        return "Unknown";
+    }
+}
+
+const char *weapon_name(SuperWeaponType type) {
+    switch (type) {
+    case SuperWeaponType::LightningStorm:
+        return "LightningStorm";
+    case SuperWeaponType::EmpBlaster:
+        return "EmpBlaster";
+    case SuperWeaponType::Deflector:
+        return "Deflector";
+    case SuperWeaponType::EmergencyEvasion:
+        return "EmergencyEvasion";
+    default:
+        return "Unknown";
+    }
+}
+
+json operation_to_json(const Operation &operation) {
+    json out;
+    out["type"] = static_cast<int>(operation.op_type);
+    out["arg0"] = operation.arg0;
+    out["arg1"] = operation.arg1;
+    out["tokens"] = operation.to_protocol_tokens();
+    return out;
+}
+
+json tower_to_json(const Tower &tower) {
+    json out;
+    out["id"] = tower.tower_id;
+    out["player"] = tower.player;
+    out["x"] = tower.x;
+    out["y"] = tower.y;
+    out["type"] = static_cast<int>(tower.tower_type);
+    out["type_name"] = tower_type_name(tower.tower_type);
+    out["cooldown"] = tower.cooldown;
+    out["hp"] = tower.hp;
+    out["max_hp"] = tower.max_hp();
+    return out;
+}
+
+json ant_to_json(const Ant &ant) {
+    json out;
+    out["id"] = ant.ant_id;
+    out["player"] = ant.player;
+    out["x"] = ant.x;
+    out["y"] = ant.y;
+    out["hp"] = ant.hp;
+    out["max_hp"] = ant.max_hp();
+    out["level"] = ant.level;
+    out["age"] = ant.age;
+    out["status"] = static_cast<int>(ant.status);
+    out["behavior"] = static_cast<int>(ant.behavior);
+    out["behavior_name"] = behavior_name(ant.behavior);
+    out["kind"] = static_cast<int>(ant.kind);
+    out["kind_name"] = kind_name(ant.kind);
+    out["last_move"] = ant.last_move;
+    return out;
+}
+
+json effect_to_json(const WeaponEffect &effect) {
+    json out;
+    out["weapon_type"] = static_cast<int>(effect.weapon_type);
+    out["weapon_name"] = weapon_name(effect.weapon_type);
+    out["player"] = effect.player;
+    out["x"] = effect.x;
+    out["y"] = effect.y;
+    out["remaining_turns"] = effect.remaining_turns;
+    return out;
+}
+
+json public_round_state_to_json(const PublicRoundState &state) {
+    json out;
+    out["round_index"] = state.round_index;
+    out["coins"] = json::array({state.coins[0], state.coins[1]});
+    out["camps_hp"] = json::array({state.camps_hp[0], state.camps_hp[1]});
+    out["speed_lv"] = json::array({state.speed_lv[0], state.speed_lv[1]});
+    out["anthp_lv"] = json::array({state.anthp_lv[0], state.anthp_lv[1]});
+    out["weapon_cooldowns"] = json::array();
+    for (int player = 0; player < 2; ++player) {
+        out["weapon_cooldowns"].push_back(json::array(
+            {state.weapon_cooldowns[player][0], state.weapon_cooldowns[player][1], state.weapon_cooldowns[player][2],
+             state.weapon_cooldowns[player][3], state.weapon_cooldowns[player][4]}));
+    }
+    out["towers"] = json::array();
+    for (const auto &tower : state.towers) {
+        out["towers"].push_back(tower_to_json(tower));
+    }
+    out["ants"] = json::array();
+    for (const auto &ant : state.ants) {
+        out["ants"].push_back(ant_to_json(ant));
+    }
+    out["active_effects"] = json::array();
+    for (const auto &effect : state.active_effects) {
+        out["active_effects"].push_back(effect_to_json(effect));
+    }
+    return out;
+}
+
+json search_tower_to_json(const rs::SearchTower &tower) {
+    json out;
+    out["id"] = tower.tower_id;
+    out["x"] = tower.x;
+    out["y"] = tower.y;
+    out["type"] = static_cast<int>(tower.tower_type);
+    out["type_name"] = tower_type_name(tower.tower_type);
+    out["cooldown"] = tower.cooldown;
+    out["hp"] = tower.hp;
+    out["max_hp"] = tower.max_hp();
+    return out;
+}
+
+json search_ant_to_json(const rs::SearchAnt &ant) {
+    json out;
+    out["id"] = ant.ant_id;
+    out["x"] = ant.x;
+    out["y"] = ant.y;
+    out["hp"] = ant.hp;
+    out["max_hp"] = ant.max_hp();
+    out["level"] = ant.level;
+    out["age"] = ant.age;
+    out["last_move"] = ant.last_move;
+    out["behavior"] = static_cast<int>(ant.behavior);
+    out["behavior_name"] = behavior_name(ant.behavior);
+    out["kind"] = static_cast<int>(ant.kind);
+    out["kind_name"] = kind_name(ant.kind);
+    out["shield"] = ant.shield;
+    out["defend"] = ant.defend;
+    out["control_free_on_break"] = ant.control_free_on_break;
+    out["is_frozen"] = ant.is_frozen;
+    out["behavior_rounds"] = ant.behavior_rounds;
+    out["behavior_expiry"] = ant.behavior_expiry;
+    out["target_x"] = ant.target_x;
+    out["target_y"] = ant.target_y;
+    return out;
+}
+
+json search_effect_to_json(const rs::SearchEffect &effect) {
+    json out;
+    out["weapon_type"] = static_cast<int>(effect.weapon_type);
+    out["weapon_name"] = weapon_name(effect.weapon_type);
+    out["x"] = effect.x;
+    out["y"] = effect.y;
+    out["remaining_turns"] = effect.remaining_turns;
+    return out;
+}
+
+json defense_sim_to_json(const rs::DefenseSimulator &simulator) {
+    json out;
+    out["round_index"] = simulator.round_index;
+    out["player"] = simulator.player;
+    out["enemy"] = simulator.enemy;
+    out["coins"] = simulator.coins;
+    out["base_hp"] = simulator.base_hp;
+    out["enemy_generation_level"] = simulator.enemy_generation_level;
+    out["enemy_ant_level"] = simulator.enemy_ant_level;
+    out["next_ant_id"] = simulator.next_ant_id;
+    out["next_tower_id"] = simulator.next_tower_id;
+    out["lightning_cooldown"] = simulator.lightning_cooldown;
+    out["terminal"] = simulator.terminal;
+    out["ignore_enemy_spawns"] = simulator.ignore_enemy_spawns;
+    out["towers"] = json::array();
+    for (const auto &tower : simulator.towers) {
+        out["towers"].push_back(search_tower_to_json(tower));
+    }
+    out["ants"] = json::array();
+    for (const auto &ant : simulator.ants) {
+        out["ants"].push_back(search_ant_to_json(ant));
+    }
+    out["my_effects"] = json::array();
+    for (const auto &effect : simulator.my_effects) {
+        out["my_effects"].push_back(search_effect_to_json(effect));
+    }
+    out["enemy_effects"] = json::array();
+    for (const auto &effect : simulator.enemy_effects) {
+        out["enemy_effects"].push_back(search_effect_to_json(effect));
+    }
+    return out;
+}
+
+json eval_breakdown_to_json(const ls::EvalBreakdown &value) {
+    json out;
+    out["base_hp_raw"] = value.base_hp_raw;
+    out["base_hp_score"] = value.base_hp_score;
+    out["tower_value_raw"] = value.tower_value_raw;
+    out["tower_value_score"] = value.tower_value_score;
+    out["money_raw"] = value.money_raw;
+    out["money_score"] = value.money_score;
+    out["c1_bonus_raw"] = value.c1_bonus_raw;
+    out["c1_bonus_score"] = value.c1_bonus_score;
+    out["worker_threat_raw"] = value.worker_threat_raw;
+    out["worker_threat_score"] = value.worker_threat_score;
+    out["combat_threat_raw"] = value.combat_threat_raw;
+    out["combat_threat_score"] = value.combat_threat_score;
+    out["total_score"] = value.total_score;
+    return out;
+}
+
+json rollout_eval_to_json(const ls::RolloutEvaluation &value) {
+    json out;
+    out["terminal"] = eval_breakdown_to_json(value.terminal);
+    out["lightning_bonus_raw"] = value.lightning_bonus_raw;
+    out["lightning_bonus_score"] = value.lightning_bonus_score;
+    out["total_score"] = value.total_score;
+    return out;
+}
+
+Operation parse_replay_operation(const json &raw) {
+    const int type = raw.value("type", -1);
+    const int id = raw.value("id", -1);
+    const int args = raw.value("args", -1);
+    const int x = raw.value("pos", json::object()).value("x", -1);
+    const int y = raw.value("pos", json::object()).value("y", -1);
+    switch (static_cast<OperationType>(type)) {
+    case OperationType::BuildTower:
+        return Operation(OperationType::BuildTower, x, y);
+    case OperationType::UpgradeTower:
+        return Operation(OperationType::UpgradeTower, id, args);
+    case OperationType::DowngradeTower:
+        return Operation(OperationType::DowngradeTower, id);
+    case OperationType::UseLightningStorm:
+        return Operation(OperationType::UseLightningStorm, x, y);
+    case OperationType::UseEmpBlaster:
+        return Operation(OperationType::UseEmpBlaster, x, y);
+    case OperationType::UseDeflector:
+        return Operation(OperationType::UseDeflector, x, y);
+    case OperationType::UseEmergencyEvasion:
+        return Operation(OperationType::UseEmergencyEvasion, x, y);
+    case OperationType::UpgradeGenerationSpeed:
+        return Operation(OperationType::UpgradeGenerationSpeed);
+    case OperationType::UpgradeGeneratedAnt:
+        return Operation(OperationType::UpgradeGeneratedAnt);
+    default:
+        return Operation(static_cast<OperationType>(-1));
+    }
+}
+
+std::vector<Operation> parse_replay_operations(const json &ops_raw) {
+    std::vector<Operation> operations;
+    if (!ops_raw.is_array()) {
+        return operations;
+    }
+    operations.reserve(ops_raw.size());
+    for (const auto &item : ops_raw) {
+        const Operation operation = parse_replay_operation(item);
+        if (static_cast<int>(operation.op_type) < 0) {
+            continue;
+        }
+        operations.push_back(operation);
+    }
+    return operations;
+}
+
+ReplayRoundStart load_replay_round_start(const std::string &replay_path, int round) {
+    std::ifstream fin(replay_path);
+    if (!fin) {
+        throw std::runtime_error("failed to open replay: " + replay_path);
+    }
+    json replay;
+    fin >> replay;
+    if (!replay.is_array()) {
+        throw std::runtime_error("replay is not a JSON array");
+    }
+    if (round < 0 || round > static_cast<int>(replay.size())) {
+        throw std::runtime_error("round is out of range");
+    }
+
+    std::uint64_t seed = 0;
+    if (!replay.empty()) {
+        seed = replay.at(0).value("seed", 0ULL);
+    }
+    ReplayRoundStart out(seed);
+    out.round = round;
+
+    for (int index = 0; index < round; ++index) {
+        const auto &record = replay.at(static_cast<std::size_t>(index));
+        const auto ops0 = parse_replay_operations(record.value("op0", json::array()));
+        const auto ops1 = parse_replay_operations(record.value("op1", json::array()));
+        out.native.resolve_turn(ops0, ops1);
+    }
+
+    if (round < static_cast<int>(replay.size())) {
+        out.replay_record = replay.at(static_cast<std::size_t>(round));
+    }
+    out.public_state.sync_public_round_state(out.native.to_public_round_state());
+    return out;
+}
+
+std::uint64_t rollout_serial_for_round(int round) {
+    return static_cast<std::uint64_t>(std::max(0, round) + 1);
+}
+
+std::uint64_t plan_rollout_seed(const PublicState &state, std::uint64_t serial, std::size_t root_index, int rollout, int horizon) {
+    return ls::plan_rollout_seed(state.seed, serial, root_index, rollout, horizon);
+}
+
+std::vector<EvaluatedPlanWithIndex> evaluate_root_plans(
+    const PublicState &state,
+    const NativeSimulator *native,
+    int player,
+    std::uint64_t serial,
+    int rollout_count) {
+    rs::DefenseSimulator defense_root = rs::make_defense_simulator(state, native, player);
+    defense_root.ignore_enemy_spawns = true;
+
+    const ls::RootPlanSet root_plans = ls::generate_root_plans(state, &defense_root, player);
+    return ls::evaluate_root_plans(state, defense_root, player, serial, rollout_count, root_plans);
+}
+
+const EvaluatedPlanWithIndex &require_plan_by_key(const std::vector<EvaluatedPlanWithIndex> &plans, const std::string &key) {
+    for (const auto &item : plans) {
+        if (item.plan.key == key) {
+            return item;
+        }
+    }
+    throw std::runtime_error("plan key not found: " + key);
+}
+
+json evaluated_plan_to_json(const PublicState &state, int player, const EvaluatedPlanWithIndex &item) {
+    json out;
+    out["root_index"] = item.root_index;
+    out["key"] = item.plan.key;
+    out["name"] = item.plan.name;
+    out["base_name"] = item.plan.base_name;
+    out["lure_name"] = item.plan.lure_name;
+    out["lightning_name"] = item.plan.lightning_name;
+    out["has_lightning"] = item.plan.has_lightning;
+    out["horizon"] = item.plan.horizon;
+    out["followup"] = ls::followup_text(item.plan.followup);
+    out["heuristic"] = item.plan.heuristic;
+    out["base_heuristic"] = item.plan.base_heuristic;
+    out["lure_heuristic"] = item.plan.lure_heuristic;
+    out["lightning_heuristic"] = item.plan.lightning_heuristic;
+    out["mean_rollout_score"] = item.mean_rollout_score;
+    out["mean_score"] = item.mean_score;
+    out["pretty"] = ls::pretty_ops_text(state, player, item.plan.ops);
+    out["ops"] = json::array();
+    for (const auto &operation : item.plan.ops) {
+        out["ops"].push_back(operation_to_json(operation));
+    }
+    out["mean_rollout"] = rollout_eval_to_json(item.mean_rollout);
+    return out;
+}
+
+json single_plan_to_json(const PublicState &state, int player, const ls::SinglePlan &plan) {
+    json out;
+    out["name"] = plan.name;
+    out["followup"] = ls::followup_text(plan.followup);
+    out["heuristic"] = plan.heuristic;
+    out["pretty"] = ls::pretty_ops_text(state, player, plan.ops);
+    out["ops"] = json::array();
+    for (const auto &operation : plan.ops) {
+        out["ops"].push_back(operation_to_json(operation));
+    }
+    return out;
+}
+
+MoveTraceSummary trace_move_phase(
+    rs::DefenseSimulator &simulator,
+    rs::FastRng &rng,
+    const rs::FixedList<rs::ForcedMove, rs::kMaxImportantAnts> *forced_moves = nullptr) {
+    MoveTraceSummary summary;
+    bool need_enhanced_cache = false;
+    for (const auto &ant : simulator.ants) {
+        if (!ant.alive() || ant.too_old() || ant.is_frozen) {
+            continue;
+        }
+        if (ant.behavior != AntBehavior::Random && ant.behavior != AntBehavior::Bewitched) {
+            need_enhanced_cache = true;
+            break;
+        }
+    }
+    if (need_enhanced_cache) {
+        simulator.ensure_move_cache(true);
+    }
+
+    auto forced_move_for = [&](int ant_id) {
+        if (forced_moves == nullptr) {
+            return rs::kNoMove;
+        }
+        for (int index = 0; index < forced_moves->size(); ++index) {
+            if ((*forced_moves)[index].ant_id == ant_id) {
+                return (*forced_moves)[index].direction;
+            }
+        }
+        return rs::kNoMove;
+    };
+
+    for (auto &ant : simulator.ants) {
+        if (!ant.alive() || ant.too_old() || ant.is_frozen) {
+            continue;
+        }
+        json row;
+        row["ant_before"] = search_ant_to_json(ant);
+
+        int move = rs::kNoMove;
+        double chosen_probability = 1.0;
+        std::string source = "sample";
+        json options = json::array();
+        bool attacked_tower = false;
+        int attacked_tower_id = -1;
+        const int forced_move = forced_move_for(ant.ant_id);
+
+        if (forced_move != rs::kNoMove) {
+            source = "forced_schedule";
+            if (ant.behavior == AntBehavior::Random) {
+                const auto candidates = simulator.legal_move_candidates(ant);
+                const double probability = 1.0 / static_cast<double>(std::max(1, candidates.size()));
+                for (int index = 0; index < candidates.size(); ++index) {
+                    const auto &candidate = candidates[index];
+                    options.push_back(json{
+                        {"direction", candidate.direction},
+                        {"nx", candidate.nx},
+                        {"ny", candidate.ny},
+                        {"probability", probability},
+                    });
+                    if (candidate.direction == forced_move) {
+                        chosen_probability = probability;
+                    }
+                }
+                move = forced_move;
+            } else {
+                const auto evaluated = simulator.evaluate_move_options(ant);
+                move = forced_move;
+                for (int index = 0; index < evaluated.options.size(); ++index) {
+                    const auto &option = evaluated.options[index];
+                    options.push_back(json{
+                        {"direction", option.direction},
+                        {"nx", option.nx},
+                        {"ny", option.ny},
+                        {"probability", option.probability},
+                        {"danger", option.danger},
+                    });
+                    if (option.direction == forced_move) {
+                        chosen_probability = option.probability;
+                        const int cell_x =
+                            index < evaluated.annotated_cells.size() ? evaluated.annotated_cells[index].first : -1;
+                        const int cell_y =
+                            index < evaluated.annotated_cells.size() ? evaluated.annotated_cells[index].second : -1;
+                        const int tower_id =
+                            index < evaluated.annotated_towers.size() ? evaluated.annotated_towers[index] : -1;
+                        simulator.record_move_annotation(option.direction, cell_x, cell_y, tower_id);
+                    }
+                }
+            }
+        } else if (ant.behavior == AntBehavior::Random) {
+            source = "uniform_random";
+            const auto candidates = simulator.legal_move_candidates(ant);
+            const double probability = 1.0 / static_cast<double>(std::max(1, candidates.size()));
+            for (int index = 0; index < candidates.size(); ++index) {
+                const auto &candidate = candidates[index];
+                options.push_back(json{
+                    {"direction", candidate.direction},
+                    {"nx", candidate.nx},
+                    {"ny", candidate.ny},
+                    {"probability", probability},
+                });
+            }
+            const int pick = rng.next_int(candidates.size());
+            move = candidates[pick].direction;
+            chosen_probability = probability;
+        } else {
+            const auto evaluated = simulator.evaluate_move_options(ant);
+            double threshold = rng.next_double();
+            double cumulative = 0.0;
+            int chosen_index = std::max(0, evaluated.options.size() - 1);
+            for (int index = 0; index < evaluated.options.size(); ++index) {
+                const auto &option = evaluated.options[index];
+                options.push_back(json{
+                    {"direction", option.direction},
+                    {"nx", option.nx},
+                    {"ny", option.ny},
+                    {"probability", option.probability},
+                    {"danger", option.danger},
+                });
+                cumulative += option.probability;
+                if (threshold <= cumulative && chosen_index == evaluated.options.size() - 1) {
+                    chosen_index = index;
+                }
+            }
+            if (evaluated.options.empty()) {
+                move = rs::kNoMove;
+                chosen_probability = 1.0;
+            } else {
+                const auto &chosen = evaluated.options[chosen_index];
+                move = chosen.direction;
+                chosen_probability = chosen.probability;
+                const int cell_x =
+                    chosen_index < evaluated.annotated_cells.size() ? evaluated.annotated_cells[chosen_index].first : -1;
+                const int cell_y =
+                    chosen_index < evaluated.annotated_cells.size() ? evaluated.annotated_cells[chosen_index].second : -1;
+                const int tower_id =
+                    chosen_index < evaluated.annotated_towers.size() ? evaluated.annotated_towers[chosen_index] : -1;
+                simulator.record_move_annotation(chosen.direction, cell_x, cell_y, tower_id);
+            }
+        }
+
+        if (move != rs::kNoMove) {
+            const int nx = ant.x + kOffset[ant.y & 1][move][0];
+            const int ny = ant.y + kOffset[ant.y & 1][move][1];
+            if (const rs::SearchTower *tower = simulator.tower_at(nx, ny); tower != nullptr) {
+                attacked_tower = true;
+                attacked_tower_id = tower->tower_id;
+            }
+        }
+
+        simulator.resolve_ant_step(ant, move);
+
+        row["choice_source"] = source;
+        row["chosen_direction"] = move;
+        row["chosen_probability"] = chosen_probability;
+        row["options"] = options;
+        row["attacked_tower"] = attacked_tower;
+        row["attacked_tower_id"] = attacked_tower_id;
+        row["ant_after"] = search_ant_to_json(ant);
+        summary.moves.push_back(row);
+        summary.log_probability += std::log(std::max(chosen_probability, 1e-12));
+    }
+
+    if (!config().ignore_periodic_random_move && need_enhanced_cache && rs::kTeleportInterval > 0 &&
+        (simulator.round_index + 1) % rs::kTeleportInterval == 0) {
+        simulator.clear_move_cache();
+    }
+    return summary;
+}
+
+json simulate_traced_round(
+    rs::DefenseSimulator &simulator,
+    rs::FastRng &rng,
+    const rs::FixedList<rs::ForcedMove, rs::kMaxImportantAnts> *forced_moves = nullptr) {
+    json out;
+    out["state_start"] = defense_sim_to_json(simulator);
+    simulator.tower_attack_phase(rng);
+    out["state_after_tower_phase"] = defense_sim_to_json(simulator);
+    const MoveTraceSummary move_summary = trace_move_phase(simulator, rng, forced_moves);
+    out["move_assignments"] = move_summary.moves;
+    out["move_log_probability"] = move_summary.log_probability;
+    out["move_path_probability"] = std::exp(std::max(-700.0, move_summary.log_probability));
+    out["state_after_move_phase"] = defense_sim_to_json(simulator);
+    simulator.teleport_phase(rng);
+    out["state_after_teleport_phase"] = defense_sim_to_json(simulator);
+    simulator.manage_ants();
+    if (!simulator.ignore_enemy_spawns) {
+        simulator.spawn_enemy_ant(rng);
+    }
+    simulator.increase_ant_age();
+    simulator.update_income();
+    simulator.update_effects(rng);
+    ++simulator.round_index;
+    if (simulator.base_hp <= 0) {
+        simulator.terminal = true;
+    }
+    out["state_end"] = defense_sim_to_json(simulator);
+    return out;
+}
+
+json plan_sample_trace(
+    const PublicState &state,
+    const NativeSimulator *native,
+    int player,
+    std::uint64_t serial,
+    const EvaluatedPlanWithIndex &selected,
+    int rollout_index,
+    int sample_count) {
+    rs::DefenseSimulator root = rs::make_defense_simulator(state, native, player);
+    root.ignore_enemy_spawns = true;
+
+    rs::DefenseSimulator forced_root = root.clone();
+    if (!selected.plan.ops.empty() && !ls::apply_operations(forced_root, selected.plan.ops)) {
+        throw std::runtime_error("failed to apply selected plan for rollout schedule");
+    }
+    const int effective_sample_count = std::max(1, sample_count);
+    const ls::RolloutForcedPlan forced_plan = ls::build_first_round_rollout_plan(
+        forced_root,
+        player,
+        effective_sample_count,
+        ls::plan_rollout_assignment_seed(state.seed, serial, selected.root_index, selected.plan.horizon, effective_sample_count));
+    const auto *first_round_forced_moves =
+        rollout_index >= 0 && rollout_index < static_cast<int>(forced_plan.samples.size())
+            ? &forced_plan.samples[static_cast<std::size_t>(rollout_index)].forced_moves
+            : nullptr;
+    const double rollout_weight_probability =
+        rollout_index >= 0 && rollout_index < static_cast<int>(forced_plan.samples.size())
+            ? forced_plan.samples[static_cast<std::size_t>(rollout_index)].probability
+            : 1.0;
+
+    rs::DefenseSimulator simulator = root.clone();
+    rs::DefenseSimulator control = root.clone();
+    if (!selected.plan.ops.empty()) {
+        if (!ls::apply_operations(simulator, selected.plan.ops)) {
+            throw std::runtime_error("failed to apply selected plan");
+        }
+        if (selected.plan.has_lightning) {
+            ls::apply_operations(control, ls::strip_lightning_operations(selected.plan.ops));
+        }
+    }
+
+    const std::uint64_t seed =
+        plan_rollout_seed(state, serial, selected.root_index, rollout_index, selected.plan.horizon);
+    rs::FastRng rng(seed);
+    json rounds = json::array();
+
+    double cumulative_log_probability = 0.0;
+    bool lightning_bonus_computed = false;
+    double lightning_bonus_raw = 0.0;
+    double lightning_bonus_score = 0.0;
+
+    int step = 0;
+    while (step < selected.plan.horizon && !simulator.terminal) {
+        json row;
+        if (step == 0) {
+            row["phase"] = "root";
+            row["applied_operations_pretty"] = ls::pretty_ops_text(state, player, selected.plan.ops);
+        } else if (step == 1 && selected.plan.followup != ls::SinglePlan::Followup::None) {
+            const auto followup_ops = ls::resolve_followup_operations(simulator, player, selected.plan.followup);
+            ls::apply_operations(simulator, followup_ops);
+            row["phase"] = "followup";
+            row["applied_operations_pretty"] = ls::pretty_ops_text(state, player, followup_ops);
+            row["applied_operations"] = json::array();
+            for (const auto &operation : followup_ops) {
+                row["applied_operations"].push_back(operation_to_json(operation));
+            }
+        } else {
+            const auto reactive_ops = ls::choose_reactive_turn_operations(simulator, player);
+            ls::apply_operations(simulator, reactive_ops);
+            row["phase"] = "reactive";
+            row["applied_operations_pretty"] = ls::pretty_ops_text(state, player, reactive_ops);
+            row["applied_operations"] = json::array();
+            for (const auto &operation : reactive_ops) {
+                row["applied_operations"].push_back(operation_to_json(operation));
+            }
+        }
+
+        if (step == 0) {
+            row["applied_operations"] = json::array();
+            for (const auto &operation : selected.plan.ops) {
+                row["applied_operations"].push_back(operation_to_json(operation));
+            }
+        }
+
+        const json traced = simulate_traced_round(simulator, rng, step == 0 ? first_round_forced_moves : nullptr);
+        row["step"] = step;
+        row["trace"] = traced;
+        cumulative_log_probability += traced.value("move_log_probability", 0.0);
+        rounds.push_back(row);
+
+        if (selected.plan.has_lightning && !lightning_bonus_computed) {
+            rs::FastRng control_rng(seed);
+            if (first_round_forced_moves != nullptr) {
+                control.simulate_round(control_rng, *first_round_forced_moves);
+            } else {
+                control.simulate_round(control_rng);
+            }
+            lightning_bonus_raw = ls::lightning_counterfactual_bonus(simulator, control, player);
+            lightning_bonus_score = lightning_bonus_raw;
+            lightning_bonus_computed = true;
+        }
+        ++step;
+    }
+
+    const ls::EvalBreakdown terminal = ls::evaluate_terminal(simulator, player);
+    json out;
+    out["seed"] = seed;
+    out["sample_index"] = rollout_index;
+    out["sample_count"] = effective_sample_count;
+    out["path_log_probability"] = cumulative_log_probability;
+    out["path_probability"] = std::exp(std::max(-700.0, cumulative_log_probability));
+    out["rollout_weight_probability"] = rollout_weight_probability;
+    out["forced_selected_ant_count"] = forced_plan.selected_ant_count;
+    out["uniform_weight"] = 1.0;
+    out["importance_weight"] = rollout_weight_probability;
+    out["rounds"] = rounds;
+    out["terminal"] = eval_breakdown_to_json(terminal);
+    out["lightning_bonus_raw"] = lightning_bonus_raw;
+    out["lightning_bonus_score"] = lightning_bonus_score;
+    out["total_score"] = terminal.total_score + lightning_bonus_score;
+    out["state_final"] = defense_sim_to_json(simulator);
+    return out;
+}
+
+json inspect_round_request(const json &request) {
+    const std::string replay_path = request.at("replay_path").get<std::string>();
+    const int round = request.at("round").get<int>();
+    const int player = request.value("player", 0);
+    const int rollout_count = request.value("rollout_count", 0);
+
+    ReplayRoundStart start = load_replay_round_start(replay_path, round);
+    const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count);
+
+    rs::DefenseSimulator defense_root = rs::make_defense_simulator(start.public_state, &start.native, player);
+    defense_root.ignore_enemy_spawns = true;
+    const ls::RootPlanSet root_plans = ls::generate_root_plans(start.public_state, &defense_root, player);
+
+    json out;
+    out["mode"] = "round_summary";
+    out["replay_path"] = replay_path;
+    out["round"] = round;
+    out["player"] = player;
+    out["seed"] = start.seed;
+    out["serial"] = serial;
+    out["start_state"] = public_round_state_to_json(start.native.to_public_round_state());
+    out["defense_start_state"] = defense_sim_to_json(defense_root);
+    out["root_plan_counts"] = {
+        {"base_count", root_plans.base_count},
+        {"lure_count", root_plans.lure_count},
+        {"lightning_count", root_plans.lightning_count},
+        {"raw_combo_count", root_plans.raw_combo_count},
+        {"raw_plan_count", root_plans.raw_plan_count},
+        {"unique_plan_count", static_cast<int>(root_plans.plans.size())},
+    };
+    out["root_plan_sources"] = {
+        {"base", json::array()},
+        {"lure", json::array()},
+        {"lightning_prep", json::array()},
+        {"lightning_center", json::array()},
+    };
+    for (const auto &plan : root_plans.base_candidates) {
+        out["root_plan_sources"]["base"].push_back(single_plan_to_json(start.public_state, player, plan));
+    }
+    for (const auto &plan : root_plans.lure_candidates) {
+        out["root_plan_sources"]["lure"].push_back(single_plan_to_json(start.public_state, player, plan));
+    }
+    for (const auto &plan : root_plans.lightning_prep_candidates) {
+        out["root_plan_sources"]["lightning_prep"].push_back(single_plan_to_json(start.public_state, player, plan));
+    }
+    for (const auto &plan : root_plans.lightning_center_candidates) {
+        out["root_plan_sources"]["lightning_center"].push_back(single_plan_to_json(start.public_state, player, plan));
+    }
+    out["plans"] = json::array();
+    for (const auto &item : evaluated) {
+        out["plans"].push_back(evaluated_plan_to_json(start.public_state, player, item));
+    }
+    return out;
+}
+
+json inspect_plan_rollouts_request(const json &request) {
+    const std::string replay_path = request.at("replay_path").get<std::string>();
+    const int round = request.at("round").get<int>();
+    const int player = request.value("player", 0);
+    const std::string plan_key = request.at("plan_key").get<std::string>();
+    const int sample_count = request.value("sample_count", 20);
+    const int rollout_count = request.value("rollout_count", 0);
+
+    ReplayRoundStart start = load_replay_round_start(replay_path, round);
+    const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count);
+    const auto &selected = require_plan_by_key(evaluated, plan_key);
+
+    json out;
+    out["mode"] = "plan_rollouts";
+    out["replay_path"] = replay_path;
+    out["round"] = round;
+    out["player"] = player;
+    out["serial"] = serial;
+    out["plan"] = evaluated_plan_to_json(start.public_state, player, selected);
+    out["samples"] = json::array();
+
+    const double uniform_weight = 1.0 / static_cast<double>(std::max(1, sample_count));
+    std::vector<json> summaries;
+    summaries.reserve(static_cast<std::size_t>(sample_count));
+    double path_probability_sum = 0.0;
+    for (int sample = 0; sample < sample_count; ++sample) {
+        const json trace =
+            plan_sample_trace(start.public_state, &start.native, player, serial, selected, sample, sample_count);
+        json summary;
+        summary["sample_index"] = sample;
+        summary["seed"] = trace.at("seed");
+        summary["uniform_weight"] = uniform_weight;
+        const double rollout_weight = trace.at("rollout_weight_probability").get<double>();
+        summary["importance_weight"] = rollout_weight;
+        summary["path_probability"] = trace.at("path_probability");
+        summary["path_log_probability"] = trace.at("path_log_probability");
+        summary["total_score"] = trace.at("total_score");
+        summary["lightning_bonus_raw"] = trace.at("lightning_bonus_raw");
+        summary["lightning_bonus_score"] = trace.at("lightning_bonus_score");
+        summary["terminal"] = trace.at("terminal");
+        summary["rollout_weight_probability"] = rollout_weight;
+        summary["forced_selected_ant_count"] = trace.at("forced_selected_ant_count");
+        const auto &rounds = trace.at("rounds");
+        if (!rounds.empty()) {
+            const auto &step0 = rounds.at(0);
+            summary["first_round_phase"] = step0.value("phase", "");
+            summary["first_round_ops_pretty"] = step0.value("applied_operations_pretty", "");
+            summary["first_round_move_assignments"] = step0.at("trace").at("move_assignments");
+            summary["first_round_move_path_probability"] = step0.at("trace").at("move_path_probability");
+        }
+        path_probability_sum += rollout_weight;
+        summaries.push_back(std::move(summary));
+    }
+    for (auto &summary : summaries) {
+        const double rollout_weight = summary.value("rollout_weight_probability", 0.0);
+        summary["normalized_path_weight"] = path_probability_sum > 0.0 ? rollout_weight / path_probability_sum : uniform_weight;
+        out["samples"].push_back(std::move(summary));
+    }
+    return out;
+}
+
+json inspect_plan_trace_request(const json &request) {
+    const std::string replay_path = request.at("replay_path").get<std::string>();
+    const int round = request.at("round").get<int>();
+    const int player = request.value("player", 0);
+    const std::string plan_key = request.at("plan_key").get<std::string>();
+    const int sample_index = request.value("sample_index", 0);
+    const int sample_count = request.value("sample_count", std::max(1, lure_config().rollout_count));
+    const int rollout_count = request.value("rollout_count", 0);
+
+    ReplayRoundStart start = load_replay_round_start(replay_path, round);
+    const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count);
+    const auto &selected = require_plan_by_key(evaluated, plan_key);
+
+    json out;
+    out["mode"] = "plan_trace";
+    out["replay_path"] = replay_path;
+    out["round"] = round;
+    out["player"] = player;
+    out["serial"] = serial;
+    out["plan"] = evaluated_plan_to_json(start.public_state, player, selected);
+    out["trace"] = plan_sample_trace(start.public_state, &start.native, player, serial, selected, sample_index, sample_count);
+    return out;
+}
+
+} // namespace antgame::sdk::examples
+
+int main() {
+    using namespace antgame::sdk::examples;
+
+    try {
+        json request;
+        std::cin >> request;
+        const std::string mode = request.value("mode", std::string());
+        json response;
+        if (mode == "round_summary") {
+            response = inspect_round_request(request);
+        } else if (mode == "plan_rollouts") {
+            response = inspect_plan_rollouts_request(request);
+        } else if (mode == "plan_trace") {
+            response = inspect_plan_trace_request(request);
+        } else {
+            throw std::runtime_error("unsupported mode");
+        }
+        std::cout << response.dump() << '\n';
+        return 0;
+    } catch (const std::exception &exc) {
+        json error;
+        error["ok"] = false;
+        error["error"] = exc.what();
+        std::cout << error.dump() << '\n';
+        return 1;
+    }
+}

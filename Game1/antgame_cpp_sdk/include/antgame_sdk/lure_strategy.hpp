@@ -71,8 +71,37 @@ inline DebugMode debug_mode() {
 }
 
 inline std::uint64_t mix_seed(std::uint64_t seed, std::uint64_t value) {
-    seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
-    return seed;
+    std::uint64_t mixed = seed + 0x9e3779b97f4a7c15ULL + (value << 1U);
+    mixed = (mixed ^ (mixed >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+    mixed = (mixed ^ (mixed >> 27U)) * 0x94d049bb133111ebULL;
+    return mixed ^ (mixed >> 31U);
+}
+
+inline std::uint64_t plan_rollout_seed(
+    std::uint64_t state_seed,
+    std::uint64_t serial,
+    std::size_t root_index,
+    int rollout,
+    int horizon) {
+    return mix_seed(
+        state_seed,
+        mix_seed(
+            serial,
+            static_cast<std::uint64_t>((static_cast<int>(root_index) + 1) * 131 + rollout * 977 + horizon * 17)));
+}
+
+inline std::uint64_t plan_rollout_assignment_seed(
+    std::uint64_t state_seed,
+    std::uint64_t serial,
+    std::size_t root_index,
+    int horizon,
+    int rollout_count) {
+    return mix_seed(
+        state_seed,
+        mix_seed(
+            serial,
+            static_cast<std::uint64_t>(0x5f3759dfU + (static_cast<int>(root_index) + 1) * 719 + horizon * 43 +
+                                       rollout_count * 97)));
 }
 
 inline std::string debug_json_escape(const std::string &text) {
@@ -406,15 +435,24 @@ inline bool is_base_slot_code(int code) {
 
 inline bool is_lure_slot_code(int code) {
     switch (code) {
-    case C3:
-    case ML1:
-    case MR1:
-    case F2:
-    case F3:
-    case M1:
     case M2:
     case M3:
+    case ML1:
+    case ML2:
+    case M1:
     case M4:
+    case MR2:
+    case MR1:
+    case FL1:
+    case FL2:
+    case FR2:
+    case FR1:
+    case FL3:
+    case F2:
+    case F3:
+    case FR3:
+    case F1:
+    case F4:
         return true;
     default:
         return false;
@@ -425,8 +463,9 @@ inline std::array<int, 3> near_base_codes() {
     return {L1, R1, C2};
 }
 
-inline std::array<int, 9> lure_codes() {
-    return {F2, F3, ML1, MR1, M1, M2, M3, M4, C3};
+inline std::array<int, 18> lure_codes() {
+    return {M2,  M3,  ML1, ML2, M1,  M4,  MR2, MR1, FL1,
+            FL2, FR2, FR1, FL3, F2,  F3,  FR3, F1,  F4};
 }
 
 inline Operation build_at_code(int player, int code) {
@@ -476,6 +515,10 @@ inline double tower_salvage_value(const rs::SearchTower &tower, int tower_count_
 }
 
 inline double tower_full_salvage_value(const PublicState &state, int player) {
+    struct BasicRefund {
+        int hp = 0;
+    };
+
     std::vector<Tower> owned;
     owned.reserve(state.towers.size());
     for (const auto &tower : state.towers) {
@@ -484,15 +527,11 @@ inline double tower_full_salvage_value(const PublicState &state, int player) {
         }
     }
     double total = 0.0;
-    int tower_count = static_cast<int>(owned.size());
+    std::vector<BasicRefund> basics;
+    basics.reserve(owned.size());
     for (const auto &tower : owned) {
         Tower current = tower;
-        while (true) {
-            if (current.tower_type == TowerType::Basic) {
-                total += static_cast<double>(state.destroy_tower_income(tower_count, &current));
-                --tower_count;
-                break;
-            }
+        while (current.tower_type != TowerType::Basic) {
             total += static_cast<double>(state.downgrade_tower_income(current.tower_type, &current));
             const int prev_max_hp = current.max_hp();
             current.tower_type = static_cast<TowerType>(static_cast<int>(current.tower_type) / 10);
@@ -500,6 +539,17 @@ inline double tower_full_salvage_value(const PublicState &state, int player) {
             current.hp = prev_max_hp > 0 ? std::max(1, (next_max_hp * std::max(current.hp, 0) + prev_max_hp - 1) / prev_max_hp)
                                          : next_max_hp;
         }
+        basics.push_back(BasicRefund{std::max(current.hp, 0)});
+    }
+
+    std::sort(basics.begin(), basics.end(), [](const BasicRefund &lhs, const BasicRefund &rhs) { return lhs.hp > rhs.hp; });
+    int tower_count = static_cast<int>(basics.size());
+    for (const auto &basic : basics) {
+        Tower basic_tower;
+        basic_tower.tower_type = TowerType::Basic;
+        basic_tower.hp = basic.hp;
+        total += static_cast<double>(state.destroy_tower_income(tower_count, &basic_tower));
+        --tower_count;
     }
     return total;
 }
@@ -641,6 +691,10 @@ struct CombinedPlan {
 
 struct RootPlanSet {
     std::vector<CombinedPlan> plans;
+    std::vector<SinglePlan> base_candidates;
+    std::vector<SinglePlan> lure_candidates;
+    std::vector<SinglePlan> lightning_prep_candidates;
+    std::vector<SinglePlan> lightning_center_candidates;
     int base_count = 0;
     int lure_count = 0;
     int lightning_count = 0;
@@ -721,6 +775,16 @@ struct RolloutEvaluation {
         out.total_score *= factor;
         return out;
     }
+};
+
+struct RolloutForcedSample {
+    rs::FixedList<rs::ForcedMove, rs::kMaxImportantAnts> forced_moves;
+    double probability = 1.0;
+};
+
+struct RolloutForcedPlan {
+    std::vector<RolloutForcedSample> samples;
+    int selected_ant_count = 0;
 };
 
 inline std::string code_name(int code) {
@@ -1361,6 +1425,10 @@ inline RootPlanSet generate_root_plans(
     const auto lightning_center = generate_lightning_center_candidates(state, simulator, player);
 
     RootPlanSet out;
+    out.base_candidates = base;
+    out.lure_candidates = lure;
+    out.lightning_prep_candidates = lightning_prep;
+    out.lightning_center_candidates = lightning_center;
     out.base_count = static_cast<int>(base.size());
     out.lure_count = static_cast<int>(lure.size());
     out.lightning_count = static_cast<int>(lightning_prep.size() * lightning_center.size());
@@ -1502,6 +1570,15 @@ inline std::vector<Operation> choose_reactive_turn_operations(const rs::DefenseS
     return best_ops;
 }
 
+inline bool apply_reactive_turn_operations(rs::DefenseSimulator &simulator, int player) {
+    // Rollout-time adaptive behavior is intentionally limited to emergency
+    // recycling. Proactive base/lure choices are root-plan decisions.
+    if (const rs::SearchTower *forced = forced_reactive_sell_target(simulator, player); forced != nullptr) {
+        return simulator.apply_operation(Operation(OperationType::DowngradeTower, forced->tower_id));
+    }
+    return true;
+}
+
 inline std::vector<Operation> resolve_followup_operations(
     const rs::DefenseSimulator &simulator,
     int player,
@@ -1619,6 +1696,171 @@ inline double combat_threat_at(const rs::DefenseSimulator &simulator, int player
     return threat;
 }
 
+inline double forced_rollout_ant_priority(const rs::DefenseSimulator &simulator, int player, const rs::SearchAnt &ant) {
+    if (!ant.alive() || ant.too_old() || ant.is_frozen) {
+        return -std::numeric_limits<double>::infinity();
+    }
+    if (ant.kind == AntKind::Combat) {
+        return combat_threat_at(simulator, player, ant, ant.x, ant.y);
+    }
+    const auto [base_x, base_y] = kPlayerBases[player];
+    const int distance = std::max(1, hex_distance(ant.x, ant.y, base_x, base_y));
+    double threat = lure_config().worker_threat_unit * std::max(ant.hp, 0) / std::max(1, ant.max_hp()) / distance;
+    if (ant.behavior == AntBehavior::Random) {
+        threat *= lure_config().randomized_threat_scale;
+    } else if (ant.behavior == AntBehavior::Bewitched) {
+        threat *= lure_config().bewitched_threat_scale;
+    }
+    return threat;
+}
+
+inline std::vector<rs::MoveOption> positive_rollout_move_options_for(
+    const rs::DefenseSimulator &simulator,
+    const rs::SearchAnt &ant) {
+    std::vector<rs::MoveOption> options;
+    const auto fixed = simulator.move_options_for(ant);
+    options.reserve(static_cast<std::size_t>(fixed.size()));
+    for (int index = 0; index < fixed.size(); ++index) {
+        if (fixed[index].probability > 1e-12) {
+            options.push_back(fixed[index]);
+        }
+    }
+    if (options.empty()) {
+        options.push_back(rs::MoveOption{rs::kNoMove, ant.x, ant.y, 1.0, 0.0});
+    }
+    return options;
+}
+
+inline std::vector<int> rollout_option_sequence_indices(
+    const std::vector<rs::MoveOption> &options,
+    int rollout_count,
+    rs::FastRng &rng) {
+    std::vector<int> sequence;
+    if (rollout_count <= 0 || options.empty()) {
+        return sequence;
+    }
+
+    const int option_count = static_cast<int>(options.size());
+    std::vector<int> counts(static_cast<std::size_t>(option_count), 0);
+    std::vector<int> order(static_cast<std::size_t>(option_count), 0);
+    std::iota(order.begin(), order.end(), 0);
+    for (int index = option_count - 1; index > 0; --index) {
+        std::swap(order[static_cast<std::size_t>(index)], order[static_cast<std::size_t>(rng.next_int(index + 1))]);
+    }
+
+    if (option_count >= rollout_count) {
+        std::stable_sort(order.begin(), order.end(), [&](int lhs, int rhs) {
+            if (options[static_cast<std::size_t>(lhs)].probability != options[static_cast<std::size_t>(rhs)].probability) {
+                return options[static_cast<std::size_t>(lhs)].probability > options[static_cast<std::size_t>(rhs)].probability;
+            }
+            return lhs < rhs;
+        });
+        for (int index = 0; index < rollout_count; ++index) {
+            counts[static_cast<std::size_t>(order[static_cast<std::size_t>(index)])] = 1;
+        }
+    } else {
+        for (int index = 0; index < option_count; ++index) {
+            counts[static_cast<std::size_t>(index)] = 1;
+        }
+        int remaining = rollout_count - option_count;
+        std::vector<double> fractional(static_cast<std::size_t>(option_count), 0.0);
+        for (int index = 0; index < option_count; ++index) {
+            const double desired_extra =
+                std::max(0.0, options[static_cast<std::size_t>(index)].probability * static_cast<double>(rollout_count) - 1.0);
+            const int extra = static_cast<int>(std::floor(desired_extra + 1e-9));
+            counts[static_cast<std::size_t>(index)] += extra;
+            remaining -= extra;
+            fractional[static_cast<std::size_t>(index)] = desired_extra - static_cast<double>(extra);
+        }
+        std::stable_sort(order.begin(), order.end(), [&](int lhs, int rhs) {
+            const double lhs_fractional = fractional[static_cast<std::size_t>(lhs)];
+            const double rhs_fractional = fractional[static_cast<std::size_t>(rhs)];
+            if (lhs_fractional != rhs_fractional) {
+                return lhs_fractional > rhs_fractional;
+            }
+            if (options[static_cast<std::size_t>(lhs)].probability != options[static_cast<std::size_t>(rhs)].probability) {
+                return options[static_cast<std::size_t>(lhs)].probability > options[static_cast<std::size_t>(rhs)].probability;
+            }
+            return lhs < rhs;
+        });
+        for (int index = 0; index < remaining; ++index) {
+            counts[static_cast<std::size_t>(order[static_cast<std::size_t>(index)])] += 1;
+        }
+    }
+
+    sequence.reserve(static_cast<std::size_t>(rollout_count));
+    for (int index = 0; index < option_count; ++index) {
+        for (int count = 0; count < counts[static_cast<std::size_t>(index)]; ++count) {
+            sequence.push_back(index);
+        }
+    }
+    if (sequence.empty()) {
+        sequence.push_back(0);
+    }
+    while (static_cast<int>(sequence.size()) < rollout_count) {
+        sequence.push_back(order.empty() ? 0 : order.front());
+    }
+    if (static_cast<int>(sequence.size()) > rollout_count) {
+        sequence.resize(static_cast<std::size_t>(rollout_count));
+    }
+    for (int index = rollout_count - 1; index > 0; --index) {
+        std::swap(sequence[static_cast<std::size_t>(index)], sequence[static_cast<std::size_t>(rng.next_int(index + 1))]);
+    }
+    return sequence;
+}
+
+inline RolloutForcedPlan build_first_round_rollout_plan(
+    const rs::DefenseSimulator &simulator,
+    int player,
+    int rollout_count,
+    std::uint64_t schedule_seed) {
+    RolloutForcedPlan out;
+    const int effective_rollouts = std::max(1, rollout_count);
+    out.samples.resize(static_cast<std::size_t>(effective_rollouts));
+    for (auto &sample : out.samples) {
+        sample.probability = 1.0;
+    }
+
+    std::vector<const rs::SearchAnt *> ranked;
+    ranked.reserve(static_cast<std::size_t>(simulator.ants.size()));
+    for (const auto &ant : simulator.ants) {
+        if (!ant.alive() || ant.too_old() || ant.is_frozen) {
+            continue;
+        }
+        ranked.push_back(&ant);
+    }
+    std::stable_sort(ranked.begin(), ranked.end(), [&](const rs::SearchAnt *lhs, const rs::SearchAnt *rhs) {
+        const double lhs_priority = forced_rollout_ant_priority(simulator, player, *lhs);
+        const double rhs_priority = forced_rollout_ant_priority(simulator, player, *rhs);
+        if (lhs_priority != rhs_priority) {
+            return lhs_priority > rhs_priority;
+        }
+        return lhs->ant_id < rhs->ant_id;
+    });
+
+    const int limit = std::min(lure_config().rollout_forced_ant_limit, rs::kMaxImportantAnts);
+    if (static_cast<int>(ranked.size()) > limit) {
+        ranked.resize(static_cast<std::size_t>(limit));
+    }
+    out.selected_ant_count = static_cast<int>(ranked.size());
+
+    rs::FastRng rng(schedule_seed);
+    for (const rs::SearchAnt *ant : ranked) {
+        const auto options = positive_rollout_move_options_for(simulator, *ant);
+        const auto sequence = rollout_option_sequence_indices(options, effective_rollouts, rng);
+        for (int rollout = 0; rollout < effective_rollouts; ++rollout) {
+            const int option_index = sequence[static_cast<std::size_t>(rollout)];
+            const auto &option = options[static_cast<std::size_t>(option_index)];
+            if (option.direction != rs::kNoMove) {
+                out.samples[static_cast<std::size_t>(rollout)].forced_moves.push_back(
+                    rs::ForcedMove{ant->ant_id, option.direction});
+            }
+            out.samples[static_cast<std::size_t>(rollout)].probability *= std::max(option.probability, 1e-12);
+        }
+    }
+    return out;
+}
+
 inline bool apply_operations(rs::DefenseSimulator &simulator, const std::vector<Operation> &operations) {
     for (const auto &operation : sort_operations(simulator, operations)) {
         if (!simulator.apply_operation(operation)) {
@@ -1654,14 +1896,6 @@ inline double lightning_counterfactual_bonus(
     const rs::DefenseSimulator &with_lightning,
     const rs::DefenseSimulator &without_lightning,
     int /*player*/) {
-    std::unordered_map<int, const rs::SearchAnt *> with_combat;
-    with_combat.reserve(static_cast<std::size_t>(with_lightning.ants.size()));
-    for (const auto &ant : with_lightning.ants) {
-        if (ant.kind == AntKind::Combat && ant.alive()) {
-            with_combat.emplace(ant.ant_id, &ant);
-        }
-    }
-
     double bonus = 0.0;
     for (const auto &ant : without_lightning.ants) {
         if (ant.kind != AntKind::Combat || !ant.alive()) {
@@ -1670,10 +1904,16 @@ inline double lightning_counterfactual_bonus(
         const int without_shield = ant.shield;
         int with_shield = 0;
         int with_hp = 0;
-        auto it_with = with_combat.find(ant.ant_id);
-        if (it_with != with_combat.end()) {
-            with_shield = it_with->second->shield;
-            with_hp = it_with->second->hp;
+        const rs::SearchAnt *with_ant = nullptr;
+        for (const auto &candidate : with_lightning.ants) {
+            if (candidate.ant_id == ant.ant_id && candidate.kind == AntKind::Combat && candidate.alive()) {
+                with_ant = &candidate;
+                break;
+            }
+        }
+        if (with_ant != nullptr) {
+            with_shield = with_ant->shield;
+            with_hp = with_ant->hp;
         }
 
         if (without_shield > 0 && with_shield < without_shield) {
@@ -1681,21 +1921,15 @@ inline double lightning_counterfactual_bonus(
         }
         const int damage = std::max(0, ant.hp - with_hp);
         bonus += static_cast<double>(damage) * lure_config().lightning_damage_bonus_per_hp;
-        if (it_with == with_combat.end()) {
+        if (with_ant == nullptr) {
             bonus += lure_config().lightning_kill_bonus;
         }
     }
     return bonus;
 }
 
-inline double c1_terminal_bonus(const rs::DefenseSimulator &simulator, int player) {
-    const rs::SearchTower *c1 = tower_at_code(simulator, player, C1);
-    if (c1 == nullptr || !c1->alive()) {
-        return 0.0;
-    }
-    const bool transition_phase =
-        simulator.coins > static_cast<double>(lure_config().c1_quick_transition_coin_threshold);
-    switch (c1->tower_type) {
+inline double c1_state_bonus(TowerType tower_type, bool transition_phase) {
+    switch (tower_type) {
     case TowerType::Mortar:
     case TowerType::MortarPlus:
     case TowerType::Ice:
@@ -1710,6 +1944,20 @@ inline double c1_terminal_bonus(const rs::DefenseSimulator &simulator, int playe
     default:
         return 0.0;
     }
+}
+
+inline double c1_root_bonus(const rs::DefenseSimulator &post_root, int player, double root_coins) {
+    const rs::SearchTower *c1 = tower_at_code(post_root, player, C1);
+    if (c1 == nullptr || !c1->alive()) {
+        return 0.0;
+    }
+    const bool transition_phase =
+        root_coins > static_cast<double>(lure_config().c1_quick_transition_coin_threshold);
+    return c1_state_bonus(c1->tower_type, transition_phase);
+}
+
+inline double c1_terminal_bonus(const rs::DefenseSimulator &, int) {
+    return 0.0;
 }
 
 inline EvalBreakdown evaluate_terminal(const rs::DefenseSimulator &simulator, int player) {
@@ -1735,25 +1983,34 @@ inline RolloutEvaluation rollout_plan_score(
     const rs::DefenseSimulator &root,
     int player,
     const CombinedPlan &plan,
-    std::uint64_t rollout_seed) {
+        std::uint64_t rollout_seed,
+    const rs::FixedList<rs::ForcedMove, rs::kMaxImportantAnts> *first_round_forced_moves = nullptr) {
     rs::DefenseSimulator simulator = root.clone();
-    rs::DefenseSimulator control = root.clone();
     if (!plan.ops.empty()) {
         if (!apply_operations(simulator, plan.ops)) {
             RolloutEvaluation failed;
             failed.total_score = -std::numeric_limits<double>::infinity();
             return failed;
         }
-        if (plan.has_lightning) {
-            apply_operations(control, strip_lightning_operations(plan.ops));
-        }
     }
     rs::FastRng rng(rollout_seed);
-    simulator.simulate_round(rng);
+    if (first_round_forced_moves != nullptr) {
+        simulator.simulate_round(rng, *first_round_forced_moves);
+    } else {
+        simulator.simulate_round(rng);
+    }
     RolloutEvaluation out;
     if (plan.has_lightning) {
+        rs::DefenseSimulator control = root.clone();
+        if (!plan.ops.empty()) {
+            apply_operations(control, strip_lightning_operations(plan.ops));
+        }
         rs::FastRng control_rng(rollout_seed);
-        control.simulate_round(control_rng);
+        if (first_round_forced_moves != nullptr) {
+            control.simulate_round(control_rng, *first_round_forced_moves);
+        } else {
+            control.simulate_round(control_rng);
+        }
         out.lightning_bonus_raw = lightning_counterfactual_bonus(simulator, control, player);
         out.lightning_bonus_score = out.lightning_bonus_raw;
     }
@@ -1765,8 +2022,7 @@ inline RolloutEvaluation rollout_plan_score(
         ++step;
     }
     for (; step < plan.horizon && !simulator.terminal; ++step) {
-        const auto operations = choose_reactive_turn_operations(simulator, player);
-        apply_operations(simulator, operations);
+        apply_reactive_turn_operations(simulator, player);
         simulator.simulate_round(rng);
     }
     out.terminal = evaluate_terminal(simulator, player);
@@ -1775,11 +2031,99 @@ inline RolloutEvaluation rollout_plan_score(
 }
 
 struct EvaluatedPlan {
+    std::size_t root_index = 0;
     CombinedPlan plan;
     RolloutEvaluation mean_rollout;
     double mean_rollout_score = -std::numeric_limits<double>::infinity();
     double mean_score = -std::numeric_limits<double>::infinity();
+    double rollout_weight_sum = 0.0;
 };
+
+inline std::vector<EvaluatedPlan> evaluate_root_plans(
+    const PublicState &state,
+    const rs::DefenseSimulator &defense_root,
+    int player,
+    std::uint64_t serial,
+    int rollout_count,
+    const RootPlanSet &root_plans) {
+    const int effective_rollouts = rollout_count > 0 ? rollout_count : std::max(1, lure_config().rollout_count);
+    std::vector<EvaluatedPlan> evaluated;
+    evaluated.reserve(root_plans.plans.size());
+
+    for (std::size_t index = 0; index < root_plans.plans.size(); ++index) {
+        const auto &plan = root_plans.plans[index];
+        EvaluatedPlan item;
+        item.root_index = index;
+        item.plan = plan;
+
+        rs::DefenseSimulator plan_root = defense_root.clone();
+        if (!plan.ops.empty() && !apply_operations(plan_root, plan.ops)) {
+            item.mean_rollout_score = -std::numeric_limits<double>::infinity();
+            item.mean_score = -std::numeric_limits<double>::infinity();
+            evaluated.push_back(item);
+            continue;
+        }
+
+        const RolloutForcedPlan forced_plan = build_first_round_rollout_plan(
+            plan_root,
+            player,
+            effective_rollouts,
+            plan_rollout_assignment_seed(state.seed, serial, index, plan.horizon, effective_rollouts));
+
+        RolloutEvaluation weighted_total;
+        double weight_sum = 0.0;
+        bool valid = true;
+        for (int rollout = 0; rollout < effective_rollouts; ++rollout) {
+            const double weight =
+                rollout < static_cast<int>(forced_plan.samples.size())
+                    ? std::max(forced_plan.samples[static_cast<std::size_t>(rollout)].probability, 1e-12)
+                    : 1.0;
+            const auto *forced_moves =
+                rollout < static_cast<int>(forced_plan.samples.size())
+                    ? &forced_plan.samples[static_cast<std::size_t>(rollout)].forced_moves
+                    : nullptr;
+            const RolloutEvaluation sample = rollout_plan_score(
+                defense_root,
+                player,
+                plan,
+                plan_rollout_seed(state.seed, serial, index, rollout, plan.horizon),
+                forced_moves);
+            if (!std::isfinite(sample.total_score)) {
+                valid = false;
+                break;
+            }
+            weighted_total += sample.scaled(weight);
+            weight_sum += weight;
+        }
+
+        if (!valid || weight_sum <= 0.0) {
+            item.mean_rollout_score = -std::numeric_limits<double>::infinity();
+            item.mean_score = -std::numeric_limits<double>::infinity();
+            item.rollout_weight_sum = 0.0;
+            evaluated.push_back(item);
+            continue;
+        }
+
+        item.rollout_weight_sum = weight_sum;
+        item.mean_rollout = weighted_total.scaled(1.0 / weight_sum);
+        const double root_c1_bonus = c1_root_bonus(plan_root, player, defense_root.coins);
+        item.mean_rollout.terminal.c1_bonus_raw = root_c1_bonus;
+        item.mean_rollout.terminal.c1_bonus_score = root_c1_bonus;
+        item.mean_rollout.terminal.total_score += root_c1_bonus;
+        item.mean_rollout.total_score += root_c1_bonus;
+        item.mean_rollout_score = item.mean_rollout.total_score;
+        item.mean_score = item.mean_rollout_score + plan.heuristic;
+        evaluated.push_back(item);
+    }
+
+    std::sort(evaluated.begin(), evaluated.end(), [](const EvaluatedPlan &lhs, const EvaluatedPlan &rhs) {
+        if (lhs.mean_score != rhs.mean_score) {
+            return lhs.mean_score > rhs.mean_score;
+        }
+        return lhs.plan.key < rhs.plan.key;
+    });
+    return evaluated;
+}
 
 } // namespace lure_strategy_detail
 
@@ -1804,37 +2148,10 @@ inline std::vector<Operation> decide_lure_strategy(
     rs::DefenseSimulator defense_root = rs::make_defense_simulator(state, context.simulator, context.player);
     defense_root.ignore_enemy_spawns = true;
     const RootPlanSet root_plans = generate_root_plans(state, &defense_root, context.player);
-    const auto &plans = root_plans.plans;
 
     const std::uint64_t serial = session != nullptr ? session->decision_serial[context.player] : 0ULL;
-    std::vector<EvaluatedPlan> evaluated;
-    evaluated.reserve(plans.size());
-
-    for (std::size_t index = 0; index < plans.size(); ++index) {
-        const auto &plan = plans[index];
-        RolloutEvaluation total;
-        for (int rollout = 0; rollout < lure_config().rollout_count; ++rollout) {
-            const std::uint64_t seed = mix_seed(
-                state.seed,
-                mix_seed(serial, static_cast<std::uint64_t>((index + 1) * 131 + rollout * 977 + plan.horizon * 17)));
-            total += rollout_plan_score(defense_root, context.player, plan, seed);
-        }
-        const double scale = 1.0 / static_cast<double>(std::max(1, lure_config().rollout_count));
-        RolloutEvaluation mean = total.scaled(scale);
-        EvaluatedPlan item;
-        item.plan = plan;
-        item.mean_rollout = mean;
-        item.mean_rollout_score = mean.total_score;
-        item.mean_score = item.mean_rollout_score + plan.heuristic;
-        evaluated.push_back(item);
-    }
-
-    std::sort(evaluated.begin(), evaluated.end(), [](const EvaluatedPlan &lhs, const EvaluatedPlan &rhs) {
-        if (lhs.mean_score != rhs.mean_score) {
-            return lhs.mean_score > rhs.mean_score;
-        }
-        return lhs.plan.key < rhs.plan.key;
-    });
+    const std::vector<EvaluatedPlan> evaluated =
+        evaluate_root_plans(state, defense_root, context.player, serial, lure_config().rollout_count, root_plans);
 
     const auto decision_end = std::chrono::steady_clock::now();
     const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(decision_end - decision_begin).count();
@@ -1930,8 +2247,8 @@ inline std::vector<Operation> decide_lure_strategy(
             << ",\"lightning_candidates\":" << root_plans.lightning_count
             << ",\"raw_combo_count\":" << root_plans.raw_combo_count
             << ",\"raw_plan_count\":" << root_plans.raw_plan_count
-            << ",\"plans_total\":" << plans.size()
-            << ",\"plans_unique\":" << plans.size()
+            << ",\"plans_total\":" << root_plans.plans.size()
+            << ",\"plans_unique\":" << root_plans.plans.size()
             << ",\"best_key\":\"" << debug_json_escape(best.key.empty() ? "hold" : best.key) << '"'
             << ",\"best_name\":\"" << debug_json_escape(best.name.empty() ? "hold" : best.name) << '"'
             << ",\"best_base_name\":\"" << debug_json_escape(best.base_name.empty() ? "none" : best.base_name) << '"'

@@ -18,6 +18,8 @@ namespace antgame::sdk {
 constexpr int kPlayerCount = 2;
 constexpr int kEdge = 10;
 constexpr int kMapSize = 2 * kEdge - 1;
+constexpr int kTrailMaskCells = kMapSize * kMapSize;
+constexpr int kTrailMaskWords = (kTrailMaskCells + 63) / 64;
 constexpr int kMaxRound = 512;
 constexpr int kBaseHp = 50;
 constexpr int kInitialCoins = 50;
@@ -319,6 +321,10 @@ inline bool is_base_cell(int x, int y) {
 
 inline bool is_path(int x, int y) {
     return is_valid_pos(x, y) && layout().path[x][y];
+}
+
+inline bool is_ant_walkable_cell(int x, int y) {
+    return is_base_cell(x, y) || is_path(x, y);
 }
 
 inline bool is_highland(int player, int x, int y) {

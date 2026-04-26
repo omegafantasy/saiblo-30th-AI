@@ -3,7 +3,8 @@
 namespace antgame::sdk {
 
 struct LureStrategyTuning {
-    int rollout_count = 10;
+    int rollout_count = 20;
+    int rollout_forced_ant_limit = 5;
     int search_horizon = 6;
     int lightning_horizon = 10;
     int lightning_center_limit = 10;
@@ -27,7 +28,7 @@ struct LureStrategyTuning {
     double tower_value_weight = 10.0;
     double money_weight = 10.0;
 
-    double worker_threat_unit = 80.0;
+    double worker_threat_unit = 160.0;
     double combat_base_threat_unit = 300.0;
     double combat_anchor_threat_coin_ratio = 0.2;
     double combat_anchor_ring1_bonus_ratio = 0.2;

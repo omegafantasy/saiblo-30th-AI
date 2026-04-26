@@ -41,6 +41,9 @@
 - `random_search_baseline.hpp` 的主防守搜索为了速度，使用外置轻量 `DefenseSimulator`
 - 它不是 `Ant-Game` 原生增强移动与原生塔选目标的逐行复写
 - 因而搜索分数只代表“当前近似模型的判断”，不代表 native 真值
+- 当前快速模拟默认忽略每 10 回合周期随机移动机制
+  - 这是策略搜索层的主动取舍
+  - 做 native 对拍时应尽量选择不跨 10 回合窗口的 case
 
 当前已确认案例：
 
@@ -52,7 +55,8 @@
 结果：
 
 - 不要把 baseline 的动作分数当成规则正确性的证据
-- 若遇到明显可疑的动作价值，应优先用 `sdk_rollout_probe` 做原生 replay 复算
+- 若遇到明显可疑的动作价值，应优先用 `sdk_lure_inspector` 看单回合候选与 trace
+- 若怀疑轻量模拟本身，应优先用 `sdk_defense_parity` 做 native 多 rollout 对拍
 - 在修正轻量模拟偏差前，不应优先把问题归因到 rollout 分配或 bandit 剪枝
 
 ### 2.4 当前 C++ baseline 的动作模型仍明显弱于官方操作模型
@@ -65,18 +69,22 @@
   - `拆塔 -> 建塔`
   - `拆塔 -> 闪电 -> 建塔`
   - `双拆塔 -> 双建塔`
-- 但当前 `random_search_baseline.hpp` 仍主要按“单动作 / 固定两回合 followup”建模
+- 当前 `lure_strategy.hpp` 已经支持部分同回合 op-list
+  - `base × lure`
+  - `lightning` 前置 `hold / downgrade / sell`
+  - 少量 `C1` followup
+- 但它仍不是完整官方操作列表空间
 
 结果：
 
-- 当前 baseline 很难表达“先卖诱饵再异地重建”的核心玩法
-- 也很难在 rollout 中自适应执行“近身自动拆塔”
-- 这不是调参数能补齐的小问题，而是动作表示本身过弱
+- 当前 baseline 已能表达一部分“先卖诱饵再异地重建”
+- 但仍很难表达更复杂的 `sell -> lightning -> build` 与多塔多点联动
+- rollout 中目前只保留“贴身自动回收”，不做完整主动计划生成
 
 建议：
 
 - 后续重构时，搜索单位应从单操作改为“同回合有序 op-list”
-- 未来 rollout 中应支持按模拟态自适应地产生下一回合 op-list，而不是只承诺固定 second op
+- 未来 rollout 中可以逐步恢复更强的自适应 op-list，但必须控制 STL/候选生成开销
 
 ### 2.5 官方 `game` 二进制当前不执行 `config.max_rounds`
 
@@ -106,6 +114,7 @@
 
 - 做机制判断时，优先信结构化常量、测试和实际执行路径
 - 外置 `antgame_cpp_sdk` 现已补齐 `Ant-Game` 头文件依赖追踪；上游更新后应重新 `make`，不要复用旧 `build/` 产物
-- 动作估值审计时，优先用 `Game1/antgame_cpp_sdk/examples/sdk_rollout_probe.cpp` 从 replay 精确复算
+- 动作估值审计时，优先用 `Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp`
+- 轻量模拟与 native 对拍时，优先用 `Game1/antgame_cpp_sdk/examples/sdk_defense_parity.cpp`
 - 若要继续清理规则层冲突，先处理本页仍保留的 `ProducerMedic` 语义说明问题
 - 在这些冲突未修复前，不要把单一文件当成完整真值

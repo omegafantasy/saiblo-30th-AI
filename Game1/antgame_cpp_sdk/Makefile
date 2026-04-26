@@ -17,10 +17,13 @@ SMOKE_BIN := $(BUILD_DIR)/sdk_smoke
 JSON_RUNNER_BIN := $(BUILD_DIR)/sdk_json_runner
 RANDOM_SEARCH_BENCH_BIN := $(BUILD_DIR)/sdk_random_search_bench
 ROLLOUT_PROBE_BIN := $(BUILD_DIR)/sdk_rollout_probe
+LURE_INSPECTOR_BIN := $(BUILD_DIR)/sdk_lure_inspector
+LURE_PERF_BIN := $(BUILD_DIR)/sdk_lure_perf
+DEFENSE_PARITY_BIN := $(BUILD_DIR)/sdk_defense_parity
 
 .PHONY: all clean smoke
 
-all: $(LIB) $(EXAMPLE_BIN) $(SMOKE_BIN) $(JSON_RUNNER_BIN) $(RANDOM_SEARCH_BENCH_BIN) $(ROLLOUT_PROBE_BIN)
+all: $(LIB) $(EXAMPLE_BIN) $(SMOKE_BIN) $(JSON_RUNNER_BIN) $(RANDOM_SEARCH_BENCH_BIN) $(ROLLOUT_PROBE_BIN) $(LURE_INSPECTOR_BIN) $(LURE_PERF_BIN) $(DEFENSE_PARITY_BIN)
 
 $(BUILD_DIR)/game/%.o: ../Ant-Game/game/src/%.cpp
 	@mkdir -p $(dir $@)
@@ -51,6 +54,18 @@ $(RANDOM_SEARCH_BENCH_BIN): examples/sdk_random_search_bench.cpp $(SDK_HEADERS) 
 	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
 
 $(ROLLOUT_PROBE_BIN): examples/sdk_rollout_probe.cpp $(SDK_HEADERS) $(LIB)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
+
+$(LURE_INSPECTOR_BIN): examples/sdk_lure_inspector.cpp $(SDK_HEADERS) $(LIB)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
+
+$(LURE_PERF_BIN): examples/sdk_lure_perf.cpp $(SDK_HEADERS) $(LIB)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
+
+$(DEFENSE_PARITY_BIN): examples/sdk_defense_parity.cpp $(SDK_HEADERS) $(LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
 

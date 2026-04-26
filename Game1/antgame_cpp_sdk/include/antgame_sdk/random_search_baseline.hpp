@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -58,7 +59,7 @@ constexpr int kMaxSimTowers = 64;
 constexpr int kMaxSimAnts = 512;
 constexpr int kMaxSimEffects = 32;
 constexpr int kMaxMoveCandidates = 6;
-constexpr int kMaxImportantAnts = 3;
+constexpr int kMaxImportantAnts = 5;
 constexpr int kMaxValidCells = kMapSize * kMapSize;
 constexpr int kMaxReverseHeapEntries = 8192;
 constexpr int kMaxCachedRange = 4;
@@ -365,8 +366,10 @@ struct IdCountMap {
 };
 
 inline std::uint64_t mix_seed(std::uint64_t seed, std::uint64_t value) {
-    seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
-    return seed;
+    std::uint64_t mixed = seed + 0x9e3779b97f4a7c15ULL + (value << 1U);
+    mixed = (mixed ^ (mixed >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+    mixed = (mixed ^ (mixed >> 27U)) * 0x94d049bb133111ebULL;
+    return mixed ^ (mixed >> 31U);
 }
 
 struct FastRng {
@@ -426,6 +429,7 @@ struct SearchAnt {
     int behavior_expiry = 0;
     int target_x = -1;
     int target_y = -1;
+    std::uint64_t trail_mask[kTrailMaskWords]{};
 
     int max_hp() const { return kind == AntKind::Combat ? 30 : ant_max_hp(level); }
     int kill_reward() const { return kind == AntKind::Combat ? 18 : ant_kill_reward(level); }
@@ -434,6 +438,14 @@ struct SearchAnt {
     bool control_immune() const { return behavior == AntBehavior::ControlFree; }
     bool reached_target() const { return target_x == x && target_y == y; }
 };
+
+inline void mark_ant_trail(SearchAnt &ant, int x, int y) {
+    if (x < 0 || x >= kMapSize || y < 0 || y >= kMapSize) {
+        return;
+    }
+    const int bit_index = x * kMapSize + y;
+    ant.trail_mask[bit_index / 64] |= 1ULL << (bit_index % 64);
+}
 
 struct SearchEffect {
     SuperWeaponType weapon_type = SuperWeaponType::LightningStorm;
@@ -694,6 +706,10 @@ inline bool should_self_destruct(const SearchAnt &ant) {
     return ant.kind == AntKind::Combat && ant.hp * 2 < ant.max_hp();
 }
 
+inline double ant_pheromone_weight(const SearchAnt &ant) {
+    return ant.kind == AntKind::Combat ? 0.05 : 0.15;
+}
+
 inline int half_plane_delta(int player, int x, int y) {
     const auto [own_x, own_y] = kPlayerBases[player];
     const auto [enemy_x, enemy_y] = kPlayerBases[1 - player];
@@ -811,10 +827,21 @@ inline TowerType downgrade_target_type(TowerType tower_type) {
     return static_cast<TowerType>(static_cast<int>(tower_type) / 10);
 }
 
+inline int exact_destroy_tower_income(int tower_count, int hp, int max_hp) {
+    const double refund =
+        static_cast<double>(tower_build_cost_for_count(std::max(tower_count - 1, 0))) * kTowerDowngradeRefundRatio;
+    return static_cast<int>(refund * static_cast<double>(std::max(hp, 0)) / std::max(1, max_hp));
+}
+
+inline int exact_downgrade_tower_income(TowerType tower_type, int hp, int max_hp) {
+    const double refund = static_cast<double>(upgrade_tower_cost(tower_type)) * kTowerDowngradeRefundRatio;
+    return static_cast<int>(refund * static_cast<double>(std::max(hp, 0)) / std::max(1, max_hp));
+}
+
 template <typename TowerList>
 inline double tower_full_salvage_value(const TowerList &towers) {
     struct BasicRefund {
-        double ratio = 0.0;
+        int hp = 0;
     };
 
     double total = 0.0;
@@ -828,8 +855,8 @@ inline double tower_full_salvage_value(const TowerList &towers) {
         TowerType current_type = tower.tower_type;
         int current_hp = tower.hp;
         while (current_type != TowerType::Basic) {
-            total += static_cast<double>(upgrade_tower_cost(current_type)) * kTowerDowngradeRefundRatio *
-                     static_cast<double>(std::max(current_hp, 0)) / std::max(1, tower_stats(current_type).max_hp);
+            total += static_cast<double>(
+                exact_downgrade_tower_income(current_type, current_hp, tower_stats(current_type).max_hp));
             const int previous_max_hp = tower_stats(current_type).max_hp;
             current_type = downgrade_target_type(current_type);
             const int downgraded_max_hp = tower_stats(current_type).max_hp;
@@ -840,14 +867,13 @@ inline double tower_full_salvage_value(const TowerList &towers) {
         if (basic_count >= kMaxSimTowers) {
             fixed_storage_overflow("tower_full_salvage_value basics");
         }
-        basics[basic_count++] = BasicRefund{static_cast<double>(std::max(current_hp, 0)) /
-                                            static_cast<double>(std::max(1, tower_stats(TowerType::Basic).max_hp))};
+        basics[basic_count++] = BasicRefund{std::max(current_hp, 0)};
     }
 
     for (int i = 0; i < basic_count; ++i) {
         int best = i;
         for (int j = i + 1; j < basic_count; ++j) {
-            if (basics[j].ratio > basics[best].ratio) {
+            if (basics[j].hp > basics[best].hp) {
                 best = j;
             }
         }
@@ -859,7 +885,8 @@ inline double tower_full_salvage_value(const TowerList &towers) {
     }
     int tower_count = basic_count;
     for (int index = 0; index < basic_count; ++index) {
-        total += static_cast<double>(tower_build_cost_for_count(tower_count - 1)) * kTowerDowngradeRefundRatio * basics[index].ratio;
+        total += static_cast<double>(exact_destroy_tower_income(
+            tower_count, basics[index].hp, tower_stats(TowerType::Basic).max_hp));
         --tower_count;
     }
     return total;
@@ -874,8 +901,8 @@ inline double tower_estimated_salvage_value(const SearchTower &tower, int tower_
     TowerType current_type = tower.tower_type;
     int current_hp = tower.hp;
     while (current_type != TowerType::Basic) {
-        total += static_cast<double>(upgrade_tower_cost(current_type)) * kTowerDowngradeRefundRatio *
-                 static_cast<double>(std::max(current_hp, 0)) / std::max(1, tower_stats(current_type).max_hp);
+        total += static_cast<double>(
+            exact_downgrade_tower_income(current_type, current_hp, tower_stats(current_type).max_hp));
         const int previous_max_hp = tower_stats(current_type).max_hp;
         current_type = downgrade_target_type(current_type);
         const int downgraded_max_hp = tower_stats(current_type).max_hp;
@@ -884,9 +911,8 @@ inline double tower_estimated_salvage_value(const SearchTower &tower, int tower_
                          : downgraded_max_hp;
     }
 
-    const double basic_ratio = static_cast<double>(std::max(current_hp, 0)) /
-                               static_cast<double>(std::max(1, tower_stats(TowerType::Basic).max_hp));
-    total += static_cast<double>(tower_build_cost_for_count(std::max(tower_count_hint - 1, 0))) * kTowerDowngradeRefundRatio * basic_ratio;
+    total += static_cast<double>(
+        exact_destroy_tower_income(tower_count_hint, current_hp, tower_stats(TowerType::Basic).max_hp));
     return total;
 }
 
@@ -930,6 +956,35 @@ inline double ant_base_distance_factor(int base_distance) {
     }
 }
 
+struct DefenseSimulatorProfile {
+    std::uint64_t rounds = 0;
+    std::uint64_t tower_attack_ns = 0;
+    std::uint64_t move_ns = 0;
+    std::uint64_t move_cache_ns = 0;
+    std::uint64_t move_sample_ns = 0;
+    std::uint64_t move_random_ns = 0;
+    std::uint64_t move_resolve_ns = 0;
+    std::uint64_t teleport_ns = 0;
+    std::uint64_t pheromone_ns = 0;
+    std::uint64_t pheromone_trail_ns = 0;
+    std::uint64_t manage_ns = 0;
+    std::uint64_t spawn_ns = 0;
+    std::uint64_t age_ns = 0;
+    std::uint64_t income_ns = 0;
+    std::uint64_t effects_ns = 0;
+    std::uint64_t move_sample_calls = 0;
+    std::uint64_t move_random_calls = 0;
+    std::uint64_t move_resolve_calls = 0;
+    std::uint64_t move_cache_calls = 0;
+};
+
+inline std::uint64_t profile_now_ns() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
 class DefenseSimulator {
   public:
     int player = 0;
@@ -944,13 +999,41 @@ class DefenseSimulator {
     int lightning_cooldown = 0;
     bool terminal = false;
     bool ignore_enemy_spawns = false;
+    DefenseSimulatorProfile *profile = nullptr;
 
     FixedList<SearchTower, kMaxSimTowers> towers;
     FixedList<SearchAnt, kMaxSimAnts> ants;
     FixedList<SearchEffect, kMaxSimEffects> my_effects;
     FixedList<SearchEffect, kMaxSimEffects> enemy_effects;
+    float pheromone[kMapSize][kMapSize]{};
 
-    DefenseSimulator clone() const { return *this; }
+    DefenseSimulator clone() const {
+        DefenseSimulator out;
+        out.player = player;
+        out.enemy = enemy;
+        out.round_index = round_index;
+        out.coins = coins;
+        out.base_hp = base_hp;
+        out.enemy_generation_level = enemy_generation_level;
+        out.enemy_ant_level = enemy_ant_level;
+        out.next_ant_id = next_ant_id;
+        out.next_tower_id = next_tower_id;
+        out.lightning_cooldown = lightning_cooldown;
+        out.terminal = terminal;
+        out.ignore_enemy_spawns = ignore_enemy_spawns;
+        out.profile = profile;
+        out.towers = towers;
+        out.ants = ants;
+        out.my_effects = my_effects;
+        out.enemy_effects = enemy_effects;
+        std::memcpy(out.pheromone, pheromone, sizeof(pheromone));
+        // Movement and tower-lookup caches are derived from the fields above.
+        // Avoid copying them on every rollout clone; they are rebuilt lazily.
+        out.move_cache.static_risk_dirty = true;
+        out.move_cache.move_cache_dirty = true;
+        out.tower_lookup.dirty = true;
+        return out;
+    }
 
     void refresh_tower_lookup() const {
         if (!tower_lookup.dirty) {
@@ -1012,11 +1095,8 @@ class DefenseSimulator {
     }
 
     bool ant_can_walk_to(int x, int y, int /*ant_player*/) const {
-        if (!is_valid_pos(x, y)) {
+        if (!is_ant_walkable_cell(x, y)) {
             return false;
-        }
-        if (is_base_cell(x, y)) {
-            return true;
         }
         refresh_tower_lookup();
         return tower_lookup.index_by_cell[x][y] < 0;
@@ -1130,6 +1210,10 @@ class DefenseSimulator {
         return score;
     }
 
+    double move_pheromone_score(int x, int y) const {
+        return is_valid_pos(x, y) ? static_cast<double>(pheromone[x][y]) : 0.0;
+    }
+
     void mark_risk_fields_dirty() {
         move_cache.static_risk_dirty = true;
         move_cache.move_cache_dirty = true;
@@ -1208,7 +1292,8 @@ class DefenseSimulator {
         for (int index = 0; index < geometry.valid_count; ++index) {
             const int x = geometry.cell_x[index];
             const int y = geometry.cell_y[index];
-            move_cache.walkable_cells[index] = static_cast<unsigned char>(is_base_cell(x, y) || tower_lookup.index_by_cell[x][y] < 0);
+            move_cache.walkable_cells[index] =
+                static_cast<unsigned char>(is_ant_walkable_cell(x, y) && tower_lookup.index_by_cell[x][y] < 0);
             move_cache.damage_risk_field[x][y] = 0.0;
             move_cache.control_risk_field[x][y] = 0.0;
             move_cache.effect_pull_field[x][y] = 0.0;
@@ -1351,12 +1436,6 @@ class DefenseSimulator {
             const ReversePathPlan worker_plan = reverse_weighted_plan(sources, worker_step_total, step_damage);
             move_cache.worker_costs = worker_plan.total_cost;
         }
-        if (has_combat) {
-            FixedList<IntPair, 6> sources;
-            sources.push_back(IntPair{base_x, base_y});
-            const ReversePathPlan combat_base_plan = reverse_weighted_plan(sources, combat_step_total, step_damage);
-            move_cache.combat_base_costs = combat_base_plan.total_cost;
-        }
 
         move_cache.tower_plans.clear();
         if (has_combat) {
@@ -1380,6 +1459,12 @@ class DefenseSimulator {
                     TowerPathCache{tower.tower_id, reverse_weighted_plan(sources, combat_step_total, step_damage)});
             }
         }
+        if (has_combat && move_cache.tower_plans.empty()) {
+            FixedList<IntPair, 6> sources;
+            sources.push_back(IntPair{base_x, base_y});
+            const ReversePathPlan combat_base_plan = reverse_weighted_plan(sources, combat_step_total, step_damage);
+            move_cache.combat_base_costs = combat_base_plan.total_cost;
+        }
 
         if (reset_reservations) {
             move_cache.tower_claims.clear();
@@ -1392,9 +1477,20 @@ class DefenseSimulator {
         move_cache.move_cache_dirty = false;
     }
 
+    void clear_move_annotations() const {
+        move_cache.tower_claims.clear();
+        for (int x = 0; x < kMapSize; ++x) {
+            for (int y = 0; y < kMapSize; ++y) {
+                move_cache.reservations[x][y] = 0.0;
+            }
+        }
+    }
+
     void ensure_move_cache(bool reset_reservations = false) const {
-        if (reset_reservations || move_cache.move_cache_dirty) {
+        if (move_cache.move_cache_dirty) {
             prepare_move_cache(reset_reservations);
+        } else if (reset_reservations) {
+            clear_move_annotations();
         }
     }
 
@@ -1425,12 +1521,7 @@ class DefenseSimulator {
             return;
         }
         move_cache.move_cache_dirty = true;
-        move_cache.tower_claims.clear();
-        for (int x = 0; x < kMapSize; ++x) {
-            for (int y = 0; y < kMapSize; ++y) {
-                move_cache.reservations[x][y] = 0.0;
-            }
-        }
+        clear_move_annotations();
     }
 
     ReversePathPlan reverse_weighted_plan(
@@ -1686,6 +1777,7 @@ class DefenseSimulator {
                                      ant_crowding_weight(ant) * crowding_penalty(ant, eval_x, eval_y) -
                                      ant_expected_damage_weight(ant) * damage -
                                      ant_control_risk_weight(ant) * control +
+                                     ant_pheromone_weight(ant) * move_pheromone_score(eval_x, eval_y) +
                                      ant_tower_pull_weight(ant) * tower_pull +
                                      ant_effect_pull_weight(ant) * effect + (tower_target != nullptr ? 4.0 : 0.0);
                 scores[index] = score;
@@ -1736,6 +1828,7 @@ class DefenseSimulator {
                         score -= reroute_gain;
                     }
                     score -= static_cast<double>(tower_claim_count(tower_target->tower_id));
+                    score += ant_pheromone_weight(ant) * move_pheromone_score(ant.x, ant.y);
                     annotated_cells.push_back(IntPair{-1, -1});
                     annotated_towers.push_back(tower_target->tower_id);
                 } else {
@@ -1747,6 +1840,7 @@ class DefenseSimulator {
                         score = -remaining;
                         score -= 1.4 * move_cache.reservations[nx][ny];
                         score -= 0.25 * crowding_penalty(ant, nx, ny);
+                        score += ant_pheromone_weight(ant) * move_pheromone_score(nx, ny);
                     }
                     annotated_cells.push_back(IntPair{nx, ny});
                     annotated_towers.push_back(-1);
@@ -1767,6 +1861,7 @@ class DefenseSimulator {
                     score = tower_attack_value(ant, *tower_target, static_cast<double>(ant.hp)) + 1.5;
                     best_tower_id = tower_target->tower_id;
                     score -= 0.85 * static_cast<double>(tower_claim_count(best_tower_id));
+                    score += ant_pheromone_weight(ant) * move_pheromone_score(ant.x, ant.y);
                     annotated_cells.push_back(IntPair{-1, -1});
                 } else if (!move_cache.tower_plans.empty()) {
                     const int candidate_index = cell_index_of(nx, ny);
@@ -1792,6 +1887,7 @@ class DefenseSimulator {
                     }
                     if (std::isfinite(score)) {
                         score -= 0.45 * move_cache.reservations[nx][ny];
+                        score += ant_pheromone_weight(ant) * move_pheromone_score(nx, ny);
                     }
                     annotated_cells.push_back(IntPair{nx, ny});
                 } else {
@@ -1802,6 +1898,7 @@ class DefenseSimulator {
                     if (std::isfinite(remaining)) {
                         score = -remaining;
                         score -= 0.45 * move_cache.reservations[nx][ny];
+                        score += ant_pheromone_weight(ant) * move_pheromone_score(nx, ny);
                     }
                     annotated_cells.push_back(IntPair{nx, ny});
                 }
@@ -2004,6 +2101,7 @@ class DefenseSimulator {
         ant.x = nx;
         ant.y = ny;
         ant.last_move = move;
+        mark_ant_trail(ant, ant.x, ant.y);
     }
 
     void purge_dead_towers() {
@@ -2155,7 +2253,14 @@ class DefenseSimulator {
             }
         }
         if (need_enhanced_cache) {
-            ensure_move_cache(true);
+            if (profile == nullptr) {
+                ensure_move_cache(true);
+            } else {
+                const std::uint64_t begin_ns = profile_now_ns();
+                ensure_move_cache(true);
+                profile->move_cache_ns += profile_now_ns() - begin_ns;
+                ++profile->move_cache_calls;
+            }
         }
         auto forced_move_for = [&](int ant_id) {
             for (int index = 0; index < forced_moves.size(); ++index) {
@@ -2174,11 +2279,32 @@ class DefenseSimulator {
             if (forced_move != kNoMove) {
                 move = forced_move;
             } else if (ant.behavior == AntBehavior::Random) {
-                move = random_legal_move(ant, rng);
+                if (profile == nullptr) {
+                    move = random_legal_move(ant, rng);
+                } else {
+                    const std::uint64_t begin_ns = profile_now_ns();
+                    move = random_legal_move(ant, rng);
+                    profile->move_random_ns += profile_now_ns() - begin_ns;
+                    ++profile->move_random_calls;
+                }
             } else {
-                move = sample_move(ant, rng, true);
+                if (profile == nullptr) {
+                    move = sample_move(ant, rng, true);
+                } else {
+                    const std::uint64_t begin_ns = profile_now_ns();
+                    move = sample_move(ant, rng, true);
+                    profile->move_sample_ns += profile_now_ns() - begin_ns;
+                    ++profile->move_sample_calls;
+                }
             }
-            resolve_ant_step(ant, move);
+            if (profile == nullptr) {
+                resolve_ant_step(ant, move);
+            } else {
+                const std::uint64_t begin_ns = profile_now_ns();
+                resolve_ant_step(ant, move);
+                profile->move_resolve_ns += profile_now_ns() - begin_ns;
+                ++profile->move_resolve_calls;
+            }
         }
         if (!config().ignore_periodic_random_move &&
             need_enhanced_cache && kTeleportInterval > 0 && (round_index + 1) % kTeleportInterval == 0) {
@@ -2232,11 +2358,23 @@ class DefenseSimulator {
     }
 
     void manage_ants() {
-        FixedList<SearchAnt, kMaxSimAnts> next;
         const auto [base_x, base_y] = kPlayerBases[player];
-        for (auto &ant : ants) {
+        auto update_trail = [&](const SearchAnt &ant, float delta) {
+            if (profile == nullptr) {
+                add_trail_pheromone(ant, delta);
+                return;
+            }
+            const std::uint64_t begin_ns = profile_now_ns();
+            add_trail_pheromone(ant, delta);
+            profile->pheromone_trail_ns += profile_now_ns() - begin_ns;
+        };
+        int write_index = 0;
+        const int original_count = ants.size();
+        for (int read_index = 0; read_index < original_count; ++read_index) {
+            SearchAnt &ant = ants[read_index];
             if (ant.x == base_x && ant.y == base_y && ant.alive()) {
                 --base_hp;
+                update_trail(ant, 10.0f);
                 if (base_hp <= 0) {
                     terminal = true;
                 }
@@ -2244,14 +2382,19 @@ class DefenseSimulator {
             }
             if (!ant.alive()) {
                 coins += static_cast<double>(ant.kill_reward());
+                update_trail(ant, -5.0f);
                 continue;
             }
             if (ant.too_old()) {
+                update_trail(ant, -3.0f);
                 continue;
             }
-            next.push_back(ant);
+            if (write_index != read_index) {
+                ants[write_index] = ant;
+            }
+            ++write_index;
         }
-        ants = next;
+        ants.resize(write_index);
     }
 
     void spawn_enemy_ant(FastRng &rng) {
@@ -2291,6 +2434,7 @@ class DefenseSimulator {
             ant.control_free_on_break = true;
             ant.behavior_expiry = 0;
         }
+        mark_ant_trail(ant, ant.x, ant.y);
         ants.push_back(ant);
     }
 
@@ -2366,6 +2510,30 @@ class DefenseSimulator {
         }
     }
 
+    void decay_pheromone() {
+        const auto &geometry = geometry_cache();
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            const int x = geometry.cell_x[index];
+            const int y = geometry.cell_y[index];
+            pheromone[x][y] = std::max(0.0f, 0.97f * pheromone[x][y] + 0.30f);
+        }
+    }
+
+    void add_trail_pheromone(const SearchAnt &ant, float delta) {
+        if (delta == 0.0f) {
+            return;
+        }
+        const auto &geometry = geometry_cache();
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            const int bit_index = geometry.cell_x[index] * kMapSize + geometry.cell_y[index];
+            if ((ant.trail_mask[bit_index / 64] & (1ULL << (bit_index % 64))) == 0ULL) {
+                continue;
+            }
+            float &value = pheromone[geometry.cell_x[index]][geometry.cell_y[index]];
+            value = std::max(0.0f, value + delta);
+        }
+    }
+
     void simulate_round(FastRng &rng) {
         FixedList<ForcedMove, kMaxImportantAnts> empty_forced_moves;
         simulate_round(rng, empty_forced_moves);
@@ -2375,16 +2543,37 @@ class DefenseSimulator {
         if (terminal) {
             return;
         }
-        tower_attack_phase(rng);
-        move_phase(rng, forced_moves);
-        teleport_phase(rng);
-        manage_ants();
-        if (!ignore_enemy_spawns) {
-            spawn_enemy_ant(rng);
+        if (profile == nullptr) {
+            tower_attack_phase(rng);
+            move_phase(rng, forced_moves);
+            teleport_phase(rng);
+            decay_pheromone();
+            manage_ants();
+            if (!ignore_enemy_spawns) {
+                spawn_enemy_ant(rng);
+            }
+            increase_ant_age();
+            update_income();
+            update_effects(rng);
+        } else {
+            auto measure = [&](std::uint64_t &accumulator, auto &&fn) {
+                const std::uint64_t begin_ns = profile_now_ns();
+                fn();
+                accumulator += profile_now_ns() - begin_ns;
+            };
+            measure(profile->tower_attack_ns, [&]() { tower_attack_phase(rng); });
+            measure(profile->move_ns, [&]() { move_phase(rng, forced_moves); });
+            measure(profile->teleport_ns, [&]() { teleport_phase(rng); });
+            measure(profile->pheromone_ns, [&]() { decay_pheromone(); });
+            measure(profile->manage_ns, [&]() { manage_ants(); });
+            if (!ignore_enemy_spawns) {
+                measure(profile->spawn_ns, [&]() { spawn_enemy_ant(rng); });
+            }
+            measure(profile->age_ns, [&]() { increase_ant_age(); });
+            measure(profile->income_ns, [&]() { update_income(); });
+            measure(profile->effects_ns, [&]() { update_effects(rng); });
+            ++profile->rounds;
         }
-        increase_ant_age();
-        update_income();
-        update_effects(rng);
         ++round_index;
         if (base_hp <= 0) {
             terminal = true;
@@ -2472,8 +2661,8 @@ class DefenseSimulator {
                 return false;
             }
             if (tower->tower_type == TowerType::Basic) {
-                coins += static_cast<double>(tower_build_cost_for_count(static_cast<int>(towers.size()) - 1)) * kTowerDowngradeRefundRatio *
-                         static_cast<double>(std::max(tower->hp, 0)) / std::max(1, tower->max_hp());
+                coins += static_cast<double>(exact_destroy_tower_income(
+                    static_cast<int>(towers.size()), tower->hp, tower->max_hp()));
                 for (int index = 0; index < towers.size(); ++index) {
                     if (towers[index].tower_id == operation.arg0) {
                         towers.erase_at(index);
@@ -2484,8 +2673,8 @@ class DefenseSimulator {
                 mark_risk_fields_dirty();
                 return true;
             }
-            coins += static_cast<double>(upgrade_tower_cost(tower->tower_type)) * kTowerDowngradeRefundRatio *
-                     static_cast<double>(std::max(tower->hp, 0)) / std::max(1, tower->max_hp());
+            coins += static_cast<double>(
+                exact_downgrade_tower_income(tower->tower_type, tower->hp, tower->max_hp()));
             const int previous_max = tower->max_hp();
             const int previous_hp = std::max(0, tower->hp);
             tower->tower_type = downgrade_target_type(tower->tower_type);
@@ -2523,6 +2712,14 @@ inline DefenseSimulator make_defense_simulator(const PublicState &state, const N
 
     const std::vector<NativeAntHiddenState> hidden_rows =
         simulator != nullptr ? simulator->ant_hidden_states() : std::vector<NativeAntHiddenState>{};
+    if (simulator != nullptr) {
+        const auto native_pheromone = simulator->pheromone_for_player(sim.enemy);
+        for (int x = 0; x < kMapSize; ++x) {
+            for (int y = 0; y < kMapSize; ++y) {
+                sim.pheromone[x][y] = static_cast<float>(native_pheromone[x][y]);
+            }
+        }
+    }
 
     for (const auto &tower : state.towers) {
         if (tower.player != player) {
@@ -2560,6 +2757,9 @@ inline DefenseSimulator make_defense_simulator(const PublicState &state, const N
             item.behavior_expiry = hidden->behavior_expiry;
             item.target_x = hidden->target_x;
             item.target_y = hidden->target_y;
+            for (int word = 0; word < kTrailMaskWords; ++word) {
+                item.trail_mask[word] = hidden->trail_mask[static_cast<std::size_t>(word)];
+            }
         } else {
             item.shield = 0;
             item.defend = false;
@@ -2571,6 +2771,7 @@ inline DefenseSimulator make_defense_simulator(const PublicState &state, const N
                     ? kBehaviorDecayTurns
                     : 0;
         }
+        mark_ant_trail(item, item.x, item.y);
         sim.ants.push_back(item);
     }
     for (const auto &effect : state.active_effects) {

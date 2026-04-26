@@ -42,10 +42,12 @@
 - `base` 与 `lure` 分离建模
 - lure 结构默认为“最多一个外部 lure”
 - 若 lure 被战斗蚁贴近，会优先执行强制卖塔
+- 当前 rollout 中对所有己方塔都保留“战斗蚁贴身则强制回收”的 reactive 逻辑
 - 若需要同回合 `sell + build`，会保证“先拆后建”
 - 若同回合需要拆多座塔，会优先拆当前血量更高的塔
 - 闪电作为独立候选搜索
-- future rollout 中会继续用 reactive 控制器处理后续 base/lure 动作
+- 闪电候选允许先 `hold / downgrade / sell`，再释放闪电
+- future rollout 不再完整生成主动 `base × lure`，只保留贴身回收这类应急 reactive 动作
 
 ## 4. 当前代码刻意没有实现的部分
 
@@ -73,12 +75,16 @@
 
 - `C1` 为空时，只考虑 `build C1`
 - `C1 Basic` 时：
-  - 钱较少优先走 `Heavy`
+  - 钱较少优先走 `Mortar`
   - 钱较多允许转 `Quick`
 - `C1 Quick` 时允许转 `Sniper`
 - `C1 Sniper` 成型后，才开放 `L1 / R1 / C2` 的近基地补网
+- 当前还支持三类结构化 followup：
+  - `build C1 -> upgrade Mortar`
+  - `build C1 -> upgrade Quick`
+  - `downgrade Mortar -> upgrade Quick`
 
-这里仍保留一个显式金币阈值，用来控制 `Heavy` 与 `Quick` 路线切换。
+这里仍保留一个显式金币阈值，用来控制 `Mortar` 与 `Quick / Sniper` 路线切换。
 
 ## 6. 当前 lure 结构
 
@@ -105,6 +111,8 @@
 - 独立候选
 - 偏战斗蚁应急
 - 兼顾敌方塔伤害
+- 不与 `base × lure` 相乘
+- 但闪电候选自身可带一个前置 `downgrade / sell`，用于回收或凑钱
 
 当前闪电启发主要看：
 
@@ -120,9 +128,10 @@
 当前 baseline 还有几个明确约束：
 
 - 当前只搜索单回合根动作，不再做旧版“两回合计划”
+- 例外：`C1` 主线保留少量显式 followup，用于表达建后升级与 `Mortar -> Quick` 转线
 - root 组合使用严格合法性判断
   - 组合里有一步非法，整组直接丢弃
-- rollout 后续回合使用 reactive 贪心控制器
+- rollout 后续回合仅使用贴身强制回收，不再主动贪心生成完整 `base × lure`
 - 所有直接影响评分的参数应统一暴露在 `lure_strategy_params.hpp`
 
 ## 9. 后续优化方向
@@ -139,4 +148,6 @@
 
 - replay
 - `ai*.stderr.log` 中的候选分解
+- `sdk_lure_inspector` / simviz 的单回合候选与 sample trace
+- `sdk_defense_parity` 的轻量模拟与 native 多 rollout 对拍
 - 256 回合 self-play 的 HP / 经济 / 操作频率 / 时延统计

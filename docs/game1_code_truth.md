@@ -23,7 +23,9 @@
    `Game1/antgame_cpp_sdk/include/antgame_sdk/sdk.hpp`
    `Game1/antgame_cpp_sdk/include/antgame_sdk/native_sim.hpp`
 6. 若要审计某个具体回合的动作价值：
-   `Game1/antgame_cpp_sdk/examples/sdk_rollout_probe.cpp`
+   `Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp`
+   `Game1/antgame_cpp_sdk/examples/sdk_defense_parity.cpp`
+   `Game1/antgame_cpp_sdk/examples/sdk_lure_perf.cpp`
 
 ## 3. 当前 Game1 代码结构
 
@@ -34,6 +36,7 @@
   - 外置 C++ SDK
   - native rollout 封装
   - 对拍/bench 工具
+  - 快速搜索模拟器 `DefenseSimulator`
 - `Game1/antgame_ai_cpp/`
   - 当前保留的 Game1 C++ AI 入口
   - 现仅保留 `cpp_heavy_baseline/`
@@ -243,19 +246,32 @@ native 当前整回合主流程：
 
 - C++ baseline 源码：`Game1/antgame_ai_cpp/cpp_heavy_baseline/ai_cpp_heavy_baseline.cpp`
 - C++ baseline 构建：`Game1/antgame_ai_cpp/cpp_heavy_baseline/Makefile`
-- baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`
-- `Game1/antgame_cpp_sdk/include/antgame_sdk/heavy_baseline.hpp` 仅保留兼容包装
-- 若要对可疑动作做原生复算，应使用 `Game1/antgame_cpp_sdk/examples/sdk_rollout_probe.cpp`，不要只看 baseline 自身 rollout 分数
+- baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy.hpp`
+- 快速模拟器：`Game1/antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`
+- 策略参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_params.hpp`
+- 若要对可疑动作做单回合策略审计，应使用 `Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp`
+- 若要对轻量模拟做 native 多 rollout 对拍，应使用 `Game1/antgame_cpp_sdk/examples/sdk_defense_parity.cpp`
 - 当前基线策略重点：
-  - 简化终点评估 + `hold` 偏置，默认偏向少操作
-  - 仅搜索 `Build/Upgrade/Downgrade/Lightning`
+  - `base × lure + lightning` 根节点搜索
+  - 简化终点评估，默认偏向少操作
+  - 搜索 `Build/Upgrade/Downgrade/Lightning` 及少量同回合 op-list
   - 当前不考虑基地升级
-  - 主防守搜索忽略我方蚂蚁，使用共享进攻 EV 补钱
-  - `Upgrade` 当前只作为单回合动作
-  - 双回合只保留核心九格 `Build -> Upgrade` 与 `Downgrade -> Followup`
-  - 终点评估关注基地血量、塔剩余价值、塔奖励、敌蚂蚁威胁和钱
+  - 主防守搜索忽略我方蚂蚁，也暂时禁用进攻补值
+  - `C1` 主线当前以 `Mortar / Quick / Sniper` 为主
+  - future rollout 只保留战斗蚁贴身时的 reactive 回收，不再完整生成未来主动计划
+  - 终点评估关注基地血量、塔剩余价值、敌蚂蚁威胁和钱
 
-## 15. 胜负判定
+## 15. 当前快速模拟性能口径
+
+- `NativeSimulator` 是官方 `Ant-Game/game` C++ 逻辑封装
+- `DefenseSimulator` 是搜索用快速模拟，不是完整官方对象图
+- 当前快速模拟默认忽略每 10 回合周期随机移动
+- `DefenseSimulator` 内层状态以固定容量数组为主，减少 STL 热路径开销
+- `DefenseSimulator::clone()` 不复制派生 move cache / lookup cache
+- 当前最大内层热点仍是增强移动的反向路径规划
+- 若做对拍，应优先选择不跨 10 回合随机移动窗口的起点和 horizon
+
+## 16. 胜负判定
 
 基地被打空时立即结束。
 

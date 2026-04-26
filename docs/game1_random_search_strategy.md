@@ -35,9 +35,13 @@
 - 永远保留 `base_hold`
 - 若 `C1` 为空，只考虑 `build C1`
 - 若 `C1` 不是 `Sniper`，只考虑：
-  - `Basic -> Heavy` 或 `Basic -> Quick`
-  - `Heavy -> downgrade`
+  - `Basic -> Mortar` 或 `Basic -> Quick`
+  - `Mortar -> downgrade`
   - `Quick -> Sniper`
+- 以及少量结构化 followup：
+  - `build C1 -> upgrade Mortar`
+  - `build C1 -> upgrade Quick`
+  - `downgrade Mortar -> upgrade Quick`
 - 若 `C1` 已经是 `Sniper`，才开放：
   - `L1 / R1 / C2` 的建塔
   - `Basic -> Quick`
@@ -79,6 +83,9 @@
 当前流程：
 
 - 若冷却或金币不足，则不生成闪电候选
+- 闪电候选可带一个前置 `hold / downgrade / sell`
+  - 操作顺序固定为先回收，再放闪电
+  - 因此回收可能使当前回合凑够闪电金币
 - 否则对全图合法格子打分
 - 排除离地图边界过近的位置
 - 再做簇去重，只保留有限个中心
@@ -126,18 +133,19 @@
 - 普通候选 horizon: `search_horizon`
 - 闪电候选 horizon: `lightning_horizon`
 - 每个候选 rollout 次数: `rollout_count`
+- 快速模拟默认忽略每 `10` 回合的周期随机移动机制
 
-rollout 中未来回合不是 `hold`，而是每回合再调用一次轻量 reactive 控制器：
+rollout 中未来回合不再主动生成完整 `base × lure` 计划，只保留轻量 reactive 回收：
 
-- 重新生成当前模拟态下的 `base` 候选
-- 重新生成当前模拟态下的 `lure` 候选
-- 在所有严格合法的 `base × lure` 组合中
-- 直接取 heuristic 最大的那个作为该回合动作
+- 若有战斗蚁贴身己方塔，固定尝试降级/拆塔回收
+- 否则不做未来回合主动操作
+- 这样能保留 lure 策略里最关键的“贴身不白送塔”
+- 同时避免 rollout 中每回合重复生成大量 STL plan
 
 因此当前 rollout 是：
 
 - 根节点用“搜索 + 终点评估”
-- 后续回合用“反应式贪心控制器”
+- 后续回合用“贴身回收”反应式规则
 
 ## 7. 终点评估
 
@@ -155,7 +163,7 @@ rollout 中未来回合不是 `hold`，而是每回合再调用一次轻量 reac
 - 战斗蚂蚁 threat 取“对基地威胁”和“对己方塔钱的威胁”的较大者
 - 战斗蚂蚁的威胁缩放还会受到 `Random` / `Bewitched` 行为影响
 
-当前 `combat threat` 不再只看 `C1/L1/R1/C2/C3` 这些塔位，而是对所有己方存活塔统一估值。
+当前 `combat threat` 的塔威胁项只看旧版位置表里的核心建塔位，避免外圈 lure 塔本身把终点评估拖得过重。
 
 ## 8. 参数入口
 
@@ -177,6 +185,9 @@ rollout 中未来回合不是 `hold`，而是每回合再调用一次轻量 reac
 
 - `Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py`
 - `Game1/antgame_ai_cpp/tools/analyze_selfplay_batch.py`
+- `Game1/antgame_cpp_sdk/examples/sdk_lure_perf.cpp`
+- `Game1/antgame_cpp_sdk/examples/sdk_defense_parity.cpp`
+- `Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp`
 
 ## 10. 当前局限
 
@@ -186,6 +197,23 @@ rollout 中未来回合不是 `hold`，而是每回合再调用一次轻量 reac
 
 - `base` 和 `lure` 仍是模板化候选，不是完整同回合 op-list 生成
 - 主动 `EMP/Deflector/Evasion` 还没纳入搜索
-- lure 的自适应性主要来自“贴近即卖”和未来回合 reactive 控制器，尚未发展成更强的路径级控制
+- lure 的自适应性主要来自“贴近即卖”和未来回合贴身强制回收，尚未发展成更强的路径级控制
 - `C1` 路线切换仍保留一个显式金币阈值
 - 对普通蚂蚁和战斗蚂蚁的估值比例仍需要继续校准
+
+## 11. 当前性能口径
+
+2026-04-26 已确认：
+
+- `DefenseSimulator` 内层状态以固定容量数组为主
+- `DefenseSimulator::clone()` 不复制派生 move cache / lookup cache
+- 当前 `MoveCache` 约 `208KB`
+- 完整决策抽样平均约 `0.32s`
+- 单个 best rollout 抽样约 `190us`
+- 纯 6 回合模拟约 `180us`
+- 单回合模拟最大热点仍是 `move_cache` 反向路径规划
+- 后续性能优化优先级：
+  - 降低反向路径规划次数或缓存更稳定的静态部分
+  - 固定数组化 root plan / forced rollout sample 等策略层结构
+  - 并行评估 action
+- 继续降低数值精度不是当前最优先方向，因为核心 cache 已经大量使用 `float`
