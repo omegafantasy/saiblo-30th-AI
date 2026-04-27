@@ -13,7 +13,6 @@
 - 规则真值：`../Ant-Game/`
 - SDK：当前目录
 - 冻结 baseline AI：`../antgame_ai_cpp/cpp_heavy_baseline/`
-- 当前 v2 AI：`../antgame_ai_cpp/cpp_lure_v2/`
 - 当前 v3 AI：`../antgame_ai_cpp/cpp_lure_v3/`
 
 `Ant-Game/` 只作为只读依赖，不在其中放 SDK 或 AI 改动。
@@ -29,16 +28,11 @@
   - 当前轻量防守模拟器 `DefenseSimulator`
   - baseline 搜索所需的高速模拟能力
   - 使用固定容量数组为主，尽量避免在单回合模拟热路径中使用 STL
-- `include/antgame_sdk/lure_strategy_baseline.hpp`
-  - 冻结 baseline 的核心决策逻辑
-- `include/antgame_sdk/lure_strategy_baseline_params.hpp`
-  - 冻结 baseline 的策略参数入口
-  - 参数类型为 `BaselineLureStrategyTuning`，访问函数为 `baseline_lure_config()`
 - `include/antgame_sdk/lure_strategy_v2.hpp`
-  - 当前 v2 的核心决策逻辑
+  - 当前 baseline/v2 的唯一核心决策逻辑
   - 包含 root 候选生成、rollout、两层评估、调试输出
 - `include/antgame_sdk/lure_strategy_v2_params.hpp`
-  - 当前 v2 的策略参数入口
+  - 当前 baseline/v2 的唯一策略参数入口
   - 参数类型为 `V2LureStrategyTuning`，访问函数为 `v2_lure_config()`
 - `include/antgame_sdk/lure_strategy_v3.hpp`
   - v3 的核心决策逻辑
@@ -56,14 +50,14 @@
 
 ## 3. Baseline / V2 口径
 
-`cpp_heavy_baseline` 已冻结在 `lure_strategy_baseline.hpp` / `lure_strategy_baseline_params.hpp`。2026-04-27 已用当前 v2 完全覆盖 baseline，因此 baseline 与 v2 当前是同一策略冻结点。默认兼容文件 `lure_strategy.hpp` / `lure_strategy_params.hpp` 也指向 v2 口径；后续探索应新开 v3，不直接改 baseline。
+2026-04-27 已用当前 v2 完全覆盖 baseline。清理后只保留一份 baseline/v2 实现：
 
-参数已经拆成两套独立符号：
+- AI 源码目录：`../antgame_ai_cpp/cpp_heavy_baseline/`
+- 策略实现：`include/antgame_sdk/lure_strategy_v2.hpp`
+- 参数入口：`include/antgame_sdk/lure_strategy_v2_params.hpp`
+- 默认兼容入口：`include/antgame_sdk/lure_strategy.hpp`
 
-- baseline：`BaselineLureStrategyTuning` / `baseline_lure_config()`
-- v2：`V2LureStrategyTuning` / `v2_lure_config()`
-
-因此文件和符号仍然独立，后续新版本不会污染冻结 baseline。`lure_strategy_params.hpp` 只保留旧 include 兼容，不作为主要调参入口。
+`cpp_lure_v2/` 源码目录和 `package_ai.sh cpp_lure_v2` 目标已删除。旧 `lure_strategy_baseline*.hpp` 也已删除。调 baseline 参数只改 `lure_strategy_v2_params.hpp`，不要再维护第二套 baseline 参数。
 
 v3 已新开独立入口，不改 baseline / v2：
 
@@ -74,12 +68,12 @@ v3 已新开独立入口，不改 baseline / v2：
 
 v3 当前只在 v2 最优行动之后追加一个进攻性 `Emergency Evasion` 后处理。触发条件是：敌方闪电未生效、敌方闪电 CD 至少 `10`，执行 best action 后金币仍 `>100`，且 C1 仍为 `Sniper`，并且存在一个回避中心覆盖至少 `5` 只己方 `Worker`。战斗蚁不计入覆盖数，平局时优先更靠近敌方基地的位置。
 
-2026-04-27 已完成 v3 vs v2 座位平衡 32 局官方对局：
+2026-04-27 已完成 v3 vs baseline 座位平衡 32 局官方对局。结果目录沿用当时的历史命名：
 
 - 结果目录：`../antgame_ai_cpp/tmp_v3_vs_v2_32_p0/` 与 `../antgame_ai_cpp/tmp_v3_vs_v2_32_p1/`
-- 总胜负：v3 `16`，v2 `16`
-- 平均终局血量：v3 `19.53125`，v2 `19.1875`
-- 平均终局金币：v3 `327.40625`，v2 `321.5`
+- 总胜负：v3 `16`，baseline `16`
+- 平均终局血量：v3 `19.53125`，baseline `19.1875`
+- 平均终局金币：v3 `327.40625`，baseline `321.5`
 - v3 紧急回避实际触发 `1` 次
 - 触发样本：`seed_0015` 第 `312` 回合，`Emergency Evasion` at `(4,10)`，覆盖 `5` 工蚁、`0` 战斗蚁
 - 未发现非法操作或 replay 写入异常
@@ -228,14 +222,10 @@ build/sdk_defense_parity \
   - 官方 native 封装，负责 replay 同步、真值推进和对拍
 - `include/antgame_sdk/random_search_baseline.hpp`
   - 搜索用 `DefenseSimulator`，负责高速防守模拟
-- `include/antgame_sdk/lure_strategy_baseline.hpp`
-  - 冻结 baseline 决策主体
-- `include/antgame_sdk/lure_strategy_baseline_params.hpp`
-  - 冻结 baseline 参数入口
 - `include/antgame_sdk/lure_strategy_v2.hpp`
-  - 当前 v2 决策主体，负责候选生成、rollout、UCB 闪电、两层估值和 debug 输出
+  - 当前 baseline/v2 决策主体，负责候选生成、rollout、UCB 闪电、两层估值和 debug 输出
 - `include/antgame_sdk/lure_strategy_v2_params.hpp`
-  - 当前 v2 参数入口
+  - 当前 baseline/v2 参数入口
 - `include/antgame_sdk/lure_strategy_v3.hpp`
   - 当前 v3 决策主体，继承 v2 搜索并追加进攻性 `Emergency Evasion`
 - `include/antgame_sdk/lure_strategy_v3_params.hpp`
@@ -262,7 +252,7 @@ build/sdk_defense_parity \
 ```bash
 cd Game1/antgame_ai_cpp
 python tools/eval_cpp_selfplay.py \
-  --target cpp_lure_v2 \
+  --target cpp_heavy_baseline \
   --seeds 1:8 \
   --debug-seeds 1 \
   --jobs 8 \
@@ -286,24 +276,24 @@ cd Game1/antgame_ai_cpp
 python tools/analyze_selfplay_batch.py ./eval_current
 ```
 
-若要测试两个不同版本，应做座位平衡对战。例如历史上测试 v2 相对旧 baseline 的命令为：
+若要测试两个不同版本，应做座位平衡对战。例如测试 v3 相对当前 baseline：
 
 ```bash
 cd Game1/antgame_ai_cpp
 python tools/eval_cpp_selfplay.py \
   --target0 cpp_heavy_baseline \
-  --target1 cpp_lure_v2 \
+  --target1 cpp_lure_v3 \
   --seeds 1:16 \
   --jobs 16 \
-  --output-dir ./eval_baseline_p0_v2_p1 \
+  --output-dir ./eval_baseline_p0_v3_p1 \
   --force
 
 python tools/eval_cpp_selfplay.py \
-  --target0 cpp_lure_v2 \
+  --target0 cpp_lure_v3 \
   --target1 cpp_heavy_baseline \
   --seeds 17:32 \
   --jobs 16 \
-  --output-dir ./eval_v2_p0_baseline_p1 \
+  --output-dir ./eval_v3_p0_baseline_p1 \
   --force
 ```
 
@@ -314,7 +304,7 @@ python tools/eval_cpp_selfplay.py \
 - v2 平均终局血量 `19.5`，baseline `17.875`
 - v2 平均终局金币 `440.75`，旧 baseline `362.375`
 
-覆盖后，`cpp_heavy_baseline` 与 `cpp_lure_v2` 当前应视为同一冻结点，不再用二者互打衡量强度差。
+覆盖后，`cpp_lure_v2` 源码目录和打包目标已删除，不再用它与 `cpp_heavy_baseline` 互打衡量强度差。
 
 注意：
 

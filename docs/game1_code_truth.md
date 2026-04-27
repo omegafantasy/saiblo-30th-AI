@@ -246,10 +246,10 @@ native 当前整回合主流程：
 
 - C++ baseline 源码：`Game1/antgame_ai_cpp/cpp_heavy_baseline/ai_cpp_heavy_baseline.cpp`
 - C++ baseline 构建：`Game1/antgame_ai_cpp/cpp_heavy_baseline/Makefile`
-- baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_baseline.hpp`
+- `cpp_lure_v2` 源码目录和打包目标已删除
+- baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v2.hpp`
 - 快速模拟器：`Game1/antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`
-- baseline 策略参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_baseline_params.hpp`
-- v2 策略参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v2_params.hpp`
+- baseline / v2 策略参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v2_params.hpp`
 - 若要对可疑动作做单回合策略审计，应使用 `Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp`
 - 若要对轻量模拟做 native 多 rollout 对拍，应使用 `Game1/antgame_cpp_sdk/examples/sdk_defense_parity.cpp`
 - 当前基线策略重点：

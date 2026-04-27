@@ -7,7 +7,7 @@
 - Python 本地 web server
   - 负责静态页面、地图几何、replay 读取、API 转发
 - C++ inspector
-  - 负责按当前默认 v2 `lure_strategy` 在线复算候选行动
+  - 负责按当前 baseline/v2 `lure_strategy` 在线复算候选行动
   - 负责导出某个候选下的 rollout 样本与单样本 trace
   - 与当前 `DefenseSimulator`、root plan 生成、首回合重点蚂蚁采样逻辑保持同步
 
@@ -76,7 +76,7 @@ http://127.0.0.1:8765
 - 每步 trace 的起始/终止盘面、操作、蚂蚁动作分配、候选方向概率、最终估值分项
 - 多步 base followup 会在 trace 中逐未来回合显示，例如 `sell -> build -> upgrade`
 - 闪电候选会显示当前策略实际使用的合法中心全集；v2 默认使用棋盘中心半径 5 的 91 个中心，并用 UCB 在这些中心间分配 rollout
-- 当前默认 v2 trace 会在第 6 回合和第 10 回合分别估值，并按 `mid_eval_weight` 合成最终 rollout 分数
+- 当前 baseline/v2 trace 会在第 6 回合和第 10 回合分别估值，并按 `mid_eval_weight` 合成最终 rollout 分数
 
 ## 交互
 
@@ -102,7 +102,7 @@ http://127.0.0.1:8765
   - 用于看真实对局记录
 - `Strategy Root State` / `Sample Trace`
   - 来自当前 C++ 策略在线复算
-  - 使用当前默认 v2 `lure_strategy` 与 `DefenseSimulator`
+  - 使用当前 baseline/v2 `lure_strategy` 与 `DefenseSimulator`
   - 这是策略真正拿来打分、做 rollout 的模拟状态
 
 因此两者不一定完全一一对应，尤其是：
@@ -123,9 +123,9 @@ http://127.0.0.1:8765
 
 ## 版本口径
 
-- `cpp_heavy_baseline` 使用冻结的 `lure_strategy_baseline.hpp`
-- `cpp_lure_v2` 使用 `lure_strategy_v2.hpp`
-- simviz / inspector 默认跟随 v2，用于后续迭代分析
+- `cpp_heavy_baseline` 使用 `lure_strategy_v2.hpp`。
+- `cpp_lure_v2` 源码目录和打包目标已删除。
+- simviz / inspector 默认跟随 baseline/v2，用于后续迭代分析
 
 ## 现阶段限制
 

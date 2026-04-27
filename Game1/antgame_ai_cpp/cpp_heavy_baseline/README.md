@@ -2,7 +2,7 @@
 
 这是当前冻结的 Game1 C++ baseline AI 入口。
 
-目录名沿用历史命名，但内部已经不是旧版 `heavy` 基线。2026-04-27 已用当时的 `cpp_lure_v2` 完全覆盖本 baseline；后续策略与参数迭代应新开版本，不要直接改这个 baseline。
+目录名沿用历史命名，但内部已经不是旧版 `heavy` 基线。2026-04-27 已用当时的 `cpp_lure_v2` 完全覆盖本 baseline；后续策略与参数迭代应新开版本，不要直接改这个 baseline。`cpp_lure_v2` 源码目录和打包目标已经删除。
 
 ## 1. 当前入口
 
@@ -10,13 +10,13 @@
   - 比赛协议入口
   - 维护 `PublicState`
   - 维护 `NativeSimulator`
-  - 通过 `lure_strategy_baseline.hpp` 调用冻结版 `antgame_sdk::decide_lure_strategy()`
+  - 通过 `lure_strategy_v2.hpp` 调用冻结版 `antgame_sdk::decide_lure_strategy()`
 
 ## 2. 当前真实依赖
 
-- `../../antgame_cpp_sdk/include/antgame_sdk/lure_strategy_baseline.hpp`
-- `../../antgame_cpp_sdk/include/antgame_sdk/lure_strategy_baseline_params.hpp`
-  - baseline 独立参数，类型/访问函数为 `BaselineLureStrategyTuning` / `baseline_lure_config()`
+- `../../antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v2.hpp`
+- `../../antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v2_params.hpp`
+  - baseline/v2 的唯一策略参数入口，类型/访问函数为 `V2LureStrategyTuning` / `v2_lure_config()`
 - `../../antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`
 - `../../antgame_cpp_sdk/include/antgame_sdk/position_slots.hpp`
 
@@ -85,7 +85,8 @@
 2026-04-27 冻结说明：
 
 - 本 baseline 已被当前 v2 完全覆盖。
-- `lure_strategy_baseline.hpp` / `lure_strategy_baseline_params.hpp` 与 v2 语义一致，仅保留独立参数符号。
+- `lure_strategy_v2.hpp` / `lure_strategy_v2_params.hpp` 是唯一实现和参数入口。
+- `cpp_lure_v2` 源码目录和打包目标已删除。
 - 后续进攻性超武探索从 v3 开始，不再直接改 baseline。
 
 ## 4. Build
