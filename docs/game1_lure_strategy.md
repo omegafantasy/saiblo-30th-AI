@@ -1,6 +1,6 @@
 # Game1 Lure Strategy
 
-这份文档记录当前 Game1 的高层策略方向，以及当前 baseline / v2 已经落实到代码里的部分。
+这份文档记录当前 Game1 的高层策略方向，以及当前 baseline / v2 / v3 已经落实到代码里的部分。
 
 参考 replay：
 
@@ -50,6 +50,28 @@
 - 闪电中心使用棋盘中心半径 5 的 91 个中心做 UCB 搜索，总预算由 `lightning_ucb_total_rollouts` 控制
 - future rollout 不再完整生成主动 `base × lure`，只保留贴身回收这类应急 reactive 动作
 
+2026-04-27 已将当前 v2 完全覆盖到 `cpp_heavy_baseline`，因此 baseline 与 v2 当前是同一冻结点。后续试验版本不直接改 baseline / v2。
+
+v3 已作为独立探索版本新开：
+
+- 入口：`Game1/antgame_ai_cpp/cpp_lure_v3/`
+- 策略：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v3.hpp`
+- 参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v3_params.hpp`
+
+v3 当前不改变 v2 的 root 搜索、rollout 和终点评估，只在 best action 算完后尝试追加一个进攻性 `Emergency Evasion`。
+
+触发条件：
+
+- 敌方 `Lightning Storm` 当前未生效
+- 敌方 `Lightning Storm` CD 至少 `10`
+- 模拟执行 best action 后，我方金币仍 `> 100`
+- 模拟执行 best action 后，C1 仍是 `Sniper`
+- 存在一个 `Emergency Evasion` 中心覆盖至少 `5` 只己方 `Worker`
+
+选点只统计己方工蚁，不把战斗蚁计入覆盖数；平局优先更靠近敌方基地的位置。
+
+2026-04-27 的 32 局 v3 vs v2 座位平衡测试中，v3 与 v2 总胜负为 `16:16`。v3 只实际释放了 `1` 次紧急回避：`seed_0015` 第 `312` 回合，位置 `(4,10)`，覆盖 `5` 只工蚁、`0` 只战斗蚁。当前没有发现协议非法或误触发，但触发率很低。
+
 ## 4. 当前代码刻意没有实现的部分
 
 当前 baseline / v2 仍然没有把 lure 策略做到最终形态。
@@ -59,7 +81,8 @@
 - 更复杂的同回合 op-list 模板
 - `sell lure -> lightning -> build lure` 这种显式三段链
 - `downgrade/sell -> lightning` 这种闪电前置回收链
-- 主动 `EMP / Deflector / Evasion`，后续从 v3 开始探索
+- 主动 `EMP / Deflector`，后续再探索
+- 主动 `Emergency Evasion` 已在 v3 中作为后处理试验项实现，但还未并入 baseline
 - 更强的 lure 路径级控制
 - 基于位置表的 lure 槽位偏好学习
 

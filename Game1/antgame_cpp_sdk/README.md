@@ -14,6 +14,7 @@
 - SDK：当前目录
 - 冻结 baseline AI：`../antgame_ai_cpp/cpp_heavy_baseline/`
 - 当前 v2 AI：`../antgame_ai_cpp/cpp_lure_v2/`
+- 当前 v3 AI：`../antgame_ai_cpp/cpp_lure_v3/`
 
 `Ant-Game/` 只作为只读依赖，不在其中放 SDK 或 AI 改动。
 
@@ -39,6 +40,12 @@
 - `include/antgame_sdk/lure_strategy_v2_params.hpp`
   - 当前 v2 的策略参数入口
   - 参数类型为 `V2LureStrategyTuning`，访问函数为 `v2_lure_config()`
+- `include/antgame_sdk/lure_strategy_v3.hpp`
+  - v3 的核心决策逻辑
+  - 以 v2 为起点，额外探索进攻性 `Emergency Evasion` 后处理
+- `include/antgame_sdk/lure_strategy_v3_params.hpp`
+  - v3 的策略参数入口
+  - 参数类型为 `V3LureStrategyTuning`，访问函数为 `v3_lure_config()`
 - `include/antgame_sdk/lure_strategy.hpp`
   - 默认兼容入口，目前同步为 v2
 - `include/antgame_sdk/lure_strategy_params.hpp`
@@ -57,6 +64,25 @@
 - v2：`V2LureStrategyTuning` / `v2_lure_config()`
 
 因此文件和符号仍然独立，后续新版本不会污染冻结 baseline。`lure_strategy_params.hpp` 只保留旧 include 兼容，不作为主要调参入口。
+
+v3 已新开独立入口，不改 baseline / v2：
+
+- AI 目录：`../antgame_ai_cpp/cpp_lure_v3/`
+- 策略文件：`include/antgame_sdk/lure_strategy_v3.hpp`
+- 参数文件：`include/antgame_sdk/lure_strategy_v3_params.hpp`
+- 打包目标：`package_ai.sh cpp_lure_v3`
+
+v3 当前只在 v2 最优行动之后追加一个进攻性 `Emergency Evasion` 后处理。触发条件是：敌方闪电未生效、敌方闪电 CD 至少 `10`，执行 best action 后金币仍 `>100`，且 C1 仍为 `Sniper`，并且存在一个回避中心覆盖至少 `5` 只己方 `Worker`。战斗蚁不计入覆盖数，平局时优先更靠近敌方基地的位置。
+
+2026-04-27 已完成 v3 vs v2 座位平衡 32 局官方对局：
+
+- 结果目录：`../antgame_ai_cpp/tmp_v3_vs_v2_32_p0/` 与 `../antgame_ai_cpp/tmp_v3_vs_v2_32_p1/`
+- 总胜负：v3 `16`，v2 `16`
+- 平均终局血量：v3 `19.53125`，v2 `19.1875`
+- 平均终局金币：v3 `327.40625`，v2 `321.5`
+- v3 紧急回避实际触发 `1` 次
+- 触发样本：`seed_0015` 第 `312` 回合，`Emergency Evasion` at `(4,10)`，覆盖 `5` 工蚁、`0` 战斗蚁
+- 未发现非法操作或 replay 写入异常
 
 baseline / v2 的共同核心口径是：
 
@@ -210,6 +236,10 @@ build/sdk_defense_parity \
   - 当前 v2 决策主体，负责候选生成、rollout、UCB 闪电、两层估值和 debug 输出
 - `include/antgame_sdk/lure_strategy_v2_params.hpp`
   - 当前 v2 参数入口
+- `include/antgame_sdk/lure_strategy_v3.hpp`
+  - 当前 v3 决策主体，继承 v2 搜索并追加进攻性 `Emergency Evasion`
+- `include/antgame_sdk/lure_strategy_v3_params.hpp`
+  - 当前 v3 参数入口
 - `include/antgame_sdk/lure_strategy.hpp`
   - 默认兼容入口，目前等同 v2
 - `include/antgame_sdk/lure_strategy_params.hpp`

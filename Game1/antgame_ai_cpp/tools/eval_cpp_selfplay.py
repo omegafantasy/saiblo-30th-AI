@@ -330,6 +330,16 @@ def summarize_ai_log(stderr_path: Path) -> dict[str, Any]:
     plans_total = [int(entry["plans_total"]) for entry in decisions if isinstance(entry.get("plans_total"), (int, float))]
     plans_unique = [int(entry["plans_unique"]) for entry in decisions if isinstance(entry.get("plans_unique"), (int, float))]
     best_names = Counter(str(entry.get("best_name", "")) for entry in decisions)
+    evasion_reasons = Counter(str(entry.get("v3_evasion_reason", "")) for entry in decisions if "v3_evasion_reason" in entry)
+    evasion_used = [
+        entry for entry in decisions
+        if entry.get("v3_evasion_used") is True or str(entry.get("v3_evasion_used", "")).lower() == "true"
+    ]
+    evasion_worker_counts = [
+        int(entry["v3_evasion_worker_count"])
+        for entry in evasion_used
+        if isinstance(entry.get("v3_evasion_worker_count"), (int, float))
+    ]
     return {
         "decision_count": len(decisions),
         "plan_line_count": len(plans),
@@ -337,6 +347,9 @@ def summarize_ai_log(stderr_path: Path) -> dict[str, Any]:
         "plans_total": plans_total,
         "plans_unique": plans_unique,
         "best_name_counts": dict(best_names),
+        "v3_evasion_used_count": len(evasion_used),
+        "v3_evasion_reason_counts": dict(evasion_reasons),
+        "v3_evasion_worker_counts": evasion_worker_counts,
         "raw_line_count": len(text.splitlines()),
     }
 
@@ -474,6 +487,9 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
     plans_total = [[], []]
     plans_unique = [[], []]
     best_names = [Counter(), Counter()]
+    v3_evasion_used_counts = [0, 0]
+    v3_evasion_reasons = [Counter(), Counter()]
+    v3_evasion_worker_counts = [[], []]
 
     for result in results:
         replay_summary = result.get("replay_summary", {})
@@ -501,6 +517,11 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
             plans_total[player].extend(int(x) for x in log_summary.get("plans_total", []))
             plans_unique[player].extend(int(x) for x in log_summary.get("plans_unique", []))
             merge_counter_dict(best_names[player], log_summary.get("best_name_counts", {}))
+            v3_evasion_used_counts[player] += int(log_summary.get("v3_evasion_used_count", 0))
+            merge_counter_dict(v3_evasion_reasons[player], log_summary.get("v3_evasion_reason_counts", {}))
+            v3_evasion_worker_counts[player].extend(
+                int(x) for x in log_summary.get("v3_evasion_worker_counts", []) if isinstance(x, (int, float))
+            )
 
     return {
         "match_count": len(results),
@@ -521,6 +542,9 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "plans_total": [stats_summary(plans_total[0]), stats_summary(plans_total[1])],
         "plans_unique": [stats_summary(plans_unique[0]), stats_summary(plans_unique[1])],
         "best_name_top": [best_names[0].most_common(12), best_names[1].most_common(12)],
+        "v3_evasion_used_counts": v3_evasion_used_counts,
+        "v3_evasion_reason_counts": [dict(v3_evasion_reasons[0]), dict(v3_evasion_reasons[1])],
+        "v3_evasion_worker_counts": [stats_summary(v3_evasion_worker_counts[0]), stats_summary(v3_evasion_worker_counts[1])],
     }
 
 
@@ -536,6 +560,12 @@ def print_human_summary(summary: dict[str, Any]) -> None:
         )
         print(f"player={player} operation_totals={summary['operation_totals'][player]}")
         print(f"player={player} best_name_top={summary['best_name_top'][player]}")
+        if any(summary.get("v3_evasion_reason_counts", [{}, {}])):
+            print(
+                f"player={player} v3_evasion_used={summary['v3_evasion_used_counts'][player]} "
+                f"workers={summary['v3_evasion_worker_counts'][player]} "
+                f"reasons={summary['v3_evasion_reason_counts'][player]}"
+            )
         print(f"player={player} build_positions_top={summary['build_positions_top'][player]}")
         print(f"player={player} lightning_positions_top={summary['lightning_positions_top'][player]}")
 
