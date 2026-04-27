@@ -246,9 +246,10 @@ native 当前整回合主流程：
 
 - C++ baseline 源码：`Game1/antgame_ai_cpp/cpp_heavy_baseline/ai_cpp_heavy_baseline.cpp`
 - C++ baseline 构建：`Game1/antgame_ai_cpp/cpp_heavy_baseline/Makefile`
-- baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy.hpp`
+- baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_baseline.hpp`
 - 快速模拟器：`Game1/antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`
-- 策略参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_params.hpp`
+- baseline 策略参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_baseline_params.hpp`
+- v2 策略参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v2_params.hpp`
 - 若要对可疑动作做单回合策略审计，应使用 `Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp`
 - 若要对轻量模拟做 native 多 rollout 对拍，应使用 `Game1/antgame_cpp_sdk/examples/sdk_defense_parity.cpp`
 - 当前基线策略重点：
@@ -258,7 +259,7 @@ native 当前整回合主流程：
   - 当前不考虑基地升级
   - 主防守搜索忽略我方蚂蚁，也暂时禁用进攻补值
   - `C1` 主线当前以 `Heavy / Quick / Sniper` 为主
-  - 闪电当前是单闪电候选，所有合法中心用 UCB 分配 rollout，不带前置降级/拆塔
+  - 闪电当前是单闪电候选，baseline / v2 使用棋盘中心半径 5 的 91 个中心做 UCB，不带前置降级/拆塔
   - future rollout 只保留战斗蚁贴身时的 reactive 回收，不再完整生成未来主动计划
   - 终点评估关注基地血量、塔剩余价值、敌蚂蚁威胁和钱
 

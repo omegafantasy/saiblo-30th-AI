@@ -2,14 +2,13 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "usage: $0 <cpp_heavy_baseline> [output_path_or_dir]" >&2
+  echo "usage: $0 <cpp_heavy_baseline|cpp_lure_v2> [output_path_or_dir]" >&2
   exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GAME1_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ANT_GAME_ROOT="${GAME1_ROOT}/Ant-Game"
-CPP_AI_ROOT="${SCRIPT_DIR}/cpp_heavy_baseline"
 TARGET="$1"
 OUTPUT_ARG="${2:-}"
 ARCHIVE_NAME=""
@@ -83,10 +82,20 @@ require_empty_dir() {
 case "$TARGET" in
   cpp_heavy_baseline)
     ARCHIVE_NAME="ai_cpp_heavy_baseline.zip"
+    CPP_AI_ROOT="${SCRIPT_DIR}/cpp_heavy_baseline"
     make -C "${CPP_AI_ROOT}" -j2 >/dev/null
     FILE_MAPPINGS=(
       "${SCRIPT_DIR}/ai_cpp_protocol.py:ai.py"
       "${CPP_AI_ROOT}/build/ai_cpp_heavy_baseline:cpp_ai/ai"
+    )
+    ;;
+  cpp_lure_v2)
+    ARCHIVE_NAME="ai_cpp_lure_v2.zip"
+    CPP_AI_ROOT="${SCRIPT_DIR}/cpp_lure_v2"
+    make -C "${CPP_AI_ROOT}" -j2 >/dev/null
+    FILE_MAPPINGS=(
+      "${SCRIPT_DIR}/ai_cpp_protocol.py:ai.py"
+      "${CPP_AI_ROOT}/build/ai_cpp_lure_v2:cpp_ai/ai"
     )
     ;;
   *)

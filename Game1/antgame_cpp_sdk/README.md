@@ -12,7 +12,8 @@
 
 - 规则真值：`../Ant-Game/`
 - SDK：当前目录
-- 当前实际 AI 入口：`../antgame_ai_cpp/cpp_heavy_baseline/`
+- 冻结 baseline AI：`../antgame_ai_cpp/cpp_heavy_baseline/`
+- 当前 v2 AI：`../antgame_ai_cpp/cpp_lure_v2/`
 
 `Ant-Game/` 只作为只读依赖，不在其中放 SDK 或 AI 改动。
 
@@ -27,18 +28,37 @@
   - 当前轻量防守模拟器 `DefenseSimulator`
   - baseline 搜索所需的高速模拟能力
   - 使用固定容量数组为主，尽量避免在单回合模拟热路径中使用 STL
+- `include/antgame_sdk/lure_strategy_baseline.hpp`
+  - 冻结 baseline 的核心决策逻辑
+- `include/antgame_sdk/lure_strategy_baseline_params.hpp`
+  - 冻结 baseline 的策略参数入口
+  - 参数类型为 `BaselineLureStrategyTuning`，访问函数为 `baseline_lure_config()`
+- `include/antgame_sdk/lure_strategy_v2.hpp`
+  - 当前 v2 的核心决策逻辑
+  - 包含 root 候选生成、rollout、两层评估、调试输出
+- `include/antgame_sdk/lure_strategy_v2_params.hpp`
+  - 当前 v2 的策略参数入口
+  - 参数类型为 `V2LureStrategyTuning`，访问函数为 `v2_lure_config()`
 - `include/antgame_sdk/lure_strategy.hpp`
-  - 当前 baseline 的核心决策逻辑
-  - 包含 root 候选生成、rollout、终点评估、调试输出
+  - 默认兼容入口，目前同步为 v2
 - `include/antgame_sdk/lure_strategy_params.hpp`
-  - 当前 baseline 的策略参数入口
+  - 默认兼容参数入口，目前只是 v2 的 alias；调 v2 参数应直接改 `lure_strategy_v2_params.hpp`
 - `include/antgame_sdk/position_slots.hpp`
   - 旧版位置名定义
   - 后续讨论站位统一使用这套命名
 
-## 3. 当前 baseline 口径
+## 3. Baseline / V2 口径
 
-当前 baseline 不是旧版“两回合 random search”，而是：
+`cpp_heavy_baseline` 已冻结在 `lure_strategy_baseline.hpp` / `lure_strategy_baseline_params.hpp`。2026-04-27 已用当前 v2 完全覆盖 baseline，因此 baseline 与 v2 当前是同一策略冻结点。默认兼容文件 `lure_strategy.hpp` / `lure_strategy_params.hpp` 也指向 v2 口径；后续探索应新开 v3，不直接改 baseline。
+
+参数已经拆成两套独立符号：
+
+- baseline：`BaselineLureStrategyTuning` / `baseline_lure_config()`
+- v2：`V2LureStrategyTuning` / `v2_lure_config()`
+
+因此文件和符号仍然独立，后续新版本不会污染冻结 baseline。`lure_strategy_params.hpp` 只保留旧 include 兼容，不作为主要调参入口。
+
+baseline / v2 的共同核心口径是：
 
 - 根节点搜索：`hold + base + lure + recycle_base*lure` 加上独立 `lightning`
   - `base` 和 `lure` 不再乘算
@@ -86,10 +106,24 @@
   - 不再每个未来回合重新生成完整 `base/lure` 计划
   - 这是为了降低 STL/plan 生成开销，并避免 rollout 里引入过强的额外主动策略
 - 闪电候选当前是单闪电：
-  - 遍历所有合法中心
-  - 排除 `distance_to_boundary < lightning_min_boundary_distance` 的位置
+  - 遍历以棋盘唯一中心 `(9,9)` 为中心、六边形距离 `<= lightning_center_radius` 的合法中心
+  - 默认半径为 `5`，因此候选中心数为 `1 + (1+2+3+4+5)*6 = 91`
   - 不与 `base/lure` 或前置降级/拆塔组合
   - 全部闪电中心共享 `lightning_ucb_total_rollouts` 的 UCB rollout 预算
+
+当前冻结点还包含：
+
+- 常规 action rollout 采用 10 回合两层评估
+  - 第 6 回合和第 10 回合分别估值
+  - 用 `mid_eval_weight` 混合，默认第 6 回合权重 `0.5`
+- 允许 `basic -> quick -> sniper` 三连升候选
+  - 仅限 `C / L / R` 系列格子
+  - 只有 `C1` 继续获得额外奖励或转型惩罚
+- 闪电在敌方无激活超武效果时施加 `lightning_no_enemy_super_penalty`
+- Sniper 降级额外施加 `sniper_downgrade_penalty`
+- C1 出 Sniper 前，非 C1 位置不生成 Quick / Sniper 路线
+- base+lure 组合最多只关联同一座 base 塔的回收，不生成多座 base 塔同时降级
+- 当战斗蚁贴身己方塔时，闪电候选额外允许“该塔降级/拆 + 闪电”
 
 ## 4. Build
 
@@ -168,10 +202,18 @@ build/sdk_defense_parity \
   - 官方 native 封装，负责 replay 同步、真值推进和对拍
 - `include/antgame_sdk/random_search_baseline.hpp`
   - 搜索用 `DefenseSimulator`，负责高速防守模拟
+- `include/antgame_sdk/lure_strategy_baseline.hpp`
+  - 冻结 baseline 决策主体
+- `include/antgame_sdk/lure_strategy_baseline_params.hpp`
+  - 冻结 baseline 参数入口
+- `include/antgame_sdk/lure_strategy_v2.hpp`
+  - 当前 v2 决策主体，负责候选生成、rollout、UCB 闪电、两层估值和 debug 输出
+- `include/antgame_sdk/lure_strategy_v2_params.hpp`
+  - 当前 v2 参数入口
 - `include/antgame_sdk/lure_strategy.hpp`
-  - 当前 AI 决策主体，负责候选生成、rollout、UCB 闪电、估值和 debug 输出
+  - 默认兼容入口，目前等同 v2
 - `include/antgame_sdk/lure_strategy_params.hpp`
-  - 所有关键策略参数入口
+  - 默认兼容参数入口，目前等同 v2
 - `include/antgame_sdk/position_slots.hpp`
   - 旧版位置名与坐标映射
 - `examples/sdk_lure_inspector.cpp`
@@ -190,7 +232,7 @@ build/sdk_defense_parity \
 ```bash
 cd Game1/antgame_ai_cpp
 python tools/eval_cpp_selfplay.py \
-  --target cpp_heavy_baseline \
+  --target cpp_lure_v2 \
   --seeds 1:8 \
   --debug-seeds 1 \
   --jobs 8 \
@@ -213,6 +255,36 @@ python tools/eval_cpp_selfplay.py \
 cd Game1/antgame_ai_cpp
 python tools/analyze_selfplay_batch.py ./eval_current
 ```
+
+若要测试两个不同版本，应做座位平衡对战。例如历史上测试 v2 相对旧 baseline 的命令为：
+
+```bash
+cd Game1/antgame_ai_cpp
+python tools/eval_cpp_selfplay.py \
+  --target0 cpp_heavy_baseline \
+  --target1 cpp_lure_v2 \
+  --seeds 1:16 \
+  --jobs 16 \
+  --output-dir ./eval_baseline_p0_v2_p1 \
+  --force
+
+python tools/eval_cpp_selfplay.py \
+  --target0 cpp_lure_v2 \
+  --target1 cpp_heavy_baseline \
+  --seeds 17:32 \
+  --jobs 16 \
+  --output-dir ./eval_v2_p0_baseline_p1 \
+  --force
+```
+
+2026-04-27 baseline 覆盖前曾完成一组 32 局 v2-vs-旧-baseline 座位平衡测试：
+
+- 结果目录：`Game1/antgame_ai_cpp/eval_v2_vs_baseline_512_32_20260427/combined_vs_summary.json`
+- v2 `17/32`，baseline `15/32`
+- v2 平均终局血量 `19.5`，baseline `17.875`
+- v2 平均终局金币 `440.75`，旧 baseline `362.375`
+
+覆盖后，`cpp_heavy_baseline` 与 `cpp_lure_v2` 当前应视为同一冻结点，不再用二者互打衡量强度差。
 
 注意：
 

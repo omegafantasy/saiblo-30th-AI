@@ -395,6 +395,15 @@ tbody tr.selected {
   border-color: var(--accent);
 }
 
+.category-tabs {
+  margin: 3px 0 4px;
+}
+
+.category-tabs button {
+  padding: 3px 6px;
+  font-size: 9px;
+}
+
 .ops-grid {
   grid-template-columns: 1fr 1fr;
   gap: 6px;

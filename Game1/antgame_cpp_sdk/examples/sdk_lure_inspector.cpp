@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "../../Ant-Game/game/include/json.hpp"
-#include "antgame_sdk/lure_strategy.hpp"
+#include "antgame_sdk/lure_strategy_v2.hpp"
 #include "antgame_sdk/native_sim.hpp"
 #include "antgame_sdk/sdk.hpp"
 
@@ -39,6 +39,38 @@ struct MoveTraceSummary {
     json moves = json::array();
     double log_probability = 0.0;
 };
+
+std::pair<std::string, std::string> action_category(const ls::CombinedPlan &plan) {
+    if (plan.has_lightning) {
+        if (plan.base_name.rfind("combat_adjacent_recycle_", 0) == 0) {
+            return {"recycle_lightning", "Recycle + Lightning"};
+        }
+        return {"lightning", "Lightning"};
+    }
+
+    const bool has_base = !plan.base_name.empty() && plan.base_name != "none" && plan.base_name != "base_hold";
+    const bool has_lure = !plan.lure_name.empty() && plan.lure_name != "none" && plan.lure_name != "lure_hold";
+
+    if (!has_base && !has_lure && plan.ops.empty() && plan.followup.empty()) {
+        return {"hold", "Hold"};
+    }
+    if (has_base && has_lure) {
+        return {"base_lure", "Base + Lure"};
+    }
+    if (has_base) {
+        if (plan.followup.empty()) {
+            return {"base", "Base"};
+        }
+        return {"base_followup", "Base Followup"};
+    }
+    if (has_lure) {
+        return {"lure", "Lure"};
+    }
+    if (!plan.followup.empty()) {
+        return {"followup", "Followup"};
+    }
+    return {"other", "Other"};
+}
 
 const char *tower_type_name(TowerType type) {
     switch (type) {
@@ -575,9 +607,12 @@ const EvaluatedPlanWithIndex &require_plan_by_key(const std::vector<EvaluatedPla
 
 json evaluated_plan_to_json(const PublicState &state, int player, const EvaluatedPlanWithIndex &item) {
     json out;
+    const auto [category, category_label] = action_category(item.plan);
     out["root_index"] = item.root_index;
     out["key"] = item.plan.key;
     out["name"] = item.plan.name;
+    out["category"] = category;
+    out["category_label"] = category_label;
     out["base_name"] = item.plan.base_name;
     out["lure_name"] = item.plan.lure_name;
     out["lightning_name"] = item.plan.lightning_name;
@@ -865,6 +900,18 @@ json plan_sample_trace(
     bool lightning_bonus_computed = false;
     double lightning_bonus_raw = 0.0;
     double lightning_bonus_score = 0.0;
+    double reactive_penalty = 0.0;
+    double mid_reactive_penalty = 0.0;
+    ls::EvalBreakdown mid_eval;
+    bool has_mid_eval = false;
+    const int mid_horizon = std::max(0, std::min(selected.plan.horizon, v2_lure_config().mid_eval_horizon));
+    auto capture_mid_eval = [&](int simulated_rounds) {
+        if (!has_mid_eval && simulated_rounds >= mid_horizon) {
+            mid_eval = ls::evaluate_terminal(simulator, player);
+            mid_reactive_penalty = reactive_penalty;
+            has_mid_eval = true;
+        }
+    };
 
     int step = 0;
     while (step < selected.plan.horizon && !simulator.terminal) {
@@ -872,8 +919,8 @@ json plan_sample_trace(
         if (step == 0) {
             row["phase"] = "root";
             row["applied_operations_pretty"] = ls::pretty_ops_text(state, player, selected.plan.ops);
-        } else if (step == 1 && !selected.plan.followup.empty()) {
-            const auto followup_ops = ls::resolve_followup_operations(simulator, player, selected.plan.followup);
+        } else if (ls::followup_has_turn(selected.plan.followup, step)) {
+            const auto followup_ops = ls::resolve_followup_operations(simulator, player, selected.plan.followup, step);
             ls::apply_operations(simulator, followup_ops);
             row["phase"] = "followup";
             row["applied_operations_pretty"] = ls::pretty_ops_text(state, player, followup_ops);
@@ -883,6 +930,7 @@ json plan_sample_trace(
             }
         } else {
             const auto reactive_ops = ls::choose_reactive_turn_operations(simulator, player);
+            reactive_penalty += ls::downgrade_penalty_for_ops(simulator, reactive_ops);
             ls::apply_operations(simulator, reactive_ops);
             row["phase"] = "reactive";
             row["applied_operations_pretty"] = ls::pretty_ops_text(state, player, reactive_ops);
@@ -904,6 +952,7 @@ json plan_sample_trace(
         row["trace"] = traced;
         cumulative_log_probability += traced.value("move_log_probability", 0.0);
         rounds.push_back(row);
+        capture_mid_eval(step + 1);
 
         if (selected.plan.has_lightning && !lightning_bonus_computed) {
             rs::FastRng control_rng(seed);
@@ -920,7 +969,16 @@ json plan_sample_trace(
         ++step;
     }
 
-    const ls::EvalBreakdown terminal = ls::evaluate_terminal(simulator, player);
+    const ls::EvalBreakdown final_terminal = ls::evaluate_terminal(simulator, player);
+    if (!has_mid_eval) {
+        mid_eval = final_terminal;
+        mid_reactive_penalty = reactive_penalty;
+    }
+    const ls::EvalBreakdown terminal =
+        ls::combine_eval_breakdowns(mid_eval, final_terminal, v2_lure_config().mid_eval_weight);
+    const double weighted_reactive_penalty =
+        std::max(0.0, std::min(1.0, v2_lure_config().mid_eval_weight)) * mid_reactive_penalty +
+        (1.0 - std::max(0.0, std::min(1.0, v2_lure_config().mid_eval_weight))) * reactive_penalty;
     json out;
     out["seed"] = seed;
     out["sample_index"] = rollout_index;
@@ -933,9 +991,12 @@ json plan_sample_trace(
     out["importance_weight"] = rollout_weight_probability;
     out["rounds"] = rounds;
     out["terminal"] = eval_breakdown_to_json(terminal);
+    out["mid_terminal"] = eval_breakdown_to_json(mid_eval);
+    out["final_terminal"] = eval_breakdown_to_json(final_terminal);
     out["lightning_bonus_raw"] = lightning_bonus_raw;
     out["lightning_bonus_score"] = lightning_bonus_score;
-    out["total_score"] = terminal.total_score + lightning_bonus_score;
+    out["reactive_operation_penalty"] = weighted_reactive_penalty;
+    out["total_score"] = terminal.total_score + lightning_bonus_score - weighted_reactive_penalty;
     out["state_final"] = defense_sim_to_json(simulator);
     return out;
 }
@@ -971,6 +1032,48 @@ json inspect_round_request(const json &request) {
         {"raw_plan_count", root_plans.raw_plan_count},
         {"unique_plan_count", static_cast<int>(root_plans.plans.size())},
     };
+    out["action_category_counts"] = json::object();
+    out["action_categories"] = json::array();
+    std::unordered_map<std::string, std::pair<std::string, int>> category_counts;
+    for (const auto &item : evaluated) {
+        const auto [category, label] = action_category(item.plan);
+        auto &entry = category_counts[category];
+        entry.first = label;
+        ++entry.second;
+    }
+    const std::vector<std::pair<std::string, std::string>> category_order = {
+        {"all", "All"},
+        {"hold", "Hold"},
+        {"base", "Base"},
+        {"base_followup", "Base Followup"},
+        {"lure", "Lure"},
+        {"base_lure", "Base + Lure"},
+        {"lightning", "Lightning"},
+        {"recycle_lightning", "Recycle + Lightning"},
+        {"followup", "Followup"},
+        {"other", "Other"},
+    };
+    out["action_category_counts"]["all"] = static_cast<int>(evaluated.size());
+    out["action_categories"].push_back({
+        {"key", "all"},
+        {"label", "All"},
+        {"count", static_cast<int>(evaluated.size())},
+    });
+    for (const auto &[key, label] : category_order) {
+        if (key == "all") {
+            continue;
+        }
+        const auto found = category_counts.find(key);
+        const int count = found == category_counts.end() ? 0 : found->second.second;
+        out["action_category_counts"][key] = count;
+        if (count > 0) {
+            out["action_categories"].push_back({
+                {"key", key},
+                {"label", label},
+                {"count", count},
+            });
+        }
+    }
     out["root_plan_sources"] = {
         {"base", json::array()},
         {"lure", json::array()},
@@ -1064,7 +1167,7 @@ json inspect_plan_trace_request(const json &request) {
     const int player = request.value("player", 0);
     const std::string plan_key = request.at("plan_key").get<std::string>();
     const int sample_index = request.value("sample_index", 0);
-    const int sample_count = request.value("sample_count", std::max(1, lure_config().rollout_count));
+    const int sample_count = request.value("sample_count", std::max(1, v2_lure_config().rollout_count));
     const int rollout_count = request.value("rollout_count", 0);
 
     ReplayRoundStart start = load_replay_round_start(replay_path, round);

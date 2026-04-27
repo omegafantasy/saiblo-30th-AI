@@ -4,11 +4,12 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "../../Ant-Game/game/include/json.hpp"
-#include "antgame_sdk/lure_strategy.hpp"
+#include "antgame_sdk/lure_strategy_v2.hpp"
 #include "antgame_sdk/native_sim.hpp"
 #include "antgame_sdk/sdk.hpp"
 
@@ -193,14 +194,173 @@ std::uint64_t replay_seed(const json &replay) {
     return replay.at(0).value("seed", 0ULL);
 }
 
+PublicRoundState parse_replay_round_state(const json &raw_state, int round_index) {
+    PublicRoundState state;
+    state.round_index = round_index;
+
+    if (raw_state.contains("towers") && raw_state.at("towers").is_array()) {
+        for (const auto &row : raw_state.at("towers")) {
+            const int type = row.value("type", -1);
+            if (type < 0) {
+                continue;
+            }
+            state.towers.push_back(Tower{
+                row.value("id", -1),
+                row.value("player", -1),
+                row.value("pos", json::object()).value("x", -1),
+                row.value("pos", json::object()).value("y", -1),
+                static_cast<TowerType>(type),
+                row.value("cd", 0),
+                row.value("hp", tower_stats(static_cast<TowerType>(type)).max_hp),
+            });
+        }
+    }
+
+    if (raw_state.contains("ants") && raw_state.at("ants").is_array()) {
+        for (const auto &row : raw_state.at("ants")) {
+            Ant ant{
+                row.value("id", -1),
+                row.value("player", -1),
+                row.value("pos", json::object()).value("x", -1),
+                row.value("pos", json::object()).value("y", -1),
+                row.value("hp", 0),
+                row.value("level", 0),
+                row.value("age", 0),
+                static_cast<AntStatus>(row.value("status", 0)),
+                static_cast<AntBehavior>(row.value("behavior", 0)),
+                static_cast<AntKind>(row.value("kind", 0)),
+            };
+            ant.last_move = row.value("move", -1);
+            state.ants.push_back(ant);
+        }
+    }
+
+    const auto coins = raw_state.value("coins", std::vector<int>{kInitialCoins, kInitialCoins});
+    if (coins.size() >= 2) {
+        state.coins = {coins[0], coins[1]};
+    }
+    const auto camps = raw_state.value("camps", std::vector<int>{kBaseHp, kBaseHp});
+    if (camps.size() >= 2) {
+        state.camps_hp = {camps[0], camps[1]};
+    }
+    const auto speed_lv = raw_state.value("speedLv", std::vector<int>{0, 0});
+    if (speed_lv.size() >= 2) {
+        state.speed_lv = {speed_lv[0], speed_lv[1]};
+    }
+    const auto anthp_lv = raw_state.value("anthpLv", std::vector<int>{0, 0});
+    if (anthp_lv.size() >= 2) {
+        state.anthp_lv = {anthp_lv[0], anthp_lv[1]};
+    }
+
+    if (raw_state.contains("weaponCooldowns") && raw_state.at("weaponCooldowns").is_array()) {
+        int player = 0;
+        for (const auto &row : raw_state.at("weaponCooldowns")) {
+            if (player >= 2 || !row.is_array()) {
+                break;
+            }
+            if (row.size() == 4) {
+                state.weapon_cooldowns[player] = {
+                    0,
+                    row.at(0).get<int>(),
+                    row.at(1).get<int>(),
+                    row.at(2).get<int>(),
+                    row.at(3).get<int>(),
+                };
+            } else if (row.size() >= 5) {
+                state.weapon_cooldowns[player] = {
+                    row.at(0).get<int>(),
+                    row.at(1).get<int>(),
+                    row.at(2).get<int>(),
+                    row.at(3).get<int>(),
+                    row.at(4).get<int>(),
+                };
+            }
+            ++player;
+        }
+    }
+
+    if (raw_state.contains("activeEffects") && raw_state.at("activeEffects").is_array()) {
+        for (const auto &row : raw_state.at("activeEffects")) {
+            state.active_effects.push_back(WeaponEffect{
+                static_cast<SuperWeaponType>(row.value("type", 1)),
+                row.value("player", -1),
+                row.value("x", -1),
+                row.value("y", -1),
+                row.value("duration", 0),
+            });
+        }
+    }
+
+    return state;
+}
+
+void apply_replay_tower_delta(const json &raw_state, std::unordered_map<int, Tower> &towers_by_id) {
+    if (!raw_state.contains("towers") || !raw_state.at("towers").is_array()) {
+        return;
+    }
+    for (const auto &row : raw_state.at("towers")) {
+        const int tower_id = row.value("id", -1);
+        if (tower_id < 0) {
+            continue;
+        }
+        const int type = row.value("type", -1);
+        if (type < 0) {
+            towers_by_id.erase(tower_id);
+            continue;
+        }
+        towers_by_id[tower_id] = Tower{
+            tower_id,
+            row.value("player", -1),
+            row.value("pos", json::object()).value("x", -1),
+            row.value("pos", json::object()).value("y", -1),
+            static_cast<TowerType>(type),
+            row.value("cd", 0),
+            row.value("hp", tower_stats(static_cast<TowerType>(type)).max_hp),
+        };
+    }
+}
+
+std::vector<Tower> snapshot_replay_towers(const std::unordered_map<int, Tower> &towers_by_id) {
+    std::vector<Tower> towers;
+    towers.reserve(towers_by_id.size());
+    for (const auto &item : towers_by_id) {
+        towers.push_back(item.second);
+    }
+    std::sort(towers.begin(), towers.end(), [](const Tower &lhs, const Tower &rhs) {
+        if (lhs.player != rhs.player) {
+            return lhs.player < rhs.player;
+        }
+        return lhs.tower_id < rhs.tower_id;
+    });
+    return towers;
+}
+
+void advance_replay_tower_cooldowns(std::unordered_map<int, Tower> &towers_by_id) {
+    for (auto &item : towers_by_id) {
+        Tower &tower = item.second;
+        if (tower.cooldown > 0) {
+            --tower.cooldown;
+        }
+    }
+}
+
 NativeSimulator load_replay_round(const json &replay, int target_round) {
     NativeSimulator simulator(replay_seed(replay));
     const int limit = std::min(target_round, static_cast<int>(replay.size()));
+    std::unordered_map<int, Tower> towers_by_id;
     for (int round = 0; round < limit; ++round) {
         const auto &record = replay.at(static_cast<std::size_t>(round));
         const auto ops0 = parse_replay_operations(record.value("op0", json::array()));
         const auto ops1 = parse_replay_operations(record.value("op1", json::array()));
         simulator.resolve_turn(ops0, ops1);
+        if (record.contains("round_state") && record.at("round_state").is_object()) {
+            const auto &round_state = record.at("round_state");
+            advance_replay_tower_cooldowns(towers_by_id);
+            apply_replay_tower_delta(round_state, towers_by_id);
+            PublicRoundState public_state = parse_replay_round_state(round_state, round + 1);
+            public_state.towers = snapshot_replay_towers(towers_by_id);
+            simulator.sync_public_round_state(public_state);
+        }
     }
     return simulator;
 }

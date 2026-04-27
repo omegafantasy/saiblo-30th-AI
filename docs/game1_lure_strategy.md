@@ -1,6 +1,6 @@
 # Game1 Lure Strategy
 
-这份文档记录当前 Game1 的高层策略方向，以及当前 baseline 已经落实到代码里的部分。
+这份文档记录当前 Game1 的高层策略方向，以及当前 baseline / v2 已经落实到代码里的部分。
 
 参考 replay：
 
@@ -37,7 +37,7 @@
 
 ## 3. 当前代码已实现的部分
 
-当前 baseline 已经落实了以下几点：
+当前 baseline / v2 已经落实了以下几点：
 
 - `base` 与 `lure` 分离建模
 - lure 结构默认为“最多一个外部 lure”
@@ -47,19 +47,19 @@
 - 若同回合需要拆多座塔，会优先拆当前血量更高的塔
 - 闪电作为独立候选搜索
 - 闪电候选当前只包含单次 `Lightning Storm`，不与 `base/lure` 或降级/拆塔组合
-- 闪电中心使用全合法中心 UCB 搜索，总预算由 `lightning_ucb_total_rollouts` 控制
+- 闪电中心使用棋盘中心半径 5 的 91 个中心做 UCB 搜索，总预算由 `lightning_ucb_total_rollouts` 控制
 - future rollout 不再完整生成主动 `base × lure`，只保留贴身回收这类应急 reactive 动作
 
 ## 4. 当前代码刻意没有实现的部分
 
-当前 baseline 仍然没有把 lure 策略做到最终形态。
+当前 baseline / v2 仍然没有把 lure 策略做到最终形态。
 
 暂未实现：
 
 - 更复杂的同回合 op-list 模板
 - `sell lure -> lightning -> build lure` 这种显式三段链
 - `downgrade/sell -> lightning` 这种闪电前置回收链
-- 主动 `EMP / Deflector / Evasion`
+- 主动 `EMP / Deflector / Evasion`，后续从 v3 开始探索
 - 更强的 lure 路径级控制
 - 基于位置表的 lure 槽位偏好学习
 
@@ -119,6 +119,7 @@
 - 不与 `base/lure` 相乘
 - 不带前置 `downgrade / sell`
 - 每个合法中心是一个 arm，UCB 在所有 arm 上分配 rollout
+- v2 默认合法中心为距棋盘中心 `(9,9)` 不超过 5 的 91 个格子
 
 当前闪电启发主要看：
 
@@ -131,7 +132,7 @@
 
 ## 8. 当前策略约束
 
-当前 baseline 还有几个明确约束：
+当前 baseline / v2 还有几个明确约束：
 
 - 当前只搜索单回合根动作，不再做旧版“两回合计划”
 - 例外：base 主线保留少量显式 followup，用于表达建后升级、`Quick -> Sniper` 与 `Heavy(C1) -> Quick` 转线

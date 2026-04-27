@@ -2515,7 +2515,9 @@ class DefenseSimulator {
         for (int index = 0; index < geometry.valid_count; ++index) {
             const int x = geometry.cell_x[index];
             const int y = geometry.cell_y[index];
-            pheromone[x][y] = std::max(0.0f, 0.97f * pheromone[x][y] + 0.30f);
+            const int scaled = static_cast<int>(pheromone[x][y] * 10000.0f + 0.5f);
+            const int decayed = std::max(0, (97 * scaled + 3000 + 50) / 100);
+            pheromone[x][y] = static_cast<float>(decayed) / 10000.0f;
         }
     }
 

@@ -4,6 +4,7 @@ const appState = {
   replayRound: null,
   actions: null,
   selectedPlanKey: null,
+  actionCategoryFilter: "all",
   rollouts: null,
   selectedSampleIndex: null,
   trace: null,
@@ -378,6 +379,10 @@ function formatPlainNumber(value, digits = 2) {
   return num.toFixed(digits).replace(/\.00$/, "");
 }
 
+function actionCategoryLabel(plan) {
+  return plan?.category_label || plan?.category || "Other";
+}
+
 function sampleWeight(sample) {
   return sample?.normalized_path_weight ?? sample?.importance_weight ?? 0;
 }
@@ -516,6 +521,49 @@ function getSelectedPlan() {
   return appState.actions.plans.find((plan) => plan.key === appState.selectedPlanKey) || null;
 }
 
+function actionCategoryItems() {
+  if (!appState.actions) return [];
+  if (Array.isArray(appState.actions.action_categories) && appState.actions.action_categories.length > 0) {
+    return appState.actions.action_categories;
+  }
+  const counts = new Map();
+  for (const plan of appState.actions.plans || []) {
+    const key = plan.category || "other";
+    const current = counts.get(key) || { key, label: actionCategoryLabel(plan), count: 0 };
+    current.count += 1;
+    counts.set(key, current);
+  }
+  return [{ key: "all", label: "All", count: (appState.actions.plans || []).length }, ...counts.values()];
+}
+
+function filteredActionPlans() {
+  const plans = appState.actions?.plans || [];
+  if (appState.actionCategoryFilter === "all") return plans;
+  return plans.filter((plan) => (plan.category || "other") === appState.actionCategoryFilter);
+}
+
+function resetRolloutSelection() {
+  appState.rollouts = null;
+  appState.selectedSampleIndex = null;
+  appState.trace = null;
+  appState.selectedTraceStep = 0;
+  $("samplesTable").querySelector("tbody").innerHTML = "";
+  dom.samplesMeta.textContent = "";
+  $("movesTable").querySelector("tbody").innerHTML = "";
+  dom.movesMeta.textContent = "";
+  dom.traceMeta.textContent = "";
+  dom.traceEval.textContent = "尚未选择 rollout sample。";
+  dom.traceEval.classList.add("empty-box");
+  dom.traceStepTabs.innerHTML = "";
+  dom.traceStepMeta.textContent = "尚未载入 trace。";
+  dom.traceStepMeta.classList.add("empty-box");
+  dom.traceStartHeader.textContent = "";
+  dom.traceStartMeta.textContent = "尚未载入 trace。";
+  dom.traceStartMeta.classList.add("empty-box");
+  dom.traceStartBoard.innerHTML = "";
+  dom.traceEndBoard.innerHTML = "";
+}
+
 function getSelectedSample() {
   if (!appState.rollouts || appState.selectedSampleIndex == null) return null;
   return appState.rollouts.samples.find((sample) => sample.sample_index === appState.selectedSampleIndex) || null;
@@ -549,6 +597,24 @@ function selectedPlanHighlights() {
     }
   }
   return cells.filter((item) => item.x >= 0 && item.y >= 0);
+}
+
+function filteredLightningHighlights() {
+  if (!appState.actions || !appState.actionCategoryFilter.includes("lightning")) return [];
+  const cells = [];
+  for (const plan of filteredActionPlans()) {
+    for (const op of plan.ops || []) {
+      if (op.type === 21) {
+        cells.push({
+          x: op.arg0,
+          y: op.arg1,
+          kind: "lightning",
+          label: String(plan.rollout_count ?? 0),
+        });
+      }
+    }
+  }
+  return cells;
 }
 
 function getBoardViewState(boardKey, baseBox) {
@@ -919,12 +985,22 @@ function fullPlanPretty(plan) {
   if (!plan) return "none";
   const first = plan.pretty || "HOLD-0";
   const followup = (plan.followup || "").trim();
-  return followup ? `${first} -> ${followup}` : first;
+  return followup ? `${first} | future: ${followup}` : first;
+}
+
+function rootPlanPretty(plan) {
+  if (!plan) return "none";
+  return plan.pretty || "HOLD-0";
+}
+
+function futurePlanPretty(plan) {
+  return (plan?.followup || "").trim() || "-";
 }
 
 function resetStrategyViews() {
   appState.actions = null;
   appState.selectedPlanKey = null;
+  appState.actionCategoryFilter = "all";
   appState.rollouts = null;
   appState.selectedSampleIndex = null;
   appState.trace = null;
@@ -933,6 +1009,7 @@ function resetStrategyViews() {
 
   dom.actionsSummary.textContent = "尚未计算候选行动。";
   dom.actionsSummary.classList.add("empty-box");
+  dom.actionCategoryTabs.innerHTML = "";
   $("actionsTable").querySelector("tbody").innerHTML = "";
 
   dom.samplesMeta.textContent = "";
@@ -997,12 +1074,11 @@ function resolveUnifiedBoardModel() {
     };
   }
   if (appState.boardMode === "root" && appState.actions) {
-    const counts = appState.actions.root_plan_counts;
     return {
       header: `Root state | serial ${appState.actions.serial}`,
       state: appState.actions.start_state,
-      meta: `base ${counts.base_count} | lure ${counts.lure_count} | lightning ${counts.lightning_count} | raw ${counts.raw_plan_count} | unique ${counts.unique_plan_count}`,
-      highlights: [],
+      meta: `${rootCountsText()} | ${actionCountsText()}`,
+      highlights: filteredLightningHighlights(),
     };
   }
   if (appState.replayRound) {
@@ -1078,6 +1154,33 @@ function renderReplayRound() {
   renderUnifiedBoard();
 }
 
+function rootCountsText() {
+  const counts = appState.actions?.root_plan_counts || {};
+  return `source base ${counts.base_count ?? 0} | lure ${counts.lure_count ?? 0} | lightning centers ${
+    counts.lightning_count ?? 0
+  } | generated ${counts.raw_plan_count ?? 0} | unique ${counts.unique_plan_count ?? 0}`;
+}
+
+function actionCountsText() {
+  return actionCategoryItems()
+    .map((item) => `${item.label} ${item.count}`)
+    .join(" | ");
+}
+
+function renderActionCategoryTabs() {
+  dom.actionCategoryTabs.innerHTML = "";
+  if (!appState.actions) return;
+  for (const item of actionCategoryItems()) {
+    const button = document.createElement("button");
+    button.textContent = `${item.label} ${item.count}`;
+    if (item.key === appState.actionCategoryFilter) button.classList.add("active");
+    button.addEventListener("click", () => {
+      void setActionCategoryFilter(item.key);
+    });
+    dom.actionCategoryTabs.appendChild(button);
+  }
+}
+
 function renderRootSummary() {
   if (!appState.actions) {
     dom.replayRootSummary.textContent = "尚未计算 root 候选。";
@@ -1092,7 +1195,7 @@ function renderRootSummary() {
   dom.replayRootSummary.innerHTML = `
     best <code>${fullPlanPretty(best)}</code> = ${formatNumber(best?.mean_score)} |
     selected <code>${fullPlanPretty(selected)}</code> |
-    board mode <code>${appState.boardMode}</code>
+    filter <code>${appState.actionCategoryFilter}</code>
   `;
 
   const sources = appState.actions.root_plan_sources || {};
@@ -1113,25 +1216,30 @@ function renderActions() {
   const tbody = $("actionsTable").querySelector("tbody");
   tbody.innerHTML = "";
   if (!appState.actions) {
+    dom.actionCategoryTabs.innerHTML = "";
     renderRootSummary();
     renderUnifiedBoard();
     return;
   }
   dom.strategyMeta.textContent = `reconstructed root state | serial ${appState.actions.serial}`;
-  const counts = appState.actions.root_plan_counts;
+  const visiblePlans = filteredActionPlans();
   dom.actionsSummary.classList.remove("empty-box");
-  dom.actionsSummary.textContent =
-    `base ${counts.base_count} | lure ${counts.lure_count} | lightning ${counts.lightning_count} | raw ${counts.raw_plan_count} | unique ${counts.unique_plan_count}`;
+  dom.actionsSummary.textContent = `${rootCountsText()} | shown ${visiblePlans.length}/${appState.actions.plans.length}`;
+  renderActionCategoryTabs();
 
-  appState.actions.plans.forEach((plan, index) => {
+  visiblePlans.forEach((plan) => {
     const row = document.createElement("tr");
     if (plan.key === appState.selectedPlanKey) row.classList.add("selected");
     const threat = (plan.mean_rollout.terminal.worker_threat_raw || 0) + (plan.mean_rollout.terminal.combat_threat_raw || 0);
+    const globalRank = (appState.actions.plans || []).findIndex((item) => item.key === plan.key) + 1;
     row.innerHTML = `
-      <td>${index + 1}</td>
-      <td>${fullPlanPretty(plan)}</td>
+      <td>${globalRank}</td>
+      <td>${actionCategoryLabel(plan)}</td>
+      <td>${rootPlanPretty(plan)}</td>
+      <td>${futurePlanPretty(plan)}</td>
+      <td>${plan.rollout_count ?? "-"}</td>
       <td>${formatPlainNumber(plan.mean_rollout_score, 2)}</td>
-      <td>${formatNumber(plan.heuristic)}</td>
+      <td>${formatPlainNumber(plan.heuristic, 2)}</td>
       <td>${formatNumber(plan.mean_rollout.terminal.base_hp_raw)}</td>
       <td>${formatNumber(plan.mean_rollout.terminal.money_raw)}</td>
       <td>${formatNumber(threat)}</td>
@@ -1323,6 +1431,7 @@ async function computeActions() {
       player: Number(dom.playerSelect.value || 0),
       rollout_count: STRATEGY_ROLLOUT_COUNT,
     });
+    appState.actionCategoryFilter = "all";
     appState.selectedPlanKey = appState.actions.plans[0]?.key || null;
     appState.boardMode = "root";
     renderActions();
@@ -1335,9 +1444,25 @@ async function computeActions() {
   }
 }
 
+async function setActionCategoryFilter(category) {
+  if (!appState.actions) return;
+  appState.actionCategoryFilter = category;
+  appState.boardMode = category.includes("lightning") ? "root" : appState.boardMode;
+  const visiblePlans = filteredActionPlans();
+  if (!visiblePlans.some((plan) => plan.key === appState.selectedPlanKey)) {
+    appState.selectedPlanKey = visiblePlans[0]?.key || null;
+    resetRolloutSelection();
+  }
+  renderActions();
+  if (appState.selectedPlanKey) {
+    await loadRollouts();
+  }
+}
+
 async function selectPlan(planKey) {
   appState.selectedPlanKey = planKey;
   appState.boardMode = "action";
+  resetRolloutSelection();
   renderActions();
   await loadRollouts();
 }
@@ -1421,6 +1546,7 @@ async function init() {
     rootSourceSummary: $("rootSourceSummary"),
     strategyMeta: $("strategyMeta"),
     actionsSummary: $("actionsSummary"),
+    actionCategoryTabs: $("actionCategoryTabs"),
     samplesMeta: $("samplesMeta"),
     traceMeta: $("traceMeta"),
     traceEval: $("traceEval"),

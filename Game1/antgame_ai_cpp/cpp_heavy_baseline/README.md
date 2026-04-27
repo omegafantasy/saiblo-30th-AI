@@ -1,8 +1,8 @@
 # cpp_heavy_baseline
 
-这是当前保留的 Game1 C++ AI 入口。
+这是当前冻结的 Game1 C++ baseline AI 入口。
 
-目录名沿用历史命名，但内部已经不是旧版 `heavy` 基线。
+目录名沿用历史命名，但内部已经不是旧版 `heavy` 基线。2026-04-27 已用当时的 `cpp_lure_v2` 完全覆盖本 baseline；后续策略与参数迭代应新开版本，不要直接改这个 baseline。
 
 ## 1. 当前入口
 
@@ -10,18 +10,19 @@
   - 比赛协议入口
   - 维护 `PublicState`
   - 维护 `NativeSimulator`
-  - 调用 `antgame_sdk::decide_lure_strategy()`
+  - 通过 `lure_strategy_baseline.hpp` 调用冻结版 `antgame_sdk::decide_lure_strategy()`
 
 ## 2. 当前真实依赖
 
-- `../../antgame_cpp_sdk/include/antgame_sdk/lure_strategy.hpp`
-- `../../antgame_cpp_sdk/include/antgame_sdk/lure_strategy_params.hpp`
+- `../../antgame_cpp_sdk/include/antgame_sdk/lure_strategy_baseline.hpp`
+- `../../antgame_cpp_sdk/include/antgame_sdk/lure_strategy_baseline_params.hpp`
+  - baseline 独立参数，类型/访问函数为 `BaselineLureStrategyTuning` / `baseline_lure_config()`
 - `../../antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`
 - `../../antgame_cpp_sdk/include/antgame_sdk/position_slots.hpp`
 
 ## 3. 当前策略口径
 
-当前 baseline 的关键点：
+冻结 baseline 的关键点与当前 v2 一致：
 
 - root 动作拆成 `base`、`lure`、`lightning`
 - 常规候选是 `hold + base + lure + recycle_base*lure`
@@ -29,8 +30,7 @@
   - 只有纯回收类 `base` 动作可以与 `lure` 组合
   - 全 hold 只使用一个统一 `hold_bonus`
 - 闪电是独立候选，目前只考虑单闪电
-  - 遍历所有合法中心
-  - 排除 `distance_to_boundary < lightning_min_boundary_distance` 的位置
+  - 遍历棋盘中心半径 5 的 91 个中心
   - 所有中心共享 UCB rollout 总预算
   - 不带前置降级/拆塔，也不与 `base/lure` 组合
 - rollout 未来回合只保留 reactive 回收：
@@ -76,11 +76,17 @@
 - 当前 lure 建塔位置不做额外启发式打分
   - 当前 lure 已开放除 `C / L / R / LL / RR` 系列之外的旧版位置槽位
 
-2026-04-27 全 log 自战口径：
+2026-04-27 全 log baseline 自战口径：
 
 - 16 组 256 回合全部打满，P0/P1 平均终局血量 `26.5 / 28.125`
 - 16 组 512 回合平均 `503.8125` 回合，胜负为 P0 `9`、P1 `6`、未归零到上限 `1`
 - 32 个 fast/native 对拍 case 均执行成功，终点总评分平均绝对差约 `12.04`
+
+2026-04-27 冻结说明：
+
+- 本 baseline 已被当前 v2 完全覆盖。
+- `lure_strategy_baseline.hpp` / `lure_strategy_baseline_params.hpp` 与 v2 语义一致，仅保留独立参数符号。
+- 后续进攻性超武探索从 v3 开始，不再直接改 baseline。
 
 ## 4. Build
 

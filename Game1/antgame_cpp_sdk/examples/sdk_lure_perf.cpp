@@ -9,7 +9,7 @@
 
 #include "json.hpp"
 
-#include "antgame_sdk/lure_strategy.hpp"
+#include "antgame_sdk/lure_strategy_v2.hpp"
 #include "antgame_sdk/native_sim.hpp"
 #include "antgame_sdk/random_search_baseline.hpp"
 #include "antgame_sdk/sdk.hpp"
@@ -264,8 +264,8 @@ int main(int argc, char **argv) {
     rs::DefenseSimulatorProfile noop_profile_sum;
 
     std::cout << std::fixed << std::setprecision(2);
-    std::cout << "config horizon=" << antgame::sdk::lure_config().search_horizon
-              << " rollouts=" << antgame::sdk::lure_config().rollout_count
+    std::cout << "config horizon=" << antgame::sdk::v2_lure_config().long_eval_horizon
+              << " rollouts=" << antgame::sdk::v2_lure_config().rollout_count
               << " rounds=" << rounds.size() << '\n';
 
     for (int round : rounds) {
@@ -307,7 +307,7 @@ int main(int argc, char **argv) {
                 local_root,
                 player,
                 static_cast<std::uint64_t>(iter),
-                antgame::sdk::lure_config().rollout_count,
+                antgame::sdk::v2_lure_config().rollout_count,
                 local_plans);
             if (iter == 0) {
                 root_plans = local_plans;
@@ -332,7 +332,7 @@ int main(int argc, char **argv) {
                 local_root,
                 player,
                 static_cast<std::uint64_t>(iter),
-                antgame::sdk::lure_config().rollout_count,
+                antgame::sdk::v2_lure_config().rollout_count,
                 normal_plans);
             static_cast<void>(local_eval);
         });
@@ -348,7 +348,7 @@ int main(int argc, char **argv) {
                     local_root,
                     player,
                     static_cast<std::uint64_t>(iter),
-                    antgame::sdk::lure_config().rollout_count,
+                    antgame::sdk::v2_lure_config().rollout_count,
                     lightning_plans);
                 static_cast<void>(local_eval);
             });
@@ -374,7 +374,7 @@ int main(int argc, char **argv) {
             rs::DefenseSimulator sim = defense_root.clone();
             sim.profile = &noop_profile;
             rs::FastRng rng(rs::mix_seed(base_state.seed, static_cast<std::uint64_t>(0x2f123bb5U + iter)));
-            for (int step = 0; step < antgame::sdk::lure_config().search_horizon && !sim.terminal; ++step) {
+            for (int step = 0; step < antgame::sdk::v2_lure_config().long_eval_horizon && !sim.terminal; ++step) {
                 sim.simulate_round(rng);
             }
         });
@@ -382,7 +382,7 @@ int main(int argc, char **argv) {
         double native_time = average_time_us(noop_repeats, [&](int iter) {
             NativeSimulator native = native_root.clone();
             native.reseed_future(rs::mix_seed(base_state.seed, static_cast<std::uint64_t>(0x3f123bb5U + iter)));
-            for (int step = 0; step < antgame::sdk::lure_config().search_horizon && !native.terminal(); ++step) {
+            for (int step = 0; step < antgame::sdk::v2_lure_config().long_eval_horizon && !native.terminal(); ++step) {
                 native.advance_round_without_base_spawns();
             }
         });

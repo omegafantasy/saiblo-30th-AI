@@ -7,7 +7,7 @@
 - Python 本地 web server
   - 负责静态页面、地图几何、replay 读取、API 转发
 - C++ inspector
-  - 负责按当前 `lure_strategy` 在线复算候选行动
+  - 负责按当前默认 v2 `lure_strategy` 在线复算候选行动
   - 负责导出某个候选下的 rollout 样本与单样本 trace
   - 与当前 `DefenseSimulator`、root plan 生成、首回合重点蚂蚁采样逻辑保持同步
 
@@ -42,6 +42,9 @@ http://127.0.0.1:8765
    - 再下方显示 replay 实际操作、root 摘要，以及 `base / lure / lightning` 独立候选全集
 2. 中栏 `Actions + Rollout Samples`
    - `Actions` 展示当前策略在线复算得到的全部候选
+   - `Actions` 上方的分类按钮按最终 evaluated action 过滤，而不是按原始源候选过滤
+   - 当前分类包括 `Hold / Base / Base Followup / Lure / Base + Lure / Lightning / Recycle + Lightning`
+   - 表格将本回合操作和 future followup 分列显示，多回合计划不会在一回合内瞬间执行
    - 点击某个 action 后，在线计算该候选的 rollout 样本，默认数量跟随当前 `rollout_count`
    - `Actions` 表中的 `Total` 以普通数值显示，不使用科学计数法
    - `Rollout Samples` 中的 `Weight` 显示的是当前策略真正用于加权的样本权重
@@ -51,7 +54,7 @@ http://127.0.0.1:8765
 3. 右栏 `Trace`
    - 上半部分固定为 `Trace Start`
    - 下半部分固定为 `Trace End`
-   - 选择某个 rollout sample 后，展示未来 6 回合 trace
+   - 选择某个 rollout sample 后，展示当前策略 horizon 的 trace
    - 右下同时显示该步蚂蚁动作表、候选方向概率和最终估值分项
 
 ## 页面能力
@@ -72,7 +75,8 @@ http://127.0.0.1:8765
 - 每个 rollout sample 的总分、归一化权重、终点核心分项
 - 每步 trace 的起始/终止盘面、操作、蚂蚁动作分配、候选方向概率、最终估值分项
 - 多步 base followup 会在 trace 中逐未来回合显示，例如 `sell -> build -> upgrade`
-- 闪电候选会显示当前策略实际使用的合法中心全集；当前策略使用 UCB 在这些中心间分配 rollout，不再使用“10 个簇中心 + 邻格重搜”
+- 闪电候选会显示当前策略实际使用的合法中心全集；v2 默认使用棋盘中心半径 5 的 91 个中心，并用 UCB 在这些中心间分配 rollout
+- 当前默认 v2 trace 会在第 6 回合和第 10 回合分别估值，并按 `mid_eval_weight` 合成最终 rollout 分数
 
 ## 交互
 
@@ -98,7 +102,7 @@ http://127.0.0.1:8765
   - 用于看真实对局记录
 - `Strategy Root State` / `Sample Trace`
   - 来自当前 C++ 策略在线复算
-  - 使用当前的 `lure_strategy` 与 `DefenseSimulator`
+  - 使用当前默认 v2 `lure_strategy` 与 `DefenseSimulator`
   - 这是策略真正拿来打分、做 rollout 的模拟状态
 
 因此两者不一定完全一一对应，尤其是：
@@ -116,6 +120,12 @@ http://127.0.0.1:8765
 - frontend: [index.html](/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/simviz/static/index.html)
 - frontend js: [app.js](/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/simviz/static/app.js)
 - C++ inspector: [sdk_lure_inspector.cpp](/root/autodl-tmp/saiblo_iter/Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp)
+
+## 版本口径
+
+- `cpp_heavy_baseline` 使用冻结的 `lure_strategy_baseline.hpp`
+- `cpp_lure_v2` 使用 `lure_strategy_v2.hpp`
+- simviz / inspector 默认跟随 v2，用于后续迭代分析
 
 ## 现阶段限制
 
