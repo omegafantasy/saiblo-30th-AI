@@ -4,8 +4,10 @@ DEPFLAGS := -MMD -MP
 AR ?= ar
 
 BUILD_DIR := build
+V3_AI_INCLUDE_DIR := ../antgame_ai_cpp/cpp_lure_v3/include
 LIB := $(BUILD_DIR)/libantgame_cpp_sdk.a
 SDK_HEADERS := $(wildcard include/antgame_sdk/*.hpp)
+V3_HEADERS := $(wildcard $(V3_AI_INCLUDE_DIR)/antgame_ai/*.hpp)
 GAME_SOURCES := $(filter-out ../Ant-Game/game/src/main.cpp,$(wildcard ../Ant-Game/game/src/*.cpp))
 GAME_OBJECTS := $(patsubst ../Ant-Game/game/src/%.cpp,$(BUILD_DIR)/game/%.o,$(GAME_SOURCES))
 SDK_OBJECTS := $(BUILD_DIR)/native_sim.o
@@ -57,9 +59,9 @@ $(ROLLOUT_PROBE_BIN): examples/sdk_rollout_probe.cpp $(SDK_HEADERS) $(LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
 
-$(LURE_INSPECTOR_BIN): examples/sdk_lure_inspector.cpp $(SDK_HEADERS) $(LIB)
+$(LURE_INSPECTOR_BIN): examples/sdk_lure_inspector.cpp $(SDK_HEADERS) $(V3_HEADERS) $(LIB)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
+	$(CXX) $(CXXFLAGS) -I$(V3_AI_INCLUDE_DIR) $< $(LIB) -o $@
 
 $(LURE_PERF_BIN): examples/sdk_lure_perf.cpp $(SDK_HEADERS) $(LIB)
 	@mkdir -p $(dir $@)

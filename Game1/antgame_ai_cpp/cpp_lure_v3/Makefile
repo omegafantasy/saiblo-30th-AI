@@ -1,18 +1,19 @@
 CXX ?= g++
-CXXFLAGS ?= -std=c++17 -O3 -DNDEBUG -Wall -Wextra -I../../antgame_cpp_sdk/include -I../../Ant-Game/game/include
+CXXFLAGS ?= -std=c++17 -O3 -DNDEBUG -Wall -Wextra -Iinclude -I../../antgame_cpp_sdk/include -I../../Ant-Game/game/include
 AR ?= ar
 
 BUILD_DIR := build
 CPP_SDK_DIR := ../../antgame_cpp_sdk
 LIB := $(CPP_SDK_DIR)/build/libantgame_cpp_sdk.a
 SDK_HEADERS := $(wildcard $(CPP_SDK_DIR)/include/antgame_sdk/*.hpp)
+V3_HEADERS := $(wildcard include/antgame_ai/*.hpp)
 BIN := $(BUILD_DIR)/ai_cpp_lure_v3
 
 .PHONY: all clean
 
 all: $(BIN)
 
-$(BIN): ai_cpp_lure_v3.cpp $(SDK_HEADERS) $(LIB)
+$(BIN): ai_cpp_lure_v3.cpp $(V3_HEADERS) $(SDK_HEADERS) $(LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $< $(LIB) -o $@
 

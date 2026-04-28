@@ -1,7 +1,7 @@
 #include <iostream>
 #include <vector>
 
-#include "antgame_sdk/lure_strategy_v3.hpp"
+#include "antgame_ai/lure_strategy_v3.hpp"
 #include "antgame_sdk/native_sim.hpp"
 #include "antgame_sdk/sdk.hpp"
 

@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "../../Ant-Game/game/include/json.hpp"
-#include "antgame_sdk/lure_strategy_v2.hpp"
+#include "antgame_ai/lure_strategy_v3.hpp"
 #include "antgame_sdk/native_sim.hpp"
 #include "antgame_sdk/sdk.hpp"
 
@@ -70,6 +70,58 @@ std::pair<std::string, std::string> action_category(const ls::CombinedPlan &plan
         return {"followup", "Followup"};
     }
     return {"other", "Other"};
+}
+
+json v3_tuning_to_json() {
+    const auto &tuning = v3_lure_config();
+    return {
+        {"rollout_count", tuning.rollout_count},
+        {"action_ucb_batch_rollouts", tuning.action_ucb_batch_rollouts},
+        {"action_ucb_exploration", tuning.action_ucb_exploration},
+        {"lightning_ucb_total_rollouts", tuning.lightning_ucb_total_rollouts},
+        {"lightning_ucb_batch_rollouts", tuning.lightning_ucb_batch_rollouts},
+        {"lightning_ucb_exploration", tuning.lightning_ucb_exploration},
+        {"rollout_forced_ant_limit", tuning.rollout_forced_ant_limit},
+        {"mid_eval_horizon", tuning.mid_eval_horizon},
+        {"long_eval_horizon", tuning.long_eval_horizon},
+        {"mid_eval_weight", tuning.mid_eval_weight},
+        {"lightning_horizon", tuning.lightning_horizon},
+        {"lightning_center_radius", tuning.lightning_center_radius},
+        {"forced_lure_sell_distance", tuning.forced_lure_sell_distance},
+        {"max_non_lure_towers", tuning.max_non_lure_towers},
+        {"c1_quick_transition_coin_threshold", tuning.c1_quick_transition_coin_threshold},
+        {"hold_bonus", tuning.hold_bonus},
+        {"c1_build_bonus", tuning.c1_build_bonus},
+        {"c1_heavy_bonus", tuning.c1_heavy_bonus},
+        {"c1_heavy_side_trans_bonus", tuning.c1_heavy_side_trans_bonus},
+        {"c1_quick_trans_bonus", tuning.c1_quick_trans_bonus},
+        {"c1_sniper_trans_bonus", tuning.c1_sniper_trans_bonus},
+        {"downgrade_refund_penalty_scale", tuning.downgrade_refund_penalty_scale},
+        {"sniper_downgrade_penalty", tuning.sniper_downgrade_penalty},
+        {"base_hp_weight", tuning.base_hp_weight},
+        {"tower_value_weight", tuning.tower_value_weight},
+        {"money_weight", tuning.money_weight},
+        {"worker_threat_unit", tuning.worker_threat_unit},
+        {"combat_base_threat_unit", tuning.combat_base_threat_unit},
+        {"combat_anchor_threat_coin_ratio", tuning.combat_anchor_threat_coin_ratio},
+        {"combat_anchor_ring_distance", tuning.combat_anchor_ring_distance},
+        {"combat_anchor_ring1_bonus_ratio", tuning.combat_anchor_ring1_bonus_ratio},
+        {"randomized_threat_scale", tuning.randomized_threat_scale},
+        {"bewitched_threat_scale", tuning.bewitched_threat_scale},
+        {"lightning_enemy_super_bonus", tuning.lightning_enemy_super_bonus},
+        {"lightning_no_enemy_super_penalty", tuning.lightning_no_enemy_super_penalty},
+        {"lightning_combat_threat_ratio", tuning.lightning_combat_threat_ratio},
+        {"lightning_shield_break_bonus", tuning.lightning_shield_break_bonus},
+        {"lightning_damage_bonus_per_hp", tuning.lightning_damage_bonus_per_hp},
+        {"lightning_kill_bonus", tuning.lightning_kill_bonus},
+        {"lightning_tower_value_ratio", tuning.lightning_tower_value_ratio},
+        {"offensive_evasion_enabled", tuning.offensive_evasion_enabled},
+        {"offensive_evasion_min_enemy_lightning_cd", tuning.offensive_evasion_min_enemy_lightning_cd},
+        {"offensive_evasion_min_post_action_coins", tuning.offensive_evasion_min_post_action_coins},
+        {"offensive_evasion_min_worker_count", tuning.offensive_evasion_min_worker_count},
+        {"offensive_emp_enabled", tuning.offensive_emp_enabled},
+        {"offensive_emp_combat_to_top_tower_distance", tuning.offensive_emp_combat_to_top_tower_distance},
+    };
 }
 
 const char *tower_type_name(TowerType type) {
@@ -346,6 +398,20 @@ json rollout_eval_to_json(const ls::RolloutEvaluation &value) {
     return out;
 }
 
+json forced_sample_to_json(const ls::RolloutForcedSample &sample) {
+    json out;
+    out["probability"] = sample.probability;
+    out["forced_moves"] = json::array();
+    for (int index = 0; index < sample.forced_moves.size(); ++index) {
+        const auto &move = sample.forced_moves[index];
+        out["forced_moves"].push_back({
+            {"ant_id", move.ant_id},
+            {"direction", move.direction},
+        });
+    }
+    return out;
+}
+
 Operation parse_replay_operation(const json &raw) {
     const int type = raw.value("type", -1);
     const int id = raw.value("id", -1);
@@ -588,12 +654,13 @@ std::vector<EvaluatedPlanWithIndex> evaluate_root_plans(
     const NativeSimulator *native,
     int player,
     std::uint64_t serial,
-    int rollout_count) {
+    int rollout_count,
+    ls::UcbEvaluationTrace *trace = nullptr) {
     rs::DefenseSimulator defense_root = rs::make_defense_simulator(state, native, player);
     defense_root.ignore_enemy_spawns = true;
 
     const ls::RootPlanSet root_plans = ls::generate_root_plans(state, &defense_root, player);
-    return ls::evaluate_root_plans(state, defense_root, player, serial, rollout_count, root_plans);
+    return ls::evaluate_root_plans(state, defense_root, player, serial, rollout_count, root_plans, trace);
 }
 
 const EvaluatedPlanWithIndex &require_plan_by_key(const std::vector<EvaluatedPlanWithIndex> &plans, const std::string &key) {
@@ -605,7 +672,60 @@ const EvaluatedPlanWithIndex &require_plan_by_key(const std::vector<EvaluatedPla
     throw std::runtime_error("plan key not found: " + key);
 }
 
-json evaluated_plan_to_json(const PublicState &state, int player, const EvaluatedPlanWithIndex &item) {
+std::vector<const ls::UcbRolloutRecord *> ucb_samples_for(
+    const ls::UcbEvaluationTrace &trace,
+    std::size_t root_index) {
+    std::vector<const ls::UcbRolloutRecord *> out;
+    for (const auto &sample : trace.samples) {
+        if (sample.root_index == root_index) {
+            out.push_back(&sample);
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const auto *lhs, const auto *rhs) {
+        return lhs->arm_sample_index < rhs->arm_sample_index;
+    });
+    return out;
+}
+
+std::vector<const ls::UcbBatchRecord *> ucb_batches_for(
+    const ls::UcbEvaluationTrace &trace,
+    std::size_t root_index) {
+    std::vector<const ls::UcbBatchRecord *> out;
+    for (const auto &batch : trace.batches) {
+        if (batch.root_index == root_index) {
+            out.push_back(&batch);
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const auto *lhs, const auto *rhs) {
+        return lhs->batch_index < rhs->batch_index;
+    });
+    return out;
+}
+
+const ls::UcbRolloutRecord *ucb_sample_for(
+    const ls::UcbEvaluationTrace &trace,
+    std::size_t root_index,
+    int sample_index) {
+    const ls::UcbRolloutRecord *fallback = nullptr;
+    for (const auto &sample : trace.samples) {
+        if (sample.root_index != root_index) {
+            continue;
+        }
+        if (fallback == nullptr || sample.arm_sample_index < fallback->arm_sample_index) {
+            fallback = &sample;
+        }
+        if (sample.arm_sample_index == sample_index) {
+            return &sample;
+        }
+    }
+    return fallback;
+}
+
+json evaluated_plan_to_json(
+    const PublicState &state,
+    int player,
+    const EvaluatedPlanWithIndex &item,
+    const ls::UcbEvaluationTrace *trace = nullptr) {
     json out;
     const auto [category, category_label] = action_category(item.plan);
     out["root_index"] = item.root_index;
@@ -635,6 +755,17 @@ json evaluated_plan_to_json(const PublicState &state, int player, const Evaluate
         out["ops"].push_back(operation_to_json(operation));
     }
     out["mean_rollout"] = rollout_eval_to_json(item.mean_rollout);
+    if (trace != nullptr) {
+        const auto samples = ucb_samples_for(*trace, item.root_index);
+        const auto batches = ucb_batches_for(*trace, item.root_index);
+        double elapsed_us = 0.0;
+        for (const auto *batch : batches) {
+            elapsed_us += batch->elapsed_us;
+        }
+        out["ucb_elapsed_us"] = elapsed_us;
+        out["ucb_batch_count"] = static_cast<int>(batches.size());
+        out["ucb_sample_count"] = static_cast<int>(samples.size());
+    }
     return out;
 }
 
@@ -857,7 +988,8 @@ json plan_sample_trace(
     std::uint64_t serial,
     const EvaluatedPlanWithIndex &selected,
     int rollout_index,
-    int sample_count) {
+    int sample_count,
+    const ls::UcbRolloutRecord *ucb_sample = nullptr) {
     rs::DefenseSimulator root = rs::make_defense_simulator(state, native, player);
     root.ignore_enemy_spawns = true;
 
@@ -865,19 +997,32 @@ json plan_sample_trace(
     if (!selected.plan.ops.empty() && !ls::apply_operations(forced_root, selected.plan.ops)) {
         throw std::runtime_error("failed to apply selected plan for rollout schedule");
     }
-    const int effective_sample_count = std::max(1, sample_count);
-    const ls::RolloutForcedPlan forced_plan = ls::build_first_round_rollout_plan(
-        forced_root,
-        player,
-        effective_sample_count,
-        ls::plan_rollout_assignment_seed(state.seed, serial, selected.root_index, selected.plan.horizon, effective_sample_count));
+    const int effective_sample_count = ucb_sample != nullptr
+                                           ? std::max(1, ucb_sample->batch_size)
+                                           : std::max(1, sample_count);
+    const std::uint64_t assignment_seed = ucb_sample != nullptr
+                                              ? ucb_sample->assignment_seed
+                                              : ls::plan_rollout_assignment_seed(
+                                                    state.seed,
+                                                    serial,
+                                                    selected.root_index,
+                                                    selected.plan.horizon,
+                                                    effective_sample_count);
+    ls::RolloutForcedPlan forced_plan;
+    if (ucb_sample != nullptr) {
+        forced_plan.samples.push_back(ucb_sample->forced_sample);
+        forced_plan.selected_ant_count = ucb_sample->forced_sample.forced_moves.size();
+    } else {
+        forced_plan = ls::build_first_round_rollout_plan(forced_root, player, effective_sample_count, assignment_seed);
+    }
+    const int forced_rollout_index = ucb_sample != nullptr ? 0 : rollout_index;
     const auto *first_round_forced_moves =
-        rollout_index >= 0 && rollout_index < static_cast<int>(forced_plan.samples.size())
-            ? &forced_plan.samples[static_cast<std::size_t>(rollout_index)].forced_moves
+        forced_rollout_index >= 0 && forced_rollout_index < static_cast<int>(forced_plan.samples.size())
+            ? &forced_plan.samples[static_cast<std::size_t>(forced_rollout_index)].forced_moves
             : nullptr;
     const double rollout_weight_probability =
-        rollout_index >= 0 && rollout_index < static_cast<int>(forced_plan.samples.size())
-            ? forced_plan.samples[static_cast<std::size_t>(rollout_index)].probability
+        forced_rollout_index >= 0 && forced_rollout_index < static_cast<int>(forced_plan.samples.size())
+            ? forced_plan.samples[static_cast<std::size_t>(forced_rollout_index)].probability
             : 1.0;
 
     rs::DefenseSimulator simulator = root.clone();
@@ -891,8 +1036,9 @@ json plan_sample_trace(
         }
     }
 
-    const std::uint64_t seed =
-        plan_rollout_seed(state, serial, selected.root_index, rollout_index, selected.plan.horizon);
+    const std::uint64_t seed = ucb_sample != nullptr
+                                   ? ucb_sample->rollout_seed
+                                   : plan_rollout_seed(state, serial, selected.root_index, rollout_index, selected.plan.horizon);
     rs::FastRng rng(seed);
     json rounds = json::array();
 
@@ -904,7 +1050,7 @@ json plan_sample_trace(
     double mid_reactive_penalty = 0.0;
     ls::EvalBreakdown mid_eval;
     bool has_mid_eval = false;
-    const int mid_horizon = std::max(0, std::min(selected.plan.horizon, v2_lure_config().mid_eval_horizon));
+    const int mid_horizon = std::max(0, std::min(selected.plan.horizon, v3_lure_config().mid_eval_horizon));
     auto capture_mid_eval = [&](int simulated_rounds) {
         if (!has_mid_eval && simulated_rounds >= mid_horizon) {
             mid_eval = ls::evaluate_terminal(simulator, player);
@@ -975,14 +1121,23 @@ json plan_sample_trace(
         mid_reactive_penalty = reactive_penalty;
     }
     const ls::EvalBreakdown terminal =
-        ls::combine_eval_breakdowns(mid_eval, final_terminal, v2_lure_config().mid_eval_weight);
+        ls::combine_eval_breakdowns(mid_eval, final_terminal, v3_lure_config().mid_eval_weight);
     const double weighted_reactive_penalty =
-        std::max(0.0, std::min(1.0, v2_lure_config().mid_eval_weight)) * mid_reactive_penalty +
-        (1.0 - std::max(0.0, std::min(1.0, v2_lure_config().mid_eval_weight))) * reactive_penalty;
+        std::max(0.0, std::min(1.0, v3_lure_config().mid_eval_weight)) * mid_reactive_penalty +
+        (1.0 - std::max(0.0, std::min(1.0, v3_lure_config().mid_eval_weight))) * reactive_penalty;
     json out;
     out["seed"] = seed;
     out["sample_index"] = rollout_index;
     out["sample_count"] = effective_sample_count;
+    out["ucb_actual_sample"] = ucb_sample != nullptr;
+    if (ucb_sample != nullptr) {
+        out["global_sample_index"] = ucb_sample->global_sample_index;
+        out["batch_index"] = ucb_sample->batch_index;
+        out["batch_local_index"] = ucb_sample->batch_local_index;
+        out["batch_size"] = ucb_sample->batch_size;
+        out["assignment_serial"] = ucb_sample->assignment_serial;
+        out["assignment_seed"] = ucb_sample->assignment_seed;
+    }
     out["path_log_probability"] = cumulative_log_probability;
     out["path_probability"] = std::exp(std::max(-700.0, cumulative_log_probability));
     out["rollout_weight_probability"] = rollout_weight_probability;
@@ -1009,7 +1164,8 @@ json inspect_round_request(const json &request) {
 
     ReplayRoundStart start = load_replay_round_start(replay_path, round);
     const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
-    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count);
+    ls::UcbEvaluationTrace ucb_trace;
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count, &ucb_trace);
 
     rs::DefenseSimulator defense_root = rs::make_defense_simulator(start.public_state, &start.native, player);
     defense_root.ignore_enemy_spawns = true;
@@ -1022,6 +1178,12 @@ json inspect_round_request(const json &request) {
     out["player"] = player;
     out["seed"] = start.seed;
     out["serial"] = serial;
+    out["strategy_params"] = v3_tuning_to_json();
+    out["ucb"] = {
+        {"target_total", ucb_trace.target_total},
+        {"total_samples", ucb_trace.total_samples},
+        {"total_elapsed_us", ucb_trace.total_elapsed_us},
+    };
     out["start_state"] = public_round_state_to_json(start.native.to_public_round_state());
     out["defense_start_state"] = defense_sim_to_json(defense_root);
     out["root_plan_counts"] = {
@@ -1074,6 +1236,47 @@ json inspect_round_request(const json &request) {
             });
         }
     }
+    out["action_category_timing"] = json::object();
+    struct TimingAgg {
+        int actions = 0;
+        int samples = 0;
+        int batches = 0;
+        double elapsed_us = 0.0;
+    };
+    std::unordered_map<std::string, TimingAgg> timing;
+    for (const auto &item : evaluated) {
+        const auto [category, label] = action_category(item.plan);
+        auto &agg = timing[category];
+        ++agg.actions;
+        agg.samples += item.rollout_count;
+        const auto batches = ucb_batches_for(ucb_trace, item.root_index);
+        agg.batches += static_cast<int>(batches.size());
+        for (const auto *batch : batches) {
+            agg.elapsed_us += batch->elapsed_us;
+        }
+    }
+    TimingAgg all_timing;
+    for (const auto &[_, agg] : timing) {
+        all_timing.actions += agg.actions;
+        all_timing.samples += agg.samples;
+        all_timing.batches += agg.batches;
+        all_timing.elapsed_us += agg.elapsed_us;
+    }
+    auto timing_to_json = [](const TimingAgg &agg) {
+        return json{
+            {"actions", agg.actions},
+            {"samples", agg.samples},
+            {"batches", agg.batches},
+            {"elapsed_us", agg.elapsed_us},
+        };
+    };
+    out["action_category_timing"]["all"] = timing_to_json(all_timing);
+    for (const auto &[key, _] : category_order) {
+        if (key == "all") {
+            continue;
+        }
+        out["action_category_timing"][key] = timing_to_json(timing[key]);
+    }
     out["root_plan_sources"] = {
         {"base", json::array()},
         {"lure", json::array()},
@@ -1094,7 +1297,7 @@ json inspect_round_request(const json &request) {
     }
     out["plans"] = json::array();
     for (const auto &item : evaluated) {
-        out["plans"].push_back(evaluated_plan_to_json(start.public_state, player, item));
+        out["plans"].push_back(evaluated_plan_to_json(start.public_state, player, item, &ucb_trace));
     }
     return out;
 }
@@ -1104,12 +1307,12 @@ json inspect_plan_rollouts_request(const json &request) {
     const int round = request.at("round").get<int>();
     const int player = request.value("player", 0);
     const std::string plan_key = request.at("plan_key").get<std::string>();
-    const int sample_count = request.value("sample_count", 20);
     const int rollout_count = request.value("rollout_count", 0);
 
     ReplayRoundStart start = load_replay_round_start(replay_path, round);
     const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
-    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count);
+    ls::UcbEvaluationTrace ucb_trace;
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count, &ucb_trace);
     const auto &selected = require_plan_by_key(evaluated, plan_key);
 
     json out;
@@ -1118,38 +1321,40 @@ json inspect_plan_rollouts_request(const json &request) {
     out["round"] = round;
     out["player"] = player;
     out["serial"] = serial;
-    out["plan"] = evaluated_plan_to_json(start.public_state, player, selected);
+    out["strategy_params"] = v3_tuning_to_json();
+    out["plan"] = evaluated_plan_to_json(start.public_state, player, selected, &ucb_trace);
     out["samples"] = json::array();
 
-    const double uniform_weight = 1.0 / static_cast<double>(std::max(1, sample_count));
+    const auto ucb_samples = ucb_samples_for(ucb_trace, selected.root_index);
+    const double uniform_weight = 1.0 / static_cast<double>(std::max<std::size_t>(1, ucb_samples.size()));
     std::vector<json> summaries;
-    summaries.reserve(static_cast<std::size_t>(sample_count));
+    summaries.reserve(ucb_samples.size());
     double path_probability_sum = 0.0;
-    for (int sample = 0; sample < sample_count; ++sample) {
-        const json trace =
-            plan_sample_trace(start.public_state, &start.native, player, serial, selected, sample, sample_count);
+    for (const auto *sample : ucb_samples) {
         json summary;
-        summary["sample_index"] = sample;
-        summary["seed"] = trace.at("seed");
+        summary["sample_index"] = sample->arm_sample_index;
+        summary["global_sample_index"] = sample->global_sample_index;
+        summary["batch_index"] = sample->batch_index;
+        summary["batch_local_index"] = sample->batch_local_index;
+        summary["batch_size"] = sample->batch_size;
+        summary["assignment_serial"] = sample->assignment_serial;
+        summary["assignment_seed"] = sample->assignment_seed;
+        summary["seed"] = sample->rollout_seed;
         summary["uniform_weight"] = uniform_weight;
-        const double rollout_weight = trace.at("rollout_weight_probability").get<double>();
+        const double rollout_weight = sample->probability;
         summary["importance_weight"] = rollout_weight;
-        summary["path_probability"] = trace.at("path_probability");
-        summary["path_log_probability"] = trace.at("path_log_probability");
-        summary["total_score"] = trace.at("total_score");
-        summary["lightning_bonus_raw"] = trace.at("lightning_bonus_raw");
-        summary["lightning_bonus_score"] = trace.at("lightning_bonus_score");
-        summary["terminal"] = trace.at("terminal");
+        summary["path_probability"] = rollout_weight;
+        summary["path_log_probability"] = std::log(std::max(rollout_weight, 1e-12));
+        summary["total_score"] = sample->evaluation.total_score;
+        summary["lightning_bonus_raw"] = sample->evaluation.lightning_bonus_raw;
+        summary["lightning_bonus_score"] = sample->evaluation.lightning_bonus_score;
+        summary["terminal"] = eval_breakdown_to_json(sample->evaluation.terminal);
         summary["rollout_weight_probability"] = rollout_weight;
-        summary["forced_selected_ant_count"] = trace.at("forced_selected_ant_count");
-        const auto &rounds = trace.at("rounds");
-        if (!rounds.empty()) {
-            const auto &step0 = rounds.at(0);
-            summary["first_round_phase"] = step0.value("phase", "");
-            summary["first_round_ops_pretty"] = step0.value("applied_operations_pretty", "");
-            summary["first_round_move_assignments"] = step0.at("trace").at("move_assignments");
-            summary["first_round_move_path_probability"] = step0.at("trace").at("move_path_probability");
-        }
+        summary["forced_selected_ant_count"] = sample->forced_sample.forced_moves.size();
+        summary["first_round_phase"] = "ucb_actual";
+        summary["first_round_ops_pretty"] = ls::pretty_ops_text(start.public_state, player, selected.plan.ops);
+        summary["first_round_move_assignments"] = forced_sample_to_json(sample->forced_sample).at("forced_moves");
+        summary["first_round_move_path_probability"] = rollout_weight;
         path_probability_sum += rollout_weight;
         summaries.push_back(std::move(summary));
     }
@@ -1167,13 +1372,17 @@ json inspect_plan_trace_request(const json &request) {
     const int player = request.value("player", 0);
     const std::string plan_key = request.at("plan_key").get<std::string>();
     const int sample_index = request.value("sample_index", 0);
-    const int sample_count = request.value("sample_count", std::max(1, v2_lure_config().rollout_count));
+    const int sample_count = request.value("sample_count", std::max(1, v3_lure_config().rollout_count));
     const int rollout_count = request.value("rollout_count", 0);
+    const bool use_ucb_actual_sample = request.value("ucb_actual_sample", true);
 
     ReplayRoundStart start = load_replay_round_start(replay_path, round);
     const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
-    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count);
+    ls::UcbEvaluationTrace ucb_trace;
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count, &ucb_trace);
     const auto &selected = require_plan_by_key(evaluated, plan_key);
+    const ls::UcbRolloutRecord *ucb_sample =
+        use_ucb_actual_sample ? ucb_sample_for(ucb_trace, selected.root_index, sample_index) : nullptr;
 
     json out;
     out["mode"] = "plan_trace";
@@ -1181,8 +1390,10 @@ json inspect_plan_trace_request(const json &request) {
     out["round"] = round;
     out["player"] = player;
     out["serial"] = serial;
-    out["plan"] = evaluated_plan_to_json(start.public_state, player, selected);
-    out["trace"] = plan_sample_trace(start.public_state, &start.native, player, serial, selected, sample_index, sample_count);
+    out["strategy_params"] = v3_tuning_to_json();
+    out["plan"] = evaluated_plan_to_json(start.public_state, player, selected, &ucb_trace);
+    out["trace"] =
+        plan_sample_trace(start.public_state, &start.native, player, serial, selected, sample_index, sample_count, ucb_sample);
     return out;
 }
 

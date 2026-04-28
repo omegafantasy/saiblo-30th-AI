@@ -34,10 +34,10 @@
 - `include/antgame_sdk/lure_strategy_v2_params.hpp`
   - 当前 baseline/v2 的唯一策略参数入口
   - 参数类型为 `V2LureStrategyTuning`，访问函数为 `v2_lure_config()`
-- `include/antgame_sdk/lure_strategy_v3.hpp`
+- `../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
   - v3 的核心决策逻辑
-  - 以 v2 为起点，额外探索进攻性 `Emergency Evasion` 后处理
-- `include/antgame_sdk/lure_strategy_v3_params.hpp`
+  - 以 v2 为起点，额外探索进攻性 `EMP Blaster` / `Emergency Evasion` 后处理；具体实现已拆在同目录的 `session/core/base/lure/lightning/root/reactive/evaluation/offense/decision` 系列头文件中
+- `../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
   - v3 的策略参数入口
   - 参数类型为 `V3LureStrategyTuning`，访问函数为 `v3_lure_config()`
 - `include/antgame_sdk/lure_strategy.hpp`
@@ -62,13 +62,13 @@
 v3 已新开独立入口，不改 baseline / v2：
 
 - AI 目录：`../antgame_ai_cpp/cpp_lure_v3/`
-- 策略文件：`include/antgame_sdk/lure_strategy_v3.hpp`
-- 参数文件：`include/antgame_sdk/lure_strategy_v3_params.hpp`
+- 策略文件：`../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
+- 参数文件：`../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
 - 打包目标：`package_ai.sh cpp_lure_v3`
 
-v3 当前只在 v2 最优行动之后追加一个进攻性 `Emergency Evasion` 后处理。触发条件是：敌方闪电未生效、敌方闪电 CD 至少 `10`，执行 best action 后金币仍 `>100`，且 C1 仍为 `Sniper`，并且存在一个回避中心覆盖至少 `5` 只己方 `Worker`。战斗蚁不计入覆盖数，平局时优先更靠近敌方基地的位置。
+v3 已从 SDK 公共头中独立出来，策略实现和参数均位于 `cpp_lure_v3/include/antgame_ai/`。当前 v3 在 v2 冻结口径上继续迭代 root 搜索、reactive 模拟与进攻性 `EMP Blaster` / `Emergency Evasion` 后处理。共享 gating 为：敌方闪电未生效、敌方闪电 CD 至少 `5`，执行 best action 后金币仍 `>30`。回避还要求 C1 仍为 `Sniper`，且存在一个回避中心覆盖至少 `4` 只己方 `Worker`；战斗蚁不计入覆盖数，平局时优先更靠近敌方基地的位置。EMP 要求己方战斗蚁距敌方顶级塔 `<=2`，释放中心固定为该顶级塔。
 
-2026-04-27 已完成 v3 vs baseline 座位平衡 32 局官方对局。结果目录沿用当时的历史命名：
+2026-04-27 已完成一组 v3 vs baseline 座位平衡 32 局官方对局。该结果来自 action-level UCB / reactive 击杀检测重构前的历史参数，仅作为回归参考。结果目录沿用当时的历史命名：
 
 - 结果目录：`../antgame_ai_cpp/tmp_v3_vs_v2_32_p0/` 与 `../antgame_ai_cpp/tmp_v3_vs_v2_32_p1/`
 - 总胜负：v3 `16`，baseline `16`
@@ -115,7 +115,7 @@ baseline / v2 的共同核心口径是：
   - `upgrade Basic -> Quick -> Sniper`
   - `downgrade slot -> downgrade same slot`
   - `downgrade/sell source to bottom -> build another base slot`
-  - `downgrade/sell source to bottom -> build another base slot -> upgrade allowed level-2 tower`
+  - `downgrade/sell source to bottom -> build another base slot -> followup upgrade allowed level-2 tower`
   - swap 源塔只允许 Basic 或一级塔，最多连续 2 次降级/出售，不处理顶级塔卖到底
   - 同回合多塔操作只允许多个 `downgrade/sell`
 - 除 `C1` 外，base 槽位不做额外结构奖励/惩罚
@@ -128,8 +128,8 @@ baseline / v2 的共同核心口径是：
 - 闪电候选当前是单闪电：
   - 遍历以棋盘唯一中心 `(9,9)` 为中心、六边形距离 `<= lightning_center_radius` 的合法中心
   - 默认半径为 `5`，因此候选中心数为 `1 + (1+2+3+4+5)*6 = 91`
-  - 不与 `base/lure` 或前置降级/拆塔组合
-  - 全部闪电中心共享 `lightning_ucb_total_rollouts` 的 UCB rollout 预算
+  - 只有战斗蚁贴身己方塔时，v3 会额外生成该塔回收 + 闪电的 `recycle + lightning` 候选
+  - v3 中普通 action 和闪电 action 使用两套独立 UCB；闪电组默认总预算 `lightning_ucb_total_rollouts=500`、每次补 `lightning_ucb_batch_rollouts=1`
 
 当前冻结点还包含：
 
@@ -158,6 +158,7 @@ make
 - `build/sdk_smoke`
 - `build/sdk_json_runner`
 - `build/sdk_lure_inspector`
+  - simviz 后端和单回合在线审计入口；当前跟随 `cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
 - `build/sdk_lure_perf`
   - 基于 replay 抽样若干回合，测当前 `lure_strategy` 的整套决策、根计划生成、rollout 和底层模拟 profile
 - `build/sdk_defense_parity`
@@ -226,9 +227,10 @@ build/sdk_defense_parity \
   - 当前 baseline/v2 决策主体，负责候选生成、rollout、UCB 闪电、两层估值和 debug 输出
 - `include/antgame_sdk/lure_strategy_v2_params.hpp`
   - 当前 baseline/v2 参数入口
-- `include/antgame_sdk/lure_strategy_v3.hpp`
-  - 当前 v3 决策主体，继承 v2 搜索并追加进攻性 `Emergency Evasion`
-- `include/antgame_sdk/lure_strategy_v3_params.hpp`
+- `../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
+  - 当前 v3 对外聚合入口，继承 v2 搜索并追加进攻性 `Emergency Evasion`
+  - 具体实现已拆到同目录下的 `core`、`plan_types`、`base/lure/lightning/root_plans`、`reactive`、`evaluation`、`offense`、`decision` 分段头文件
+- `../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
   - 当前 v3 参数入口
 - `include/antgame_sdk/lure_strategy.hpp`
   - 默认兼容入口，目前等同 v2
@@ -237,7 +239,7 @@ build/sdk_defense_parity \
 - `include/antgame_sdk/position_slots.hpp`
   - 旧版位置名与坐标映射
 - `examples/sdk_lure_inspector.cpp`
-  - simviz 后端和单回合在线审计入口
+  - simviz 后端和单回合在线审计入口；当前跟随 `cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
 - `examples/sdk_lure_perf.cpp`
   - 决策、候选生成、普通 action、闪电 UCB、底层模拟 profile
 - `examples/sdk_defense_parity.cpp`

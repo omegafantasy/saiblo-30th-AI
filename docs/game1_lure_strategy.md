@@ -47,7 +47,7 @@
 - 若同回合需要拆多座塔，会优先拆当前血量更高的塔
 - 闪电作为独立候选搜索
 - 闪电候选当前只包含单次 `Lightning Storm`，不与 `base/lure` 或降级/拆塔组合
-- 闪电中心使用棋盘中心半径 5 的 91 个中心做 UCB 搜索，总预算由 `lightning_ucb_total_rollouts` 控制
+- 闪电中心使用棋盘中心半径 5 的 91 个合法中心生成候选
 - future rollout 不再完整生成主动 `base × lure`，只保留贴身回收这类应急 reactive 动作
 
 2026-04-27 已将当前 v2 完全覆盖到 `cpp_heavy_baseline`，因此 baseline 与 v2 当前是同一冻结点。清理后 `cpp_lure_v2` 源码目录和打包目标已删除；后续试验版本不直接改 baseline。
@@ -55,22 +55,34 @@
 v3 已作为独立探索版本新开：
 
 - 入口：`Game1/antgame_ai_cpp/cpp_lure_v3/`
-- 策略：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v3.hpp`
-- 参数：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v3_params.hpp`
+- 策略：`Game1/antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
+- 参数：`Game1/antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
+- 实现拆分：`session` / `core_format` / `core_ops` / `core_values` / `base_rules` / `base_swap` / `base_plans` / `lure_plans` / `lightning_plans` / `root_plans` / `reactive_targets` / `reactive` / `threat` / `rollout_sampling` / `terminal_eval` / `rollout_score` / `evaluation` / `offense` / `decision`
 
-v3 当前不改变 v2 的 root 搜索、rollout 和终点评估，只在 best action 算完后尝试追加一个进攻性 `Emergency Evasion`。
+v3 当前已独立于 baseline/v2 继续迭代：普通 root action 与闪电 root action 使用两套独立 UCB 分批 rollout；模拟中的贴塔回收会先做下一回合击杀检测；best action 算完后尝试追加进攻性超武后处理。
 
-触发条件：
+`Emergency Evasion` 触发条件：
 
 - 敌方 `Lightning Storm` 当前未生效
-- 敌方 `Lightning Storm` CD 至少 `10`
-- 模拟执行 best action 后，我方金币仍 `> 100`
+- 敌方 `Lightning Storm` CD 至少 `5`
+- 模拟执行 best action 后，我方金币仍 `> 30`
 - 模拟执行 best action 后，C1 仍是 `Sniper`
-- 存在一个 `Emergency Evasion` 中心覆盖至少 `5` 只己方 `Worker`
+- 存在一个 `Emergency Evasion` 中心覆盖至少 `4` 只己方 `Worker`
 
 选点只统计己方工蚁，不把战斗蚁计入覆盖数；平局优先更靠近敌方基地的位置。
 
-2026-04-27 的 32 局 v3 vs baseline 座位平衡测试中，v3 与 baseline 总胜负为 `16:16`。v3 只实际释放了 `1` 次紧急回避：`seed_0015` 第 `312` 回合，位置 `(4,10)`，覆盖 `5` 只工蚁、`0` 只战斗蚁。当前没有发现协议非法或误触发，但触发率很低。
+`EMP Blaster` 触发条件：
+
+- 敌方 `Lightning Storm` 当前未生效
+- 敌方 `Lightning Storm` CD 至少 `5`
+- 模拟执行 best action 后，我方金币仍 `> 30`，且实际金币足够支付 EMP
+- best action 后存在己方战斗蚁距敌方任意顶级塔 `<= 2`
+
+EMP 中心固定为该敌方顶级塔坐标。若多个塔满足，按距离、塔价值、到敌方基地距离和塔 ID 稳定选一个。官方会让 EMP active effect 每回合随机漂移，因此 replay 中 `activeEffects` 的坐标不一定等于释放时的 `op` 坐标。
+
+2026-04-28 当前实验口径下，首批 v3(P0) vs baseline(P1) 32 局结果为 v3 `12` 胜、baseline `20` 胜。EMP 释放 `3` 次，回避释放 `9` 次；未发现非法操作或坐标反向。v3 作为 P0 偏弱，后续应优先继续分析基础搜索/估值、经济和座位/seed 分布。
+
+2026-04-27 的 32 局 v3 vs baseline 座位平衡测试来自 action-level UCB / reactive 击杀检测重构前的历史参数，当前仅作为回归参考。该轮 v3 与 baseline 总胜负为 `16:16`。v3 只实际释放了 `1` 次紧急回避：`seed_0015` 第 `312` 回合，位置 `(4,10)`，覆盖 `5` 只工蚁、`0` 只战斗蚁。
 
 ## 4. 当前代码刻意没有实现的部分
 
@@ -81,8 +93,8 @@ v3 当前不改变 v2 的 root 搜索、rollout 和终点评估，只在 best ac
 - 更复杂的同回合 op-list 模板
 - `sell lure -> lightning -> build lure` 这种显式三段链
 - `downgrade/sell -> lightning` 这种闪电前置回收链
-- 主动 `EMP / Deflector`，后续再探索
-- 主动 `Emergency Evasion` 已在 v3 中作为后处理试验项实现，但还未并入 baseline
+- 主动 `Deflector`，后续再探索
+- 主动 `EMP` 与 `Emergency Evasion` 已在 v3 中作为后处理试验项实现，但还未并入 baseline
 - 更强的 lure 路径级控制
 - 基于位置表的 lure 槽位偏好学习
 
@@ -110,9 +122,10 @@ v3 当前不改变 v2 的 root 搜索、rollout 和终点评估，只在 best ac
   - `Basic -> Quick -> Sniper`
   - `Heavy(C1) -> downgrade -> Quick`
   - `downgrade/sell source to bottom -> build another base slot`
-  - `downgrade/sell source to bottom -> build another base slot -> upgrade allowed level-2 tower`
+  - `downgrade/sell source to bottom -> build another base slot -> followup upgrade allowed level-2 tower`
 
-这里仍保留一个显式金币阈值，用来控制 `Heavy` 与 `Quick / Sniper` 路线切换。
+这里仍保留一个显式金币阈值，用来控制 `Heavy` 与 `Quick / Sniper` 路线切换。v3 的阈值输入不是当前持有金币，
+而是 root/followup 后局面的己方等效总金币：`当前金币 + 按最优顺序降级并卖完己方塔后的总回收价值`。
 
 ## 6. 当前 lure 结构
 
@@ -141,8 +154,9 @@ v3 当前不改变 v2 的 root 搜索、rollout 和终点评估，只在 best ac
 - 兼顾敌方塔伤害
 - 不与 `base/lure` 相乘
 - 不带前置 `downgrade / sell`
-- 每个合法中心是一个 arm，UCB 在所有 arm 上分配 rollout
-- v2 默认合法中心为距棋盘中心 `(9,9)` 不超过 5 的 91 个格子
+- baseline/v2 中每个合法闪电中心是一个 UCB arm
+- v3 中闪电与 `recycle + lightning` 候选进入独立 lightning UCB 组，不与普通 action 抢普通 UCB 预算
+- 默认合法中心为距棋盘中心 `(9,9)` 不超过 5 的 91 个格子
 
 当前闪电启发主要看：
 

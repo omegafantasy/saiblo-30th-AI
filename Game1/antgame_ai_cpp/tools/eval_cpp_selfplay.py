@@ -340,6 +340,16 @@ def summarize_ai_log(stderr_path: Path) -> dict[str, Any]:
         for entry in evasion_used
         if isinstance(entry.get("v3_evasion_worker_count"), (int, float))
     ]
+    emp_reasons = Counter(str(entry.get("v3_emp_reason", "")) for entry in decisions if "v3_emp_reason" in entry)
+    emp_used = [
+        entry for entry in decisions
+        if entry.get("v3_emp_used") is True or str(entry.get("v3_emp_used", "")).lower() == "true"
+    ]
+    emp_distances = [
+        int(entry["v3_emp_distance"])
+        for entry in emp_used
+        if isinstance(entry.get("v3_emp_distance"), (int, float))
+    ]
     return {
         "decision_count": len(decisions),
         "plan_line_count": len(plans),
@@ -350,6 +360,9 @@ def summarize_ai_log(stderr_path: Path) -> dict[str, Any]:
         "v3_evasion_used_count": len(evasion_used),
         "v3_evasion_reason_counts": dict(evasion_reasons),
         "v3_evasion_worker_counts": evasion_worker_counts,
+        "v3_emp_used_count": len(emp_used),
+        "v3_emp_reason_counts": dict(emp_reasons),
+        "v3_emp_distances": emp_distances,
         "raw_line_count": len(text.splitlines()),
     }
 
@@ -490,6 +503,9 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
     v3_evasion_used_counts = [0, 0]
     v3_evasion_reasons = [Counter(), Counter()]
     v3_evasion_worker_counts = [[], []]
+    v3_emp_used_counts = [0, 0]
+    v3_emp_reasons = [Counter(), Counter()]
+    v3_emp_distances = [[], []]
 
     for result in results:
         replay_summary = result.get("replay_summary", {})
@@ -522,6 +538,11 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
             v3_evasion_worker_counts[player].extend(
                 int(x) for x in log_summary.get("v3_evasion_worker_counts", []) if isinstance(x, (int, float))
             )
+            v3_emp_used_counts[player] += int(log_summary.get("v3_emp_used_count", 0))
+            merge_counter_dict(v3_emp_reasons[player], log_summary.get("v3_emp_reason_counts", {}))
+            v3_emp_distances[player].extend(
+                int(x) for x in log_summary.get("v3_emp_distances", []) if isinstance(x, (int, float))
+            )
 
     return {
         "match_count": len(results),
@@ -545,6 +566,9 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "v3_evasion_used_counts": v3_evasion_used_counts,
         "v3_evasion_reason_counts": [dict(v3_evasion_reasons[0]), dict(v3_evasion_reasons[1])],
         "v3_evasion_worker_counts": [stats_summary(v3_evasion_worker_counts[0]), stats_summary(v3_evasion_worker_counts[1])],
+        "v3_emp_used_counts": v3_emp_used_counts,
+        "v3_emp_reason_counts": [dict(v3_emp_reasons[0]), dict(v3_emp_reasons[1])],
+        "v3_emp_distances": [stats_summary(v3_emp_distances[0]), stats_summary(v3_emp_distances[1])],
     }
 
 
@@ -566,6 +590,12 @@ def print_human_summary(summary: dict[str, Any]) -> None:
                 f"workers={summary['v3_evasion_worker_counts'][player]} "
                 f"reasons={summary['v3_evasion_reason_counts'][player]}"
             )
+        if any(summary.get("v3_emp_reason_counts", [{}, {}])):
+            print(
+                f"player={player} v3_emp_used={summary['v3_emp_used_counts'][player]} "
+                f"distances={summary['v3_emp_distances'][player]} "
+                f"reasons={summary['v3_emp_reason_counts'][player]}"
+            )
         print(f"player={player} build_positions_top={summary['build_positions_top'][player]}")
         print(f"player={player} lightning_positions_top={summary['lightning_positions_top'][player]}")
 
@@ -579,6 +609,7 @@ def main() -> int:
     parser.add_argument("--target0", default=None, help="AI target for player 0; defaults to --target")
     parser.add_argument("--target1", default=None, help="AI target for player 1; defaults to --target0")
     parser.add_argument("--debug-seeds", default="", help="Seeds that use full per-plan debug logging")
+    parser.add_argument("--debug-mode", choices=("summary", "none"), default="summary")
     parser.add_argument("--game-bin", type=Path, default=DEFAULT_GAME_BIN)
     parser.add_argument("--max-rounds", type=int, default=None)
     parser.add_argument("--force", action="store_true")
@@ -617,7 +648,7 @@ def main() -> int:
     with ProcessPoolExecutor(max_workers=jobs) as executor:
         future_map = {}
         for seed in seeds:
-            debug_mode = "plans" if seed in debug_seeds else "summary"
+            debug_mode = "plans" if seed in debug_seeds else (None if args.debug_mode == "none" else "summary")
             future = executor.submit(
                 run_match,
                 seed,
