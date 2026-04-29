@@ -7,7 +7,7 @@
 - Python 本地 web server
   - 负责静态页面、地图几何、replay 读取、API 转发
 - C++ inspector
-  - 负责按当前 baseline/v2 `lure_strategy` 在线复算候选行动
+  - 负责按当前 v3 `lure_strategy` 在线复算候选行动
   - 负责导出某个候选下的 rollout 样本与单样本 trace
   - 与当前 `DefenseSimulator`、root plan 生成、首回合重点蚂蚁采样逻辑保持同步
 
@@ -45,7 +45,7 @@ http://127.0.0.1:8765
    - `Actions` 上方的分类按钮按最终 evaluated action 过滤，而不是按原始源候选过滤
    - 当前分类包括 `Hold / Base / Base Followup / Lure / Base + Lure / Lightning / Recycle + Lightning`
    - 表格将本回合操作和 future followup 分列显示，多回合计划不会在一回合内瞬间执行
-   - 点击某个 action 后，在线计算该候选的 rollout 样本，默认数量跟随当前 `rollout_count`
+   - 点击某个 action 后，在线计算该候选的 rollout 样本，默认数量跟随当前 v3 参数文件中的 `rollout_count`
    - `Actions` 表中的 `Total` 以普通数值显示，不使用科学计数法
    - `Rollout Samples` 中的 `Weight` 显示的是当前策略真正用于加权的样本权重
      - 即首回合重点蚂蚁所选动作真实概率的乘积
@@ -75,8 +75,8 @@ http://127.0.0.1:8765
 - 每个 rollout sample 的总分、归一化权重、终点核心分项
 - 每步 trace 的起始/终止盘面、操作、蚂蚁动作分配、候选方向概率、最终估值分项
 - 多步 base followup 会在 trace 中逐未来回合显示，例如 `sell -> build -> upgrade`
-- 闪电候选会显示当前策略实际使用的合法中心全集；v2 默认使用棋盘中心半径 5 的 91 个中心，并用 UCB 在这些中心间分配 rollout
-- 当前 baseline/v2 trace 会在第 6 回合和第 10 回合分别估值，并按 `mid_eval_weight` 合成最终 rollout 分数
+- 闪电候选会显示当前策略实际使用的合法中心全集；中心半径、rollout 数、UCB batch 和 exploration 均来自当前 v3 参数文件。普通 action 和闪电 action 使用两套独立 UCB 预算，页面中的 `Rollouts` 是对应 action 实际获得的样本数。
+- 当前 v3 trace 会在第 6 回合和第 10 回合分别估值，并按 `mid_eval_weight` 合成最终 rollout 分数
 
 ## 交互
 
@@ -102,7 +102,7 @@ http://127.0.0.1:8765
   - 用于看真实对局记录
 - `Strategy Root State` / `Sample Trace`
   - 来自当前 C++ 策略在线复算
-  - 使用当前 baseline/v2 `lure_strategy` 与 `DefenseSimulator`
+  - 使用当前 v3 `lure_strategy` 与 `DefenseSimulator`
   - 这是策略真正拿来打分、做 rollout 的模拟状态
 
 因此两者不一定完全一一对应，尤其是：
@@ -120,12 +120,15 @@ http://127.0.0.1:8765
 - frontend: [index.html](/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/simviz/static/index.html)
 - frontend js: [app.js](/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/simviz/static/app.js)
 - C++ inspector: [sdk_lure_inspector.cpp](/root/autodl-tmp/saiblo_iter/Game1/antgame_cpp_sdk/examples/sdk_lure_inspector.cpp)
+- v3 params: [lure_strategy_v3_params.hpp](/root/autodl-tmp/saiblo_iter/Game1/antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp)
 
 ## 版本口径
 
 - `cpp_heavy_baseline` 使用 `lure_strategy_v2.hpp`。
 - `cpp_lure_v2` 源码目录和打包目标已删除。
-- simviz / inspector 默认跟随 baseline/v2，用于后续迭代分析
+- simviz / inspector 默认跟随 `cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`，用于当前 v3 迭代分析。
+- 前端不直接解析 `lure_strategy_v3_params.hpp`，也不再传固定 `rollout_count` 覆盖策略参数；`sdk_lure_inspector` 编译时包含当前 v3 参数头，并把编译进来的 `V3LureStrategyTuning` 作为 `strategy_params` 返回给页面。修改参数后需要重新编译 inspector，`run_simviz.sh` 启动时会自动执行对应 make 目标。
+- 页面顶部参数摘要来自 `strategy_params`，包括普通/闪电 UCB、horizon、中心半径和金币阶梯权重 `money_weight / money_weight_above_threshold @ money_decay_threshold`。
 
 ## 现阶段限制
 

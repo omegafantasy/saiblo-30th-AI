@@ -117,17 +117,17 @@ bash package_ai.sh cpp_heavy_baseline
 典型流程：
 
 ```bash
-cd Game1/antgame_ai_cpp
-python tools/eval_cpp_selfplay.py \
+cd /root/autodl-tmp/saiblo_iter
+python3 Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py \
   --target cpp_heavy_baseline \
   --seeds 1:8 \
   --debug-seeds 1 \
   --jobs 8 \
   --max-rounds 256 \
-  --output-dir ./eval_current \
+  --output-dir eval_results/baseline_eval_current \
   --force
 
-python tools/analyze_selfplay_batch.py ./eval_current
+python3 Game1/antgame_ai_cpp/tools/analyze_selfplay_batch.py eval_results/baseline_eval_current
 ```
 
 注意：
@@ -139,14 +139,14 @@ python tools/analyze_selfplay_batch.py ./eval_current
 若要直接得到严格前 `256` 回合且保留全 plans log，建议改用：
 
 ```bash
-cd Game1/antgame_ai_cpp
-python tools/eval_cpp_partial_selfplay.py \
+cd /root/autodl-tmp/saiblo_iter
+python3 Game1/antgame_ai_cpp/tools/eval_cpp_partial_selfplay.py \
   --target cpp_heavy_baseline \
   --seeds 1:8 \
   --debug-seeds 1:8 \
   --jobs 8 \
   --max-rounds 256 \
-  --output-dir ./eval_partial_full_log_256 \
+  --output-dir eval_results/baseline_partial_full_log_256 \
   --force
 ```
 
@@ -154,7 +154,7 @@ python tools/eval_cpp_partial_selfplay.py \
 
 - 规则真值仍以 `../../Ant-Game/` 为准
 - SDK 与 baseline 都不能把改动写回 `Ant-Game/`
-- `eval_*`、`tmp_*`、位置图和临时 replay 分析目录都视为生成物，不进版本库
+- `eval_results/`、旧 `eval_*`、`tmp_*`、位置图和临时 replay 分析目录都视为生成物，不进版本库
 - 当前性能优化重点：
   - 搜索用 `DefenseSimulator` 热路径以固定数组为主
   - rollout clone 不复制派生 move cache

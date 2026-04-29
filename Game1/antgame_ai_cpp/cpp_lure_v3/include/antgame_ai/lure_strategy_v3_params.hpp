@@ -8,7 +8,7 @@ struct V3LureStrategyTuning {
     double action_ucb_exploration = 500.0;
     int lightning_ucb_total_rollouts = 500;
     int lightning_ucb_batch_rollouts = 1;
-    double lightning_ucb_exploration = 200.0;
+    double lightning_ucb_exploration = 300.0;
     int rollout_forced_ant_limit = 5;
     int mid_eval_horizon = 6;
     int long_eval_horizon = 10;
@@ -44,14 +44,14 @@ struct V3LureStrategyTuning {
     //
     // full_tower_salvage_coin is the estimated coin value after optimally downgrading all towers
     // to basic and selling basic towers in descending HP order.
-    double base_hp_weight = 250.0;
+    double base_hp_weight = 200.0;
     double tower_value_weight = 10.0;
     double money_weight = 10.0;
     double money_decay_threshold = 400.0;
     double money_weight_above_threshold = 6.0;
 
     // worker_threat = sum(worker_threat_unit * hp / max_hp / max(1, distance_to_own_base)).
-    double worker_threat_unit = 200.0;
+    double worker_threat_unit = 160.0;
 
     // combat_threat = sum(max(base_threat, core_tower_anchor_threat) * behavior_scale).
     double combat_base_threat_unit = 300.0;

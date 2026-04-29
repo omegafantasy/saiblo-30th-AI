@@ -14,8 +14,6 @@ const appState = {
   boardViews: {},
 };
 
-const STRATEGY_ROLLOUT_COUNT = 50;
-
 const dom = {};
 const layoutState = {
   activeDivider: null,
@@ -379,12 +377,47 @@ function formatPlainNumber(value, digits = 2) {
   return num.toFixed(digits).replace(/\.00$/, "");
 }
 
+function strategyParamsText() {
+  const params = appState.actions?.strategy_params;
+  if (!params) return "params unavailable";
+  return [
+    `rollout ${params.rollout_count ?? "-"}`,
+    `batch ${params.action_ucb_batch_rollouts ?? "-"}`,
+    `ucb ${formatPlainNumber(params.action_ucb_exploration, 1)}`,
+    `L ${params.lightning_ucb_total_rollouts ?? "-"}x${params.lightning_ucb_batch_rollouts ?? "-"}`,
+    `L-ucb ${formatPlainNumber(params.lightning_ucb_exploration, 1)}`,
+    `forced ants ${params.rollout_forced_ant_limit ?? "-"}`,
+    `h ${params.mid_eval_horizon ?? "-"}/${params.long_eval_horizon ?? "-"}`,
+    `mid w ${formatPlainNumber(params.mid_eval_weight, 2)}`,
+    `lightning h ${params.lightning_horizon ?? "-"}`,
+    `radius ${params.lightning_center_radius ?? "-"}`,
+    `money ${formatPlainNumber(params.money_weight, 1)}/${formatPlainNumber(params.money_weight_above_threshold, 1)}@${formatPlainNumber(params.money_decay_threshold, 0)}`,
+  ].join(" | ");
+}
+
 function actionCategoryLabel(plan) {
   return plan?.category_label || plan?.category || "Other";
 }
 
 function sampleWeight(sample) {
   return sample?.normalized_path_weight ?? sample?.importance_weight ?? 0;
+}
+
+function timingSummaryItems() {
+  const timing = appState.actions?.action_category_timing || {};
+  const categories = appState.actions?.action_categories || [];
+  if (!timing.all) return [];
+  const parts = [];
+  const allMs = (Number(timing.all.elapsed_us || 0) / 1000).toFixed(1);
+  parts.push(`all ${allMs}ms/${timing.all.samples || 0}n`);
+  for (const item of categories) {
+    if (item.key === "all") continue;
+    const row = timing[item.key];
+    if (!row || !row.actions) continue;
+    const ms = (Number(row.elapsed_us || 0) / 1000).toFixed(1);
+    parts.push(`${item.label} ${ms}ms/${row.actions}a/${row.samples || 0}n`);
+  }
+  return parts;
 }
 
 function workspaceDividerSize() {
@@ -1221,10 +1254,26 @@ function renderActions() {
     renderUnifiedBoard();
     return;
   }
-  dom.strategyMeta.textContent = `reconstructed root state | serial ${appState.actions.serial}`;
+  dom.strategyMeta.textContent = `serial ${appState.actions.serial} | ${strategyParamsText()}`;
   const visiblePlans = filteredActionPlans();
   dom.actionsSummary.classList.remove("empty-box");
-  dom.actionsSummary.textContent = `${rootCountsText()} | shown ${visiblePlans.length}/${appState.actions.plans.length}`;
+  dom.actionsSummary.textContent = "";
+  const countsLine = document.createElement("div");
+  countsLine.className = "actions-counts";
+  countsLine.textContent = `${rootCountsText()} | shown ${visiblePlans.length}/${appState.actions.plans.length}`;
+  dom.actionsSummary.appendChild(countsLine);
+  const timingItems = timingSummaryItems();
+  if (timingItems.length > 0) {
+    const timingRow = document.createElement("div");
+    timingRow.className = "timing-chips";
+    for (const item of timingItems) {
+      const chip = document.createElement("span");
+      chip.className = "timing-chip";
+      chip.textContent = item;
+      timingRow.appendChild(chip);
+    }
+    dom.actionsSummary.appendChild(timingRow);
+  }
   renderActionCategoryTabs();
 
   visiblePlans.forEach((plan) => {
@@ -1237,6 +1286,7 @@ function renderActions() {
       <td>${actionCategoryLabel(plan)}</td>
       <td>${rootPlanPretty(plan)}</td>
       <td>${futurePlanPretty(plan)}</td>
+      <td>${plan.horizon ?? "-"}</td>
       <td>${plan.rollout_count ?? "-"}</td>
       <td>${formatPlainNumber(plan.mean_rollout_score, 2)}</td>
       <td>${formatPlainNumber(plan.heuristic, 2)}</td>
@@ -1255,7 +1305,9 @@ function renderSamples() {
   const tbody = $("samplesTable").querySelector("tbody");
   tbody.innerHTML = "";
   if (!appState.rollouts) return;
-  dom.samplesMeta.textContent = `${fullPlanPretty(appState.rollouts.plan)} | ${appState.rollouts.samples.length} samples`;
+  dom.samplesMeta.textContent = `${fullPlanPretty(appState.rollouts.plan)} | h ${
+    appState.rollouts.plan?.horizon ?? "-"
+  } | ${appState.rollouts.samples.length} actual UCB samples`;
   const sortedSamples = [...appState.rollouts.samples].sort((lhs, rhs) => {
     const lhsWeight = sampleWeight(lhs);
     const rhsWeight = sampleWeight(rhs);
@@ -1271,6 +1323,7 @@ function renderSamples() {
     const normalizedWeight = sampleWeight(sample);
     row.innerHTML = `
       <td>${sample.sample_index}</td>
+      <td>${sample.batch_index ?? "-"}:${sample.batch_local_index ?? "-"} / ${sample.batch_size ?? "-"}</td>
       <td>${formatPlainNumber(sample.total_score, 2)}</td>
       <td>${formatPlainNumber(normalizedWeight, 4)}</td>
       <td>${formatNumber(terminal.base_hp_raw)}</td>
@@ -1291,7 +1344,12 @@ function renderTracePanels() {
   }
 
   const trace = appState.trace.trace;
-  dom.traceMeta.textContent = `${fullPlanPretty(appState.trace.plan)} | sample ${trace.sample_index} | seed ${trace.seed}`;
+  const ucbBits = trace.ucb_actual_sample
+    ? ` | UCB batch ${trace.batch_index}:${trace.batch_local_index}/${trace.batch_size}`
+    : "";
+  dom.traceMeta.textContent = `${fullPlanPretty(appState.trace.plan)} | h ${
+    appState.trace.plan?.horizon ?? trace.rounds?.length ?? "-"
+  } | steps ${trace.rounds?.length ?? "-"} | sample ${trace.sample_index}${ucbBits} | seed ${trace.seed}`;
   dom.traceEval.classList.remove("empty-box");
   dom.traceEval.innerHTML = `
     total ${formatNumber(trace.total_score)} |
@@ -1429,7 +1487,6 @@ async function computeActions() {
       replay_path: dom.replayPath.value.trim(),
       round: Number(dom.roundInput.value || 0),
       player: Number(dom.playerSelect.value || 0),
-      rollout_count: STRATEGY_ROLLOUT_COUNT,
     });
     appState.actionCategoryFilter = "all";
     appState.selectedPlanKey = appState.actions.plans[0]?.key || null;
@@ -1476,8 +1533,6 @@ async function loadRollouts() {
       round: Number(dom.roundInput.value || 0),
       player: Number(dom.playerSelect.value || 0),
       plan_key: appState.selectedPlanKey,
-      rollout_count: STRATEGY_ROLLOUT_COUNT,
-      sample_count: STRATEGY_ROLLOUT_COUNT,
     });
     const bestSample = [...(appState.rollouts.samples || [])].sort((lhs, rhs) => {
       const lhsWeight = sampleWeight(lhs);
@@ -1509,9 +1564,9 @@ async function loadTrace() {
       round: Number(dom.roundInput.value || 0),
       player: Number(dom.playerSelect.value || 0),
       plan_key: appState.selectedPlanKey,
-      rollout_count: STRATEGY_ROLLOUT_COUNT,
       sample_index: appState.selectedSampleIndex,
       sample_count: Math.max(1, appState.rollouts?.samples?.length || 0),
+      ucb_actual_sample: true,
     });
     appState.selectedTraceStep = 0;
     renderTracePanels();

@@ -1,6 +1,6 @@
 # cpp_lure_v3
 
-这是 Game1 当前 v3 C++ AI。2026-04-27 之后，`cpp_heavy_baseline` 已被当前 v2 完全覆盖，因此 v2 与 baseline 当前是同一策略冻结点。`cpp_lure_v2` 源码目录和打包目标已经删除。后续实验应保持 v3 与 baseline 解耦，不直接改 baseline。
+这是 Game1 当前 v3 C++ AI，也是当前本地最优解。2026-04-27 之后，`cpp_heavy_baseline` 已被当前 v2 完全覆盖，因此 v2 与 baseline 当前是同一策略冻结点。`cpp_lure_v2` 源码目录和打包目标已经删除。后续实验应保持 v3 与 baseline 解耦，不直接改 baseline。
 
 ## 入口
 
@@ -69,9 +69,10 @@ SDK 默认兼容入口 `lure_strategy.hpp` / `lure_strategy_params.hpp` 仍为 v
 - 评估在第 6 回合和第 10 回合各算一次，最终按 `mid_eval_weight` 加权，默认第 6 回合权重 `0.5`。
 - 允许 `basic -> quick -> sniper` 三连升候选，仅限 `C / L / R` 系列格子。
 - C1 仍是唯一有额外结构奖励或转型惩罚的格子，其他 `C / L / R` 三连升不吃 C1 bonus。
-- C1 `Heavy` 与 `Quick / Sniper` 路线切换阈值按 root/followup 后局面的己方等效总金币判断：`当前金币 + 全塔最优回收价值`。
-- 闪电在敌方没有激活超武效果时额外施加 `lightning_no_enemy_super_penalty = -100`。
-- `sniper -> quick` 降级额外施加 `sniper_downgrade_penalty = 500`，适用于所有位置。
+- C1 `Heavy` 与 `Quick / Sniper` 路线切换阈值按本回合行动前己方等效总金币判断：`当前金币 + 全塔最优回收价值`；达到阈值即进入转型阶段。
+- 己方等效金币估值使用阶梯权重：`400` 以内按 `money_weight=10`，超过 `400` 的部分按 `money_weight_above_threshold=6`；该衰减只作用于己方金币和己方塔可回收价值，不作用于 `lightning_tower_value_ratio` 这类对敌方塔伤害的估值。
+- 闪电在敌方没有激活超武效果时额外施加 `lightning_no_enemy_super_penalty = -200`。
+- `sniper -> quick` 降级额外施加 `sniper_downgrade_penalty = 400`，适用于所有位置。
 - C1 出 Sniper 之前，非 C1 位置不生成 Quick 或 Sniper 路线；二级塔仅考虑 Heavy / Mortar。
 - C1 出 Sniper 后，其他 base 槽位才放开 Quick 与 Sniper 路线。
 - base+lure 组合只允许关联同一座 base 塔的回收，不再生成多座 base 塔同时降级组合。
@@ -127,9 +128,33 @@ EMP 对应输出 `v3_emp_used`、`v3_emp_reason`、`v3_emp_x/y`、`v3_emp_tower_
 当前参数默认值为：敌方闪电 CD 至少 `5`，best action 后金币大于 `30`，回避中心覆盖至少 `4` 只己方工蚁。
 EMP 默认开启，战斗蚁到敌方顶级塔触发距离为 `2`。
 
+## 2026-04-29 当前最优评测
+
+当前 v3 以 `cpp_lure_v3` 作为最优提交候选。评测结果统一写入仓库根目录 `eval_results/`，不再写到 `Game1/antgame_ai_cpp/` 下。
+
+v3 vs baseline，座位平衡 128 局：
+
+- 目录：`eval_results/v3_vs_baseline_128_c1_action_start_p0/` 与 `eval_results/v3_vs_baseline_128_c1_action_start_p1/`
+- 总胜负：v3 `72` 胜，baseline `56` 胜。
+- 总血量差：v3 `+338`，平均每局 `+2.640625`。
+- v3 先手 64 局：`37-27`，血量差 `+196`。
+- v3 后手 64 局：`35-29`，血量差 `+142`。
+
+同时保留了一个激进抗性测试变体 `cpp_lure_v3a`：其余操作完全沿用 v3，但己方当前金币 `>=200` 且基地蚂蚁等级 `<2` 时，会优先尝试升级基地生成蚂蚁到 2 级。该变体用于测试 v3 对 25 血蚂蚁的抗性，不作为最优解候选。
+
+v3-a vs v3，座位平衡 32 局：
+
+- 目录：`eval_results/v3a_vs_v3_32_p0/` 与 `eval_results/v3a_vs_v3_32_p1/`
+- 总胜负：v3-a `1` 胜，v3 `31` 胜。
+- 总血量差：v3-a `-781`，平均每局 `-24.40625`。
+- v3-a 先手 16 局：`0-16`，血量差 `-362`。
+- v3-a 后手 16 局：`1-15`，血量差 `-419`。
+
+结论：v3-a 过早升级基地蚂蚁会显著牺牲防守经济；当前最优解仍为 v3。
+
 ## 2026-04-28 EMP 测试
 
-当前实验口径为：
+当时实验口径为：
 
 - 进攻超武门槛：`5/30/4`。
 - 关键估值参数：`sniper_downgrade_penalty=500`、`base_hp_weight=300`、`worker_threat_unit=300`。
@@ -194,25 +219,25 @@ bash package_ai.sh cpp_lure_v3
 自战：
 
 ```bash
-cd Game1/antgame_ai_cpp
-python tools/eval_cpp_selfplay.py \
+cd /root/autodl-tmp/saiblo_iter
+python3 Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py \
   --target cpp_lure_v3 \
   --seeds 1:8 \
   --jobs 8 \
-  --output-dir ./eval_current \
+  --output-dir eval_results/v3_selfplay_8 \
   --force
 ```
 
 与 baseline 对战：
 
 ```bash
-cd Game1/antgame_ai_cpp
-python tools/eval_cpp_selfplay.py \
+cd /root/autodl-tmp/saiblo_iter
+python3 Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py \
   --target0 cpp_heavy_baseline \
   --target1 cpp_lure_v3 \
   --seeds 1:16 \
   --jobs 16 \
-  --output-dir ./eval_baseline_p0_v3_p1 \
+  --output-dir eval_results/baseline_p0_v3_p1_16 \
   --force
 ```
 

@@ -29,7 +29,13 @@ if ss -ltn "sport = :$PORT" | tail -n +2 | grep -q .; then
   exit 1
 fi
 
-nohup python3 "$ROOT_DIR/elo_web/server.py" --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 &
+setsid python3 "$ROOT_DIR/elo_web/server.py" --host "$HOST" --port "$PORT" >>"$LOG_FILE" 2>&1 < /dev/null &
 pid=$!
 echo "$pid" > "$PID_FILE"
+sleep 1
+if ! kill -0 "$pid" 2>/dev/null; then
+  rm -f "$PID_FILE"
+  echo "elo-web failed to stay running; see $LOG_FILE" >&2
+  exit 1
+fi
 echo "elo-web started: pid=$pid host=$HOST port=$PORT"

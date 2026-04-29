@@ -52,6 +52,70 @@ function renderTable(tableId, rows) {
   }
 }
 
+function shortCode(s) {
+  const v = String(s || "");
+  return v.length > 12 ? `${v.slice(0, 8)}...${v.slice(-4)}` : v;
+}
+
+function renderSaibloSummary(nodeId, v) {
+  const node = document.getElementById(nodeId);
+  if (!v || !v.available) {
+    node.innerHTML = `<span class="err">数据不可用: ${esc(v?.error || "unknown")}</span>`;
+    return;
+  }
+  const statusClass = v.status === "ok" ? "ok" : v.status === "auth_error" || v.status === "error" ? "err" : "warn";
+  const parts = [
+    `status: <b class="${statusClass}">${esc(v.status || "-")}</b>`,
+    `Game: <b>${v.game_id}</b>`,
+    `from #<b>${v.start_match_id}</b>`,
+    `已记录: <b>${v.stored}</b>`,
+    `成功: <b>${v.success}</b>`,
+    `含回放元信息: <b>${v.success_with_replay_meta}</b>`,
+    `Elo对局: <b>${v.matches_used}</b>`,
+    `AI版本: <b>${v.rated_versions}</b>`,
+    `pending: <b>${v.pending}</b>`,
+    `failed: <b>${v.failed}</b>`,
+    `范围: <b>${v.min_match_id || "-"} - ${v.max_match_id || "-"}</b>`,
+    `文件时间(UTC): <b>${esc(v.file_mtime || "-")}</b>`,
+  ];
+  if (v.status_message) {
+    parts.push(`<span class="err">${esc(v.status_message)}</span>`);
+  }
+  node.innerHTML = parts.join(" | ");
+}
+
+function renderSaibloTable(tableId, rows) {
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  for (const r of rows || []) {
+    const tr = document.createElement("tr");
+    if (r.rank === 1) tr.className = "top1";
+    const aiName = `${esc(r.username || "-")} / ${esc(r.entity || "-")} v${esc(r.version ?? "-")}`;
+    const ladder = r.ladder_rank ? `#${r.ladder_rank} ${esc(r.ladder_score ?? "")}` : "-";
+    tr.innerHTML = `
+      <td>${r.rank}</td>
+      <td>
+        <div class="main-cell">${aiName}${r.provisional ? ' <span class="tag">少量</span>' : ""}</div>
+        <div class="sub-cell">${esc(r.remark || "")}</div>
+      </td>
+      <td><code title="${esc(r.code_id)}">${esc(shortCode(r.code_id))}</code></td>
+      <td>${Number(r.elo).toFixed(2)}</td>
+      <td>${Number(r.raw_elo).toFixed(2)}</td>
+      <td>${pct(r.reliability)}</td>
+      <td>${r.games}</td>
+      <td>${r.wins}-${r.losses}-${r.draws}</td>
+      <td>${pct(r.win_rate)}</td>
+      <td>${pct(r.score_rate)}</td>
+      <td>${Number(r.avg_hp_diff).toFixed(2)}</td>
+      <td>${Number(r.avg_rounds).toFixed(1)}</td>
+      <td>${ladder}</td>
+      <td>${r.last_match_id || "-"}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
 async function reload() {
   try {
     const res = await fetch(`/api/elo?t=${Date.now()}`, { cache: "no-store" });
@@ -61,8 +125,10 @@ async function reload() {
     document.getElementById("generatedAt").textContent = `更新时间: ${data.generated_at || "-"}`;
     renderSummary("summary-prod", data.views?.prod);
     renderSummary("summary-iter", data.views?.iter);
+    renderSaibloSummary("summary-saiblo-game1", data.views?.saiblo_game1);
     renderTable("table-prod", data.views?.prod?.rows || []);
     renderTable("table-iter", data.views?.iter?.rows || []);
+    renderSaibloTable("table-saiblo-game1", data.views?.saiblo_game1?.rows || []);
   } catch (e) {
     document.getElementById("generatedAt").innerHTML = `<span class="err">加载失败: ${esc(e.message)}</span>`;
   }

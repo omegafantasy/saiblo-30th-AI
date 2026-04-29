@@ -101,6 +101,8 @@ json v3_tuning_to_json() {
         {"base_hp_weight", tuning.base_hp_weight},
         {"tower_value_weight", tuning.tower_value_weight},
         {"money_weight", tuning.money_weight},
+        {"money_decay_threshold", tuning.money_decay_threshold},
+        {"money_weight_above_threshold", tuning.money_weight_above_threshold},
         {"worker_threat_unit", tuning.worker_threat_unit},
         {"combat_base_threat_unit", tuning.combat_base_threat_unit},
         {"combat_anchor_threat_coin_ratio", tuning.combat_anchor_threat_coin_ratio},

@@ -39,7 +39,9 @@
   - 快速搜索模拟器 `DefenseSimulator`
 - `Game1/antgame_ai_cpp/`
   - 当前保留的 Game1 C++ AI 入口
-  - 现仅保留 `cpp_heavy_baseline/`
+  - 冻结对照：`cpp_heavy_baseline/`
+  - 当前最优：`cpp_lure_v3/`
+  - 抗性测试变体：`cpp_lure_v3a/`
 
 ## 4. 核心常量
 
@@ -246,6 +248,9 @@ native 当前整回合主流程：
 
 - C++ baseline 源码：`Game1/antgame_ai_cpp/cpp_heavy_baseline/ai_cpp_heavy_baseline.cpp`
 - C++ baseline 构建：`Game1/antgame_ai_cpp/cpp_heavy_baseline/Makefile`
+- 当前最优 v3 源码：`Game1/antgame_ai_cpp/cpp_lure_v3/ai_cpp_lure_v3.cpp`
+- 当前最优 v3 参数：`Game1/antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
+- v3-a 抗性测试变体：`Game1/antgame_ai_cpp/cpp_lure_v3a/ai_cpp_lure_v3a.cpp`
 - `cpp_lure_v2` 源码目录和打包目标已删除
 - baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v2.hpp`
 - 快速模拟器：`Game1/antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`

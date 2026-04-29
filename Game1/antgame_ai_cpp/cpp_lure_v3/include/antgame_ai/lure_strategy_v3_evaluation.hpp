@@ -92,6 +92,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
 
     std::vector<UcbArm> arms;
     arms.reserve(root_plans.plans.size());
+    const bool c1_transition_phase = c1_transition_phase_from_action_start(defense_root);
     for (std::size_t index = 0; index < root_plans.plans.size(); ++index) {
         const auto &plan = root_plans.plans[index];
         UcbArm arm;
@@ -101,7 +102,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         if (!plan.ops.empty() && !apply_operations(arm.plan_root, plan.ops)) {
             arm.valid = false;
         } else {
-            arm.root_c1_bonus = c1_root_bonus_for_plan(arm.plan_root, player, plan.followup);
+            arm.root_c1_bonus = c1_root_bonus_for_plan(arm.plan_root, player, plan.followup, c1_transition_phase);
         }
         arms.push_back(std::move(arm));
     }

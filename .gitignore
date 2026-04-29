@@ -34,6 +34,7 @@ Game1/antgame_ai_cpp/v*/ai_v[0-9]*
 
 # Runtime outputs
 replays/
+eval_results/
 *.jsonl
 *.log
 result.txt

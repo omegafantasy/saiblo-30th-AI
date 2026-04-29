@@ -16,6 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT_DIR / "elo_web" / "static"
 PROD_LATEST = ROOT_DIR / "autolab" / "runtime" / "latest.json"
 ITER_LATEST = ROOT_DIR / "autolab" / "runtime" / "scopes" / "iter" / "latest.json"
+SAIBLO_GAME1_LATEST = ROOT_DIR / "autolab" / "runtime" / "saiblo_game1_elo" / "latest.json"
 
 
 def now_iso() -> str:
@@ -117,6 +118,88 @@ def build_view(path: Path, label: str) -> Dict[str, Any]:
     }
 
 
+def build_saiblo_view(path: Path, label: str) -> Dict[str, Any]:
+    if not path.exists():
+        return {
+            "label": label,
+            "available": False,
+            "path": str(path),
+            "error": "missing file",
+        }
+    try:
+        data = read_json(path)
+    except Exception as e:
+        return {
+            "label": label,
+            "available": False,
+            "path": str(path),
+            "error": f"load failed: {e}",
+        }
+
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    crawl_state = data.get("crawl_state", {}) if isinstance(data.get("crawl_state", {}), dict) else {}
+    status = crawl_state.get("status", {}) if isinstance(crawl_state.get("status", {}), dict) else {}
+    matches = data.get("matches", {}) if isinstance(data.get("matches", {}), dict) else {}
+    elo = data.get("elo", {}) if isinstance(data.get("elo", {}), dict) else {}
+    config = data.get("config", {}) if isinstance(data.get("config", {}), dict) else {}
+
+    rows = []
+    ratings = elo.get("ratings", []) if isinstance(elo.get("ratings", []), list) else []
+    for i, item in enumerate(ratings, start=1):
+        if not isinstance(item, dict):
+            continue
+        games = as_int(item.get("games", 0))
+        rows.append(
+            {
+                "rank": as_int(item.get("rank", i)),
+                "code_id": str(item.get("code_id", "")),
+                "elo": round(as_float(item.get("elo", 0.0)), 2),
+                "raw_elo": round(as_float(item.get("raw_elo", 0.0)), 2),
+                "reliability": round(as_float(item.get("reliability", 0.0)), 4),
+                "games": games,
+                "wins": as_int(item.get("wins", 0)),
+                "losses": as_int(item.get("losses", 0)),
+                "draws": as_int(item.get("draws", 0)),
+                "win_rate": round(as_float(item.get("win_rate", 0.0)), 4),
+                "score_rate": round(as_float(item.get("score_rate", 0.0)), 4),
+                "avg_hp_diff": round(as_float(item.get("avg_hp_diff", 0.0)), 3),
+                "avg_rounds": round(as_float(item.get("avg_rounds", 0.0)), 1),
+                "username": str(item.get("username", "")),
+                "entity": str(item.get("entity", "")),
+                "version": item.get("version"),
+                "remark": str(item.get("remark", "")),
+                "ladder_rank": item.get("ladder_rank"),
+                "ladder_score": item.get("ladder_score"),
+                "last_match_id": as_int(item.get("last_match_id", 0)),
+                "provisional": bool(item.get("provisional", False)),
+            }
+        )
+
+    return {
+        "label": label,
+        "available": True,
+        "path": str(path),
+        "file_mtime": mtime,
+        "generated_at": str(data.get("generated_at", "")),
+        "status": str(status.get("state", "")),
+        "status_message": str(status.get("message", "")),
+        "token_source": str(crawl_state.get("token_source", "")),
+        "game_id": as_int(config.get("game_id", 0)),
+        "start_match_id": as_int(config.get("start_match_id", 0)),
+        "stored": as_int(matches.get("stored", 0)),
+        "success": as_int(matches.get("success", 0)),
+        "success_with_replay_meta": as_int(matches.get("success_with_replay_meta", 0)),
+        "pending": as_int(matches.get("pending", 0)),
+        "failed": as_int(matches.get("failed", 0)),
+        "min_match_id": as_int(matches.get("min_match_id", 0)),
+        "max_match_id": as_int(matches.get("max_match_id", 0)),
+        "matches_used": as_int(elo.get("matches_used", 0)),
+        "rated_versions": as_int(elo.get("rated_versions", 0)),
+        "queue": data.get("queue", []) if isinstance(data.get("queue", []), list) else [],
+        "rows": rows,
+    }
+
+
 def build_payload() -> Dict[str, Any]:
     return {
         "generated_at": now_iso(),
@@ -124,6 +207,7 @@ def build_payload() -> Dict[str, Any]:
         "views": {
             "prod": build_view(PROD_LATEST, "production"),
             "iter": build_view(ITER_LATEST, "iteration"),
+            "saiblo_game1": build_saiblo_view(SAIBLO_GAME1_LATEST, "saiblo-game1"),
         },
     }
 

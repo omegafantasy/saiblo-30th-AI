@@ -37,29 +37,32 @@ inline double own_equivalent_total_coins(const rs::DefenseSimulator &simulator) 
     return simulator.coins + tower_full_salvage_value(simulator);
 }
 
-inline double c1_root_bonus(const rs::DefenseSimulator &post_root, int player) {
+inline bool c1_transition_phase_from_action_start(const rs::DefenseSimulator &action_start) {
+    return own_equivalent_total_coins(action_start) >=
+           static_cast<double>(v3_lure_config().c1_quick_transition_coin_threshold);
+}
+
+inline double c1_root_bonus(const rs::DefenseSimulator &post_root, int player, bool transition_phase) {
     const rs::SearchTower *c1 = tower_at_code(post_root, player, C1);
     if (c1 == nullptr || !c1->alive()) {
         return 0.0;
     }
-    const bool transition_phase =
-        own_equivalent_total_coins(post_root) >
-        static_cast<double>(v3_lure_config().c1_quick_transition_coin_threshold);
     return c1_state_bonus(c1->tower_type, transition_phase);
 }
 
 inline double c1_root_bonus_for_plan(
     const rs::DefenseSimulator &post_root,
     int player,
-    const FollowupAction &followup) {
+    const FollowupAction &followup,
+    bool transition_phase) {
     if (followup.empty()) {
-        return c1_root_bonus(post_root, player);
+        return c1_root_bonus(post_root, player, transition_phase);
     }
     rs::DefenseSimulator projected = post_root.clone();
     for (int turn = 1; turn <= 2; ++turn) {
         apply_operations(projected, resolve_followup_operations(projected, player, followup, turn));
     }
-    return c1_root_bonus(projected, player);
+    return c1_root_bonus(projected, player, transition_phase);
 }
 
 inline double c1_terminal_bonus(const rs::DefenseSimulator &, int) {

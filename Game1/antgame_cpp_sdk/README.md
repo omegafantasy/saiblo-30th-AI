@@ -13,7 +13,7 @@
 - 规则真值：`../Ant-Game/`
 - SDK：当前目录
 - 冻结 baseline AI：`../antgame_ai_cpp/cpp_heavy_baseline/`
-- 当前 v3 AI：`../antgame_ai_cpp/cpp_lure_v3/`
+- 当前最优 v3 AI：`../antgame_ai_cpp/cpp_lure_v3/`
 
 `Ant-Game/` 只作为只读依赖，不在其中放 SDK 或 AI 改动。
 
@@ -66,7 +66,11 @@ v3 已新开独立入口，不改 baseline / v2：
 - 参数文件：`../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
 - 打包目标：`package_ai.sh cpp_lure_v3`
 
-v3 已从 SDK 公共头中独立出来，策略实现和参数均位于 `cpp_lure_v3/include/antgame_ai/`。当前 v3 在 v2 冻结口径上继续迭代 root 搜索、reactive 模拟与进攻性 `EMP Blaster` / `Emergency Evasion` 后处理。共享 gating 为：敌方闪电未生效、敌方闪电 CD 至少 `5`，执行 best action 后金币仍 `>30`。回避还要求 C1 仍为 `Sniper`，且存在一个回避中心覆盖至少 `4` 只己方 `Worker`；战斗蚁不计入覆盖数，平局时优先更靠近敌方基地的位置。EMP 要求己方战斗蚁距敌方顶级塔 `<=2`，释放中心固定为该顶级塔。
+`cpp_lure_v3a/` 是 2026-04-29 新增的激进抗性测试变体：金币 `>=200` 时优先尝试将基地生成蚂蚁升级到 2 级，其余操作沿用 v3。它用于测试当前 v3 对 25 血蚂蚁的抗性，不作为最优解。
+
+v3 已从 SDK 公共头中独立出来，策略实现和参数均位于 `cpp_lure_v3/include/antgame_ai/`。当前 v3 在 v2 冻结口径上继续迭代 root 搜索、reactive 模拟与进攻性 `EMP Blaster` / `Emergency Evasion` 后处理。共享 gating 为：敌方闪电未生效、敌方闪电 CD 至少 `5`，执行 best action 后金币仍 `>30`。回避还要求 C1 仍为 `Sniper`，且存在一个回避中心覆盖至少 `4` 只己方 `Worker`；战斗蚁不计入覆盖数，平局时优先更靠近敌方基地的位置。EMP 要求己方战斗蚁距敌方顶级塔 `<=2`，释放中心固定为该顶级塔。v3 的己方等效金币终点评估使用阶梯权重：`400` 以内按 `money_weight=10`，超过 `400` 的部分按 `money_weight_above_threshold=6`。
+
+2026-04-29 当前最优评测结果统一保存在仓库根目录 `eval_results/`：v3 vs baseline 座位平衡 128 局为 v3 `72-56`，总血量差 `+338`；v3-a vs v3 座位平衡 32 局为 v3-a `1-31`，总血量差 `-781`。
 
 2026-04-27 已完成一组 v3 vs baseline 座位平衡 32 局官方对局。该结果来自 action-level UCB / reactive 击杀检测重构前的历史参数，仅作为回归参考。结果目录沿用当时的历史命名：
 
@@ -228,7 +232,7 @@ build/sdk_defense_parity \
 - `include/antgame_sdk/lure_strategy_v2_params.hpp`
   - 当前 baseline/v2 参数入口
 - `../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
-  - 当前 v3 对外聚合入口，继承 v2 搜索并追加进攻性 `Emergency Evasion`
+  - 当前 v3 对外聚合入口，继承 v2 搜索并追加进攻性 `EMP Blaster` / `Emergency Evasion`
   - 具体实现已拆到同目录下的 `core`、`plan_types`、`base/lure/lightning/root_plans`、`reactive`、`evaluation`、`offense`、`decision` 分段头文件
 - `../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
   - 当前 v3 参数入口
@@ -252,14 +256,14 @@ build/sdk_defense_parity \
 若只想跑完整对局汇总，可用：
 
 ```bash
-cd Game1/antgame_ai_cpp
-python tools/eval_cpp_selfplay.py \
+cd /root/autodl-tmp/saiblo_iter
+python3 Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py \
   --target cpp_heavy_baseline \
   --seeds 1:8 \
   --debug-seeds 1 \
   --jobs 8 \
   --max-rounds 256 \
-  --output-dir ./eval_current \
+  --output-dir eval_results/baseline_selfplay_8 \
   --force
 ```
 
@@ -274,28 +278,28 @@ python tools/eval_cpp_selfplay.py \
 进一步分析：
 
 ```bash
-cd Game1/antgame_ai_cpp
-python tools/analyze_selfplay_batch.py ./eval_current
+cd /root/autodl-tmp/saiblo_iter
+python3 Game1/antgame_ai_cpp/tools/analyze_selfplay_batch.py eval_results/baseline_selfplay_8
 ```
 
 若要测试两个不同版本，应做座位平衡对战。例如测试 v3 相对当前 baseline：
 
 ```bash
-cd Game1/antgame_ai_cpp
-python tools/eval_cpp_selfplay.py \
+cd /root/autodl-tmp/saiblo_iter
+python3 Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py \
   --target0 cpp_heavy_baseline \
   --target1 cpp_lure_v3 \
   --seeds 1:16 \
   --jobs 16 \
-  --output-dir ./eval_baseline_p0_v3_p1 \
+  --output-dir eval_results/baseline_p0_v3_p1_16 \
   --force
 
-python tools/eval_cpp_selfplay.py \
+python3 Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py \
   --target0 cpp_lure_v3 \
   --target1 cpp_heavy_baseline \
-  --seeds 17:32 \
+  --seeds 1:16 \
   --jobs 16 \
-  --output-dir ./eval_v3_p0_baseline_p1 \
+  --output-dir eval_results/v3_p0_baseline_p1_16 \
   --force
 ```
 
@@ -317,14 +321,14 @@ python tools/eval_cpp_selfplay.py \
 若要严格停在前 `256` 回合并保留该窗口的 replay / stderr log，应改用：
 
 ```bash
-cd Game1/antgame_ai_cpp
-python tools/eval_cpp_partial_selfplay.py \
+cd /root/autodl-tmp/saiblo_iter
+python3 Game1/antgame_ai_cpp/tools/eval_cpp_partial_selfplay.py \
   --target cpp_heavy_baseline \
   --seeds 1:8 \
   --debug-seeds 1:8 \
   --jobs 8 \
   --max-rounds 256 \
-  --output-dir ./eval_partial_full_log_256 \
+  --output-dir eval_results/baseline_partial_full_log_256 \
   --force
 ```
 

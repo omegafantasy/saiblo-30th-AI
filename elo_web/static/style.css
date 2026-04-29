@@ -42,9 +42,13 @@ h1 {
 .panel {
   background: #ffffff;
   border: 1px solid #dce3ee;
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: 0 2px 10px #0000000e;
   overflow: hidden;
+}
+
+.wide {
+  grid-column: 1 / -1;
 }
 
 .panel-title {
@@ -72,6 +76,10 @@ table {
   width: 100%;
   border-collapse: collapse;
   min-width: 680px;
+}
+
+.wide-table {
+  min-width: 1280px;
 }
 
 th,
@@ -109,6 +117,50 @@ tbody tr:hover {
 
 .err {
   color: #b91c1c;
+  font-weight: 600;
+}
+
+.ok {
+  color: #15803d;
+}
+
+.warn {
+  color: #b45309;
+}
+
+.main-cell {
+  font-weight: 600;
+  color: #111827;
+  white-space: nowrap;
+}
+
+.sub-cell {
+  max-width: 520px;
+  color: #64748b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  color: #0f172a;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 12px;
   font-weight: 600;
 }
 
