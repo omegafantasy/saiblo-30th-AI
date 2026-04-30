@@ -9,6 +9,30 @@ function esc(s) {
     .replaceAll(">", "&gt;");
 }
 
+function attrEsc(s) {
+  return esc(s).replaceAll('"', "&quot;");
+}
+
+function saibloMatchUrl(matchId) {
+  return `https://www.saiblo.net/match/${encodeURIComponent(String(matchId))}`;
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+}
+
 function renderSummary(nodeId, v) {
   const node = document.getElementById(nodeId);
   if (!v || !v.available) {
@@ -73,6 +97,8 @@ function renderSaibloSummary(nodeId, v) {
     `含回放元信息: <b>${v.success_with_replay_meta}</b>`,
     `Elo对局: <b>${v.matches_used}</b>`,
     `AI版本: <b>${v.rated_versions}</b>`,
+    `跨版本: <b>${v.cross_rated_versions ?? "-"}</b>`,
+    `默认: <b>${v.default_versions ?? "-"}</b>`,
     `pending: <b>${v.pending}</b>`,
     `failed: <b>${v.failed}</b>`,
     `范围: <b>${v.min_match_id || "-"} - ${v.max_match_id || "-"}</b>`,
@@ -93,10 +119,17 @@ function renderSaibloTable(tableId, rows) {
     if (r.rank === 1) tr.className = "top1";
     const aiName = `${esc(r.username || "-")} / ${esc(r.entity || "-")} v${esc(r.version ?? "-")}`;
     const ladder = r.ladder_rank ? `#${r.ladder_rank} ${esc(r.ladder_score ?? "")}` : "-";
+    const lastMatchId = Number(r.last_match_id || 0);
+    const matchLink = lastMatchId > 0 ? saibloMatchUrl(lastMatchId) : "";
+    const tags = [];
+    if (r.provisional) tags.push('<span class="tag">少量</span>');
+    if (r.rating_source === "default_self_play") tags.push('<span class="tag">自战默认</span>');
+    else if (r.rating_source === "default") tags.push('<span class="tag">默认</span>');
+    if (r.self_play_games) tags.push(`<span class="tag">自战${r.self_play_games}</span>`);
     tr.innerHTML = `
       <td>${r.rank}</td>
       <td>
-        <div class="main-cell">${aiName}${r.provisional ? ' <span class="tag">少量</span>' : ""}</div>
+        <div class="main-cell">${aiName}${tags.length ? " " + tags.join(" ") : ""}</div>
         <div class="sub-cell">${esc(r.remark || "")}</div>
       </td>
       <td><code title="${esc(r.code_id)}">${esc(shortCode(r.code_id))}</code></td>
@@ -111,10 +144,40 @@ function renderSaibloTable(tableId, rows) {
       <td>${Number(r.avg_rounds).toFixed(1)}</td>
       <td>${ladder}</td>
       <td>${r.last_match_id || "-"}</td>
+      <td>
+        <div class="row-actions">
+          <button type="button" class="action-btn copy-token" data-token="${attrEsc(r.code_id)}" title="复制完整 code_id">复制</button>
+          ${
+            matchLink
+              ? `<a class="action-btn" href="${attrEsc(matchLink)}" target="_blank" rel="noopener noreferrer" title="打开最近一轮对局">对局</a>`
+              : '<button type="button" class="action-btn" disabled title="暂无最近对局">对局</button>'
+          }
+        </div>
+      </td>
     `;
     tbody.appendChild(tr);
   }
 }
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".copy-token");
+  if (!btn) return;
+  const token = btn.dataset.token || "";
+  if (!token) return;
+  const old = btn.textContent;
+  try {
+    await copyText(token);
+    btn.textContent = "已复制";
+    btn.classList.add("copied");
+  } catch (err) {
+    btn.textContent = "失败";
+    btn.classList.add("copy-failed");
+  }
+  window.setTimeout(() => {
+    btn.textContent = old || "复制";
+    btn.classList.remove("copied", "copy-failed");
+  }, 1200);
+});
 
 async function reload() {
   try {

@@ -2,7 +2,7 @@
 
 namespace antgame::sdk {
 
-struct V3LureStrategyTuning {
+struct V4LureStrategyTuning {
     int rollout_count = 50;
     int action_ucb_batch_rollouts = 40;
     double action_ucb_exploration = 600.0;
@@ -88,10 +88,10 @@ struct V3LureStrategyTuning {
     int offensive_emp_combat_to_top_tower_distance = 2;
 };
 
-inline constexpr V3LureStrategyTuning kV3LureStrategyTuning{};
+inline constexpr V4LureStrategyTuning kV4LureStrategyTuning{};
 
-inline constexpr const V3LureStrategyTuning &v3_lure_config() {
-    return kV3LureStrategyTuning;
+inline constexpr const V4LureStrategyTuning &v4_lure_config() {
+    return kV4LureStrategyTuning;
 }
 
 } // namespace antgame::sdk

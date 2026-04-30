@@ -78,6 +78,11 @@ json v3_tuning_to_json() {
         {"rollout_count", tuning.rollout_count},
         {"action_ucb_batch_rollouts", tuning.action_ucb_batch_rollouts},
         {"action_ucb_exploration", tuning.action_ucb_exploration},
+        {"action_base_total_rollouts", tuning.action_base_total_rollouts},
+        {"action_target_total_rollouts", tuning.action_target_total_rollouts},
+        {"action_target_rollouts_per_action", tuning.action_target_rollouts_per_action},
+        {"action_max_rollouts_per_batch", tuning.action_max_rollouts_per_batch},
+        {"action_time_budget_ms", tuning.action_time_budget_ms},
         {"lightning_ucb_total_rollouts", tuning.lightning_ucb_total_rollouts},
         {"lightning_ucb_batch_rollouts", tuning.lightning_ucb_batch_rollouts},
         {"lightning_ucb_exploration", tuning.lightning_ucb_exploration},
@@ -968,6 +973,7 @@ json simulate_traced_round(
     out["state_after_move_phase"] = defense_sim_to_json(simulator);
     simulator.teleport_phase(rng);
     out["state_after_teleport_phase"] = defense_sim_to_json(simulator);
+    simulator.decay_pheromone();
     simulator.manage_ants();
     if (!simulator.ignore_enemy_spawns) {
         simulator.spawn_enemy_ant(rng);
@@ -1029,6 +1035,8 @@ json plan_sample_trace(
 
     rs::DefenseSimulator simulator = root.clone();
     rs::DefenseSimulator control = root.clone();
+    const bool c1_transition_phase = ls::c1_transition_phase_from_action_start(root);
+    double root_c1_bonus = 0.0;
     if (!selected.plan.ops.empty()) {
         if (!ls::apply_operations(simulator, selected.plan.ops)) {
             throw std::runtime_error("failed to apply selected plan");
@@ -1037,6 +1045,7 @@ json plan_sample_trace(
             ls::apply_operations(control, ls::strip_lightning_operations(selected.plan.ops));
         }
     }
+    root_c1_bonus = ls::c1_root_bonus_for_plan(simulator, player, selected.plan.followup, c1_transition_phase);
 
     const std::uint64_t seed = ucb_sample != nullptr
                                    ? ucb_sample->rollout_seed
@@ -1077,9 +1086,15 @@ json plan_sample_trace(
                 row["applied_operations"].push_back(operation_to_json(operation));
             }
         } else {
-            const auto reactive_ops = ls::choose_reactive_turn_operations(simulator, player);
-            reactive_penalty += ls::downgrade_penalty_for_ops(simulator, reactive_ops);
-            ls::apply_operations(simulator, reactive_ops);
+            std::vector<Operation> reactive_ops;
+            if (const rs::SearchTower *forced = ls::forced_reactive_sell_target(simulator, player); forced != nullptr) {
+                const Operation downgrade(OperationType::DowngradeTower, forced->tower_id);
+                const double penalty = ls::downgrade_operation_penalty(simulator, player, downgrade);
+                if (simulator.apply_operation(downgrade)) {
+                    reactive_ops.push_back(downgrade);
+                    reactive_penalty += penalty;
+                }
+            }
             row["phase"] = "reactive";
             row["applied_operations_pretty"] = ls::pretty_ops_text(state, player, reactive_ops);
             row["applied_operations"] = json::array();
@@ -1122,8 +1137,11 @@ json plan_sample_trace(
         mid_eval = final_terminal;
         mid_reactive_penalty = reactive_penalty;
     }
-    const ls::EvalBreakdown terminal =
+    ls::EvalBreakdown terminal =
         ls::combine_eval_breakdowns(mid_eval, final_terminal, v3_lure_config().mid_eval_weight);
+    terminal.c1_bonus_raw = root_c1_bonus;
+    terminal.c1_bonus_score = root_c1_bonus;
+    terminal.total_score += root_c1_bonus;
     const double weighted_reactive_penalty =
         std::max(0.0, std::min(1.0, v3_lure_config().mid_eval_weight)) * mid_reactive_penalty +
         (1.0 - std::max(0.0, std::min(1.0, v3_lure_config().mid_eval_weight))) * reactive_penalty;
@@ -1150,6 +1168,7 @@ json plan_sample_trace(
     out["terminal"] = eval_breakdown_to_json(terminal);
     out["mid_terminal"] = eval_breakdown_to_json(mid_eval);
     out["final_terminal"] = eval_breakdown_to_json(final_terminal);
+    out["root_c1_bonus"] = root_c1_bonus;
     out["lightning_bonus_raw"] = lightning_bonus_raw;
     out["lightning_bonus_score"] = lightning_bonus_score;
     out["reactive_operation_penalty"] = weighted_reactive_penalty;

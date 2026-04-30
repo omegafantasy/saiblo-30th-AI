@@ -80,7 +80,15 @@ v3 当前已独立于 baseline/v2 继续迭代：普通 root action 与闪电 ro
 
 EMP 中心固定为该敌方顶级塔坐标。若多个塔满足，按距离、塔价值、到敌方基地距离和塔 ID 稳定选一个。官方会让 EMP active effect 每回合随机漂移，因此 replay 中 `activeEffects` 的坐标不一定等于释放时的 `op` 坐标。
 
-2026-04-29 当前 v3 vs baseline 座位平衡 128 局结果为 v3 `72` 胜、baseline `56` 胜，总血量差 `+338`。分座位看，v3 先手 `37-27`、血量差 `+196`；v3 后手 `35-29`、血量差 `+142`。结果目录位于仓库根目录 `eval_results/v3_vs_baseline_128_c1_action_start_p0/` 与 `eval_results/v3_vs_baseline_128_c1_action_start_p1/`。
+2026-04-30 当前 v3 作为阶段性最优解冻结。最新 v3 vs baseline 座位平衡 128 局使用全新 seed `1001:1064`，分 4 批完成，结果为 v3 `75-53-0`，总血量差 `+391`，平均 `+3.0547`。分座位看，v3 先手 `35-29`、血量差 `-39`；v3 后手 `40-24`、血量差 `+430`。结果目录位于仓库根目录 `eval_results/v3_vs_baseline_128_random_equal_newseeds_b{1..4}_{p0,p1}_20260430/`。
+
+该 128 局显示出明显 p1 侧效应：同一 seed 正反手互换后，v3 作为 p1 的血量比作为 p0 平均高 `+7.3281`。当前记录的可能来源包括：本地协议中 p1 决策前已接收并应用 p0 本回合操作，存在当前回合信息差；连续 seed `1001:1064` 的随机数也导致初始蚂蚁 profile 非完全镜像，p0 首只蚂蚁全为 `Worker + Conservative`，p1 首只蚂蚁为混合分布。v3 本身主要评估防守状态，理论上对敌方非超武操作不应高度敏感，因此后续评测应优先使用打散 seed，并用 v4 vs v3 / baseline-baseline / v3-v3 对照进一步拆分协议侧效应和策略侧效应。
+
+2026-04-30 已复制 `cpp_lure_v3` 为 `cpp_lure_v4`。v4 初始逻辑、参数和评测口径与当前 v3 一致，后续关键参数调节、行为分析和策略优化优先在 v4 上进行，目标是在压过 v3 的同时维持或提高对 baseline 的胜率与总血量差。
+
+2026-04-29 历史 v3 vs baseline 座位平衡 128 局结果为 v3 `72` 胜、baseline `56` 胜，总血量差 `+338`。分座位看，v3 先手 `37-27`、血量差 `+196`；v3 后手 `35-29`、血量差 `+142`。结果目录位于仓库根目录 `eval_results/v3_vs_baseline_128_c1_action_start_p0/` 与 `eval_results/v3_vs_baseline_128_c1_action_start_p1/`。
+
+2026-04-29 增加 `cpp_lure_v3n` 性能探针，只计算 active lure 与 lightning 两类 root plan，永远不输出操作。该探针以原生 `cpp_zip` 上传 Saiblo，entity `v3n-perf-cppzip`，code id `cd02749306d642e3a409f2dd50d5d32f`。16 组自我对战中，本机平均 `317.978ms / player-round`，Saiblo stderr 平均 `515.530ms / player-round`，Saiblo/本机比例约 `1.621x`。Saiblo 页面用时统计图来自 match detail 的 `message.record[].time`，该图表平均 `512.608ms / call`，与 stderr 内部计时平均 `515.530ms / call` 的总量差约 `0.57%`，口径一致。详情见 `Game1/antgame_ai_cpp/cpp_lure_v3n/README.md`。
 
 2026-04-29 另建 `cpp_lure_v3a` 作为激进抗性测试变体：其余操作沿用 v3，但己方当前金币 `>=200` 且基地蚂蚁等级 `<2` 时，优先尝试升级基地生成蚂蚁到 2 级。v3-a 用于测试当前 v3 对 25 血蚂蚁的抗性，不作为最优解。32 局 v3-a vs v3 中，v3-a `1-31`，总血量差 `-781`。
 

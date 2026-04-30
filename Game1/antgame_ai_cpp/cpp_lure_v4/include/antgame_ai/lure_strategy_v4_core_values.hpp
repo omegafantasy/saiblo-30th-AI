@@ -4,7 +4,7 @@
 #include <cmath>
 #include <vector>
 
-#include "antgame_ai/lure_strategy_v3_core_ops.hpp"
+#include "antgame_ai/lure_strategy_v4_core_ops.hpp"
 
 namespace antgame::sdk::lure_strategy_detail {
 
@@ -39,7 +39,7 @@ inline double downgrade_operation_refund(const rs::DefenseSimulator &simulator, 
 }
 
 inline double downgrade_refund_penalty(double refund) {
-    return refund * v3_lure_config().downgrade_refund_penalty_scale;
+    return refund * v4_lure_config().downgrade_refund_penalty_scale;
 }
 
 inline bool non_lure_tower_has_adjacent_combat(
@@ -85,10 +85,10 @@ inline double downgrade_operation_penalty(const PublicState &state, int player, 
     const Tower *tower = state.tower_by_id(operation.arg0);
     double penalty = downgrade_refund_penalty(downgrade_operation_refund(state, player, operation));
     if (tower != nullptr && tower->tower_type == TowerType::Sniper) {
-        penalty += v3_lure_config().sniper_downgrade_penalty;
+        penalty += v4_lure_config().sniper_downgrade_penalty;
     }
     if (tower != nullptr && non_lure_tower_has_adjacent_combat(state, player, *tower)) {
-        penalty -= v3_lure_config().non_lure_adjacent_combat_downgrade_bonus;
+        penalty -= v4_lure_config().non_lure_adjacent_combat_downgrade_bonus;
     }
     return penalty;
 }
@@ -100,10 +100,10 @@ inline double downgrade_operation_penalty(const rs::DefenseSimulator &simulator,
     const rs::SearchTower *tower = simulator.tower_by_id(operation.arg0);
     double penalty = downgrade_refund_penalty(downgrade_operation_refund(simulator, operation));
     if (tower != nullptr && tower->alive() && tower->tower_type == TowerType::Sniper) {
-        penalty += v3_lure_config().sniper_downgrade_penalty;
+        penalty += v4_lure_config().sniper_downgrade_penalty;
     }
     if (tower != nullptr && non_lure_tower_has_adjacent_combat(simulator, player, *tower)) {
-        penalty -= v3_lure_config().non_lure_adjacent_combat_downgrade_bonus;
+        penalty -= v4_lure_config().non_lure_adjacent_combat_downgrade_bonus;
     }
     return penalty;
 }
@@ -199,10 +199,10 @@ inline int alive_tower_count(const rs::DefenseSimulator &simulator) {
 
 inline double behavior_threat_scale(AntBehavior behavior) {
     if (behavior == AntBehavior::Random) {
-        return v3_lure_config().randomized_threat_scale;
+        return v4_lure_config().randomized_threat_scale;
     }
     if (behavior == AntBehavior::Bewitched) {
-        return v3_lure_config().bewitched_threat_scale;
+        return v4_lure_config().bewitched_threat_scale;
     }
     return 1.0;
 }

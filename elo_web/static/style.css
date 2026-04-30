@@ -79,7 +79,7 @@ table {
 }
 
 .wide-table {
-  min-width: 1280px;
+  min-width: 1380px;
 }
 
 th,
@@ -162,6 +162,54 @@ code {
   color: #9a3412;
   font-size: 12px;
   font-weight: 600;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.action-btn:hover:not(:disabled) {
+  background: #eaf2ff;
+  border-color: #93c5fd;
+}
+
+.action-btn:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+  background: #f8fafc;
+}
+
+.action-btn.copied {
+  color: #166534;
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.action-btn.copy-failed {
+  color: #991b1b;
+  border-color: #fecaca;
+  background: #fef2f2;
 }
 
 @media (min-width: 1100px) {

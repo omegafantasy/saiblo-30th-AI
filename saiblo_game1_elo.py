@@ -72,6 +72,7 @@ class CrawlConfig:
     supplement_max_outstanding: int = 80
     supplement_pair_cap: int = 4
     supplement_request_timeout: float = 60.0
+    supplement_excluded_usernames: tuple[str, ...] = ("theend",)
 
 
 def now_iso() -> str:
@@ -156,6 +157,18 @@ def is_success_state(state: Any) -> bool:
 def compact_error(exc: BaseException) -> str:
     text = str(exc).strip().replace("\n", " | ")
     return text[:1000]
+
+
+def normalize_username(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def excluded_supplement_usernames(cfg: CrawlConfig) -> set[str]:
+    return {normalize_username(item) for item in cfg.supplement_excluded_usernames if normalize_username(item)}
+
+
+def is_supplement_excluded(row: dict[str, Any], cfg: CrawlConfig) -> bool:
+    return normalize_username(row.get("username")) in excluded_supplement_usernames(cfg)
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -634,6 +647,7 @@ def fetch_ladder(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str, Any]:
     offset = 0
     limit = 500
     total_rows = 0
+    current_codes: set[str] = set()
     while True:
         q = urllib.parse.urlencode({"limit": limit, "offset": offset})
         data = api_request("GET", f"/api/games/{int(cfg.game_id)}/ladders/?{q}", token="", timeout=cfg.request_timeout)
@@ -657,6 +671,8 @@ def fetch_ladder(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str, Any]:
                 "remark": str(code.get("remark") or ""),
                 "commit_id": str(code.get("commit_id") or ""),
             }
+            if player["code_id"]:
+                current_codes.add(str(player["code_id"]))
             upsert_version(
                 conn,
                 player,
@@ -671,8 +687,16 @@ def fetch_ladder(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str, Any]:
             break
         offset += limit
         sleep_delay(cfg)
-    set_state(conn, "ladder", {"ok": True, "rows": total_rows, "updated_at": now_iso()})
-    return {"rows": total_rows}
+    if current_codes:
+        placeholders = ",".join("?" for _ in current_codes)
+        conn.execute(
+            f"UPDATE versions SET ladder_rank=NULL, ladder_score=NULL WHERE code_id != '' AND code_id NOT IN ({placeholders})",
+            tuple(sorted(current_codes)),
+        )
+    else:
+        conn.execute("UPDATE versions SET ladder_rank=NULL, ladder_score=NULL WHERE code_id != ''")
+    set_state(conn, "ladder", {"ok": True, "rows": total_rows, "current_codes": len(current_codes), "updated_at": now_iso()})
+    return {"rows": total_rows, "current_codes": len(current_codes)}
 
 
 def scan_match_list(conn: sqlite3.Connection, cfg: CrawlConfig, token: str) -> dict[str, Any]:
@@ -1169,7 +1193,7 @@ def elo_rows(conn: sqlite3.Connection, cfg: CrawlConfig) -> tuple[list[dict[str,
     versions = load_versions(conn)
     self_play_stats = load_self_play_stats(conn, cfg)
     rating_rows: list[dict[str, Any]] = []
-    code_ids = set(versions.keys()) | set(ratings.keys()) | set(stats.keys()) | set(self_play_stats.keys())
+    code_ids = set(ratings.keys()) | set(stats.keys()) | set(self_play_stats.keys())
     for code_id in code_ids:
         rating = ratings.get(code_id, float(cfg.base_rating))
         s = stats[code_id]
@@ -1355,6 +1379,8 @@ def choose_opponent(
     cfg: CrawlConfig,
 ) -> tuple[str, str]:
     target_code = str(target["code_id"])
+    if is_supplement_excluded(target, cfg):
+        return "", "target_excluded_user"
     target_rating = ratings.get(target_code, {})
     target_elo = as_float(target_rating.get("elo"), float(cfg.base_rating))
     target_games = as_int(target.get("active_matches"), 0)
@@ -1363,6 +1389,8 @@ def choose_opponent(
     candidates: list[tuple[float, str, str]] = []
     for code_id, row in versions.items():
         if code_id == target_code:
+            continue
+        if is_supplement_excluded(row, cfg):
             continue
         if as_int(row.get("active_matches"), 0) < 8:
             continue
@@ -1398,6 +1426,8 @@ def choose_opponent(
     for code_id, row in versions.items():
         if code_id == target_code:
             continue
+        if is_supplement_excluded(row, cfg):
+            continue
         if str(row.get("compile_status") or "") and str(row.get("compile_status")) != "编译成功":
             continue
         pc = pair_count(conn, target_code, code_id)
@@ -1419,6 +1449,8 @@ def supplement_candidates(conn: sqlite3.Connection, cfg: CrawlConfig) -> list[di
     now = time.time()
     out: list[dict[str, Any]] = []
     for code_id, row in versions.items():
+        if is_supplement_excluded(row, cfg):
+            continue
         active = as_int(row.get("active_matches"), 0)
         first_epoch = as_float(row.get("first_seen_epoch"), 0.0)
         age = now - first_epoch if first_epoch > 0 else 0.0
@@ -1777,6 +1809,7 @@ def build_latest(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str, Any]:
             "supplement_min_games": int(cfg.supplement_min_games),
             "supplement_candidate_max_games": int(cfg.supplement_candidate_max_games),
             "supplement_max_outstanding": int(cfg.supplement_max_outstanding),
+            "supplement_excluded_usernames": sorted(excluded_supplement_usernames(cfg)),
         },
         "crawl_state": state,
         "matches": matches_summary,
@@ -1947,6 +1980,7 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--supplement-max-outstanding", type=int, default=80)
     p.add_argument("--supplement-pair-cap", type=int, default=4)
     p.add_argument("--supplement-request-timeout", type=float, default=60.0)
+    p.add_argument("--supplement-exclude-user", action="append", default=["theend"], help="username excluded from automatic supplement matches; can be repeated")
 
 
 def config_from_args(args: argparse.Namespace) -> CrawlConfig:
@@ -1992,6 +2026,7 @@ def config_from_args(args: argparse.Namespace) -> CrawlConfig:
         supplement_max_outstanding=int(args.supplement_max_outstanding),
         supplement_pair_cap=int(args.supplement_pair_cap),
         supplement_request_timeout=float(args.supplement_request_timeout),
+        supplement_excluded_usernames=tuple(str(item) for item in (args.supplement_exclude_user or []) if str(item).strip()),
     )
 
 

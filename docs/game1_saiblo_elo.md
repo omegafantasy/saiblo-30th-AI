@@ -39,7 +39,7 @@ SQLite 表：
 
 默认每轮：
 
-1. 拉取公开排行榜，更新已知 code 元信息。
+1. 拉取公开排行榜，更新已知 code 元信息；成功拉到当前排行榜后，会清空不在当前排行榜内 code 的 `ladder_rank/ladder_score`，避免旧天梯残留继续显示成当前榜单信息。
 2. 用有效 token 拉 `/api/matches/?game=48` 分页列表，从新到旧扫描，遇到低于 `#7981000` 后停止。
 3. 低频按 match id 顺序做缺口探测；若探测到的详情不是 `game_id=48`，只标记 `ignored=1`，不等待、不下载 replay、不计入 Elo。例如 `#7981801` 是 `game_id=53`，会被忽略。
 4. 对新发现或未完成的 Game1 对局拉详情。
@@ -71,6 +71,7 @@ SQLite 表：
 - 优先选已有足够样本、编译成功、Elo 接近目标版本的对手。
 - 同一对 `code_id` 的历史/未完成补局达到 `--supplement-pair-cap` 后跳过，避免重复刷同一 matchup。
 - 候选池前几名按权重随机抽取，不固定选择唯一最近邻。
+- 自动补局默认排除用户名 `theend` 的 AI：它们仍会被爬取、记录并参与已有对局的 Elo 统计，但不会被选作补局目标或补局对手，避免主动暴露我方版本强度。
 
 ## Elo 计算
 
@@ -91,6 +92,7 @@ SQLite 表：
 - 血量差作为 margin multiplier：胜负方向仍由 rank/score 决定，最终血量差越大，本局 Elo 变化越大。
 - 展示分 `elo` 会按可靠度向 `1500` 收缩，可靠度约由总对局数决定；`raw_elo` 是未收缩分。
 - 同一个 `code_id` 两边自战不会改变 Elo，因为它不提供跨版本强度信息；但该版本仍会出现在榜单中，默认 `elo=raw_elo=1500`、`games=0`、`reliability=0`，并在 JSON 中记录 `rating_source=default_self_play` 与 `self_play_games`。之后自动补局可以再安排它对其他 AI，逐步把默认分替换为真实跨版本评分。
+- 当前排行榜只作为已知版本元信息补充；纯旧天梯残留、天梯占位、仅 pending/失败且没有跨版本有效对局或已完成自战的 code 不再进入 Elo 榜单。
 
 这样可以避免少量对局的版本被过度排序，同时让大样本版本稳定区分强弱。
 
@@ -127,6 +129,11 @@ scripts/elo_web_start.sh
 ```
 
 看板 API 会包含 `views.saiblo_game1`，网页中会出现 “Saiblo Game1 AI 版本 Elo” 区块。
+
+Saiblo Game1 表格每行右侧提供两个操作：
+
+- `复制`：复制该 AI 版本完整 `code_id`。
+- `对局`：打开该版本最近一场纳入 Elo 统计的 Saiblo 对局页。
 
 ## 当前限制
 

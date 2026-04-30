@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "usage: $0 <cpp_heavy_baseline|cpp_lure_v3|cpp_lure_v3a> [output_path_or_dir]" >&2
+  echo "usage: $0 <cpp_heavy_baseline|cpp_lure_v3|cpp_lure_v4|cpp_lure_v3a|cpp_lure_v3n> [output_path_or_dir]" >&2
   exit 1
 fi
 
@@ -98,6 +98,15 @@ case "$TARGET" in
       "${CPP_AI_ROOT}/build/ai_cpp_lure_v3:cpp_ai/ai"
     )
     ;;
+  cpp_lure_v4)
+    ARCHIVE_NAME="ai_cpp_lure_v4.zip"
+    CPP_AI_ROOT="${SCRIPT_DIR}/cpp_lure_v4"
+    make -C "${CPP_AI_ROOT}" -j2 >/dev/null
+    FILE_MAPPINGS=(
+      "${SCRIPT_DIR}/ai_cpp_protocol.py:ai.py"
+      "${CPP_AI_ROOT}/build/ai_cpp_lure_v4:cpp_ai/ai"
+    )
+    ;;
   cpp_lure_v3a)
     ARCHIVE_NAME="ai_cpp_lure_v3a.zip"
     CPP_AI_ROOT="${SCRIPT_DIR}/cpp_lure_v3a"
@@ -105,6 +114,15 @@ case "$TARGET" in
     FILE_MAPPINGS=(
       "${SCRIPT_DIR}/ai_cpp_protocol.py:ai.py"
       "${CPP_AI_ROOT}/build/ai_cpp_lure_v3a:cpp_ai/ai"
+    )
+    ;;
+  cpp_lure_v3n)
+    ARCHIVE_NAME="ai_cpp_lure_v3n.zip"
+    CPP_AI_ROOT="${SCRIPT_DIR}/cpp_lure_v3n"
+    make -C "${CPP_AI_ROOT}" -j2 >/dev/null
+    FILE_MAPPINGS=(
+      "${SCRIPT_DIR}/ai_cpp_protocol.py:ai.py"
+      "${CPP_AI_ROOT}/build/ai_cpp_lure_v3n:cpp_ai/ai"
     )
     ;;
   *)

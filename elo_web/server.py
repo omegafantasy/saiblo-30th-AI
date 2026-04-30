@@ -156,7 +156,9 @@ def build_saiblo_view(path: Path, label: str) -> Dict[str, Any]:
                 "elo": round(as_float(item.get("elo", 0.0)), 2),
                 "raw_elo": round(as_float(item.get("raw_elo", 0.0)), 2),
                 "reliability": round(as_float(item.get("reliability", 0.0)), 4),
+                "rating_source": str(item.get("rating_source", "")),
                 "games": games,
+                "self_play_games": as_int(item.get("self_play_games", 0)),
                 "wins": as_int(item.get("wins", 0)),
                 "losses": as_int(item.get("losses", 0)),
                 "draws": as_int(item.get("draws", 0)),
@@ -195,6 +197,9 @@ def build_saiblo_view(path: Path, label: str) -> Dict[str, Any]:
         "max_match_id": as_int(matches.get("max_match_id", 0)),
         "matches_used": as_int(elo.get("matches_used", 0)),
         "rated_versions": as_int(elo.get("rated_versions", 0)),
+        "cross_rated_versions": as_int(elo.get("cross_rated_versions", 0)),
+        "default_versions": as_int(elo.get("default_versions", 0)),
+        "self_play_versions": as_int(elo.get("self_play_versions", 0)),
         "queue": data.get("queue", []) if isinstance(data.get("queue", []), list) else [],
         "rows": rows,
     }
@@ -236,6 +241,11 @@ class EloHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/":
             self.path = "/index.html"
         return super().do_GET()
+
+    def end_headers(self) -> None:
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
 
     def log_message(self, fmt: str, *args: Any) -> None:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

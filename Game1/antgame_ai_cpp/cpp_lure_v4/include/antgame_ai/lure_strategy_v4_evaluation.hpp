@@ -6,7 +6,7 @@
 #include <limits>
 #include <vector>
 
-#include "antgame_ai/lure_strategy_v3_rollout_score.hpp"
+#include "antgame_ai/lure_strategy_v4_rollout_score.hpp"
 
 namespace antgame::sdk::lure_strategy_detail {
 
@@ -121,10 +121,10 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
     }
 
     (void)rollout_count;
-    const int action_base_total = std::max(0, v3_lure_config().action_base_total_rollouts);
-    const int action_target_total = std::max(0, v3_lure_config().action_target_total_rollouts);
-    const int action_target_per_action = std::max(1, v3_lure_config().action_target_rollouts_per_action);
-    const int action_max_batch = std::max(1, v3_lure_config().action_max_rollouts_per_batch);
+    const int action_base_total = std::max(0, v4_lure_config().action_base_total_rollouts);
+    const int action_target_total = std::max(0, v4_lure_config().action_target_total_rollouts);
+    const int action_target_per_action = std::max(1, v4_lure_config().action_target_rollouts_per_action);
+    const int action_max_batch = std::max(1, v4_lure_config().action_max_rollouts_per_batch);
     const int normal_arm_count = static_cast<int>(normal_arm_indices.size());
     const int normal_batch_size = normal_arm_indices.empty()
                                       ? 0
@@ -142,10 +142,10 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
                   std::min(
                       action_target_total,
                       action_target_per_action * normal_arm_count));
-    const int lightning_batch_size = std::max(1, v3_lure_config().lightning_ucb_batch_rollouts);
+    const int lightning_batch_size = std::max(1, v4_lure_config().lightning_ucb_batch_rollouts);
     const int lightning_budget = lightning_arm_indices.empty()
                                      ? 0
-                                     : std::max(0, v3_lure_config().lightning_ucb_total_rollouts);
+                                     : std::max(0, v4_lure_config().lightning_ucb_total_rollouts);
     const int lightning_target_total = lightning_budget <= 0
                                            ? 0
                                            : static_cast<int>(
@@ -303,7 +303,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         lightning_arm_indices,
         lightning_batch_size,
         lightning_target_total,
-        v3_lure_config().lightning_ucb_exploration,
+        v4_lure_config().lightning_ucb_exploration,
         true);
 
     auto run_budgeted_action_group = [&]() {
@@ -316,7 +316,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
             group_samples += sample_arm_batch(arms[arm_index], normal_batch_size);
         }
 
-        const double budget_ms = static_cast<double>(std::max(0, v3_lure_config().action_time_budget_ms));
+        const double budget_ms = static_cast<double>(std::max(0, v4_lure_config().action_time_budget_ms));
         while (group_samples < normal_target_total) {
             if (budget_ms > 0.0 && elapsed_ms() >= budget_ms) {
                 break;
@@ -331,7 +331,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
                 }
                 const double mean = arm_mean_score(arm);
                 const double explore =
-                    v3_lure_config().action_ucb_exploration *
+                    v4_lure_config().action_ucb_exploration *
                     std::sqrt(std::log(static_cast<double>(std::max(2, completed_samples + 1))) /
                               static_cast<double>(arm.samples));
                 const double ucb = mean + explore;

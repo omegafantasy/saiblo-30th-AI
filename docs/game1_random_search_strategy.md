@@ -102,7 +102,7 @@
 - 对以棋盘唯一中心 `(9,9)` 为中心、六边形距离 `<= lightning_center_radius` 的合法格子生成候选
 - baseline / v2 默认半径为 `5`，候选中心数为 `91`
 - baseline / v2 中每个合法中心是一个 UCB arm
-- v3 中闪电与 `recycle + lightning` 候选进入独立 lightning UCB 组；普通 action 进入普通 UCB 组，两组预算互不竞争
+- v3 中闪电与 `recycle + lightning` 候选进入独立 lightning UCB 组，并在普通 action 前先完整计算
 - v3 lightning 组默认总预算 `lightning_ucb_total_rollouts=500`，每次补 `lightning_ucb_batch_rollouts=1`
 
 当前闪电启发只考虑：
@@ -147,8 +147,8 @@
 
 - 普通候选 horizon: `long_eval_horizon`，并在 `mid_eval_horizon` 做一次中点评估
 - 闪电候选 horizon: `lightning_horizon`
-- 普通候选 rollout 次数：普通 action-level UCB，总预算约为 `normal_action_count * rollout_count`，每批 `action_ucb_batch_rollouts`
-- 闪电候选 rollout 次数：独立 lightning UCB，总预算 `lightning_ucb_total_rollouts`，每批 `lightning_ucb_batch_rollouts`
+- 普通候选 rollout 次数：先将 `action_base_total_rollouts=10000` 均分到所有普通 action，单 action batch 由 `action_max_rollouts_per_batch=100` 截断且每个 action 至少计算一次；基础部分跑完后，按 UCB 继续补样本，直到普通 action 总样本数达到 `min(action_target_total_rollouts=12500, action_target_rollouts_per_action=125 * 普通action数)` 或评估耗时超过 `action_time_budget_ms=3000`
+- 闪电候选 rollout 次数：独立 lightning UCB，总预算 `lightning_ucb_total_rollouts`，每批 `lightning_ucb_batch_rollouts`，并在普通候选前完整跑完
 - 快速模拟默认忽略每 `10` 回合的周期随机移动机制
 
 rollout 中未来回合不再主动生成完整 `base × lure` 计划，只保留轻量 reactive 回收：
@@ -228,10 +228,14 @@ debug summary 会输出 `v3_evasion_used`、`v3_evasion_reason`、`v3_evasion_wo
   - v3 对外聚合入口
   - v3 主体实现已拆为 `session`、`core_format/core_ops/core_values`、`plan_types`、`base_rules/base_swap/base_plans`、`lure/lightning/root_plans`、`reactive_targets/reactive`、`threat/rollout_sampling/terminal_eval/rollout_score/evaluation`、`offense`、`decision`
 - `Game1/antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
+- `Game1/antgame_ai_cpp/cpp_lure_v4/include/antgame_ai/lure_strategy_v4.hpp`
+  - 2026-04-30 从阶段性最优 v3 复制出的后续实验分支；初始策略、参数和评测口径与当前 v3 一致
+- `Game1/antgame_ai_cpp/cpp_lure_v4/include/antgame_ai/lure_strategy_v4_params.hpp`
 - `Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy.hpp`
 - `Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_params.hpp`
 - `Game1/antgame_ai_cpp/cpp_heavy_baseline/ai_cpp_heavy_baseline.cpp`
 - `Game1/antgame_ai_cpp/cpp_lure_v3/ai_cpp_lure_v3.cpp`
+- `Game1/antgame_ai_cpp/cpp_lure_v4/ai_cpp_lure_v4.cpp`
 - `Game1/antgame_ai_cpp/cpp_lure_v3a/ai_cpp_lure_v3a.cpp`
   - 激进抗性测试变体：金币 `>=200` 时优先尝试把基地生成蚂蚁升到 2 级，其余操作沿用 v3；不作为当前最优解
 
@@ -276,9 +280,32 @@ debug summary 会输出 `v3_evasion_used`、`v3_evasion_reason`、`v3_evasion_wo
 
 ## 13. 最新强度与对拍记录
 
-2026-04-29 当前最优 v3 测试：
+2026-04-30 阶段性最优 v3 测试：
 
 - 结果目录统一位于仓库根目录 `eval_results/`
+- 当前 v3 vs baseline 座位平衡 128 局，使用全新 seed `1001:1064`，分 4 批完成：
+  - `eval_results/v3_vs_baseline_128_random_equal_newseeds_b1_p0_20260430`
+  - `eval_results/v3_vs_baseline_128_random_equal_newseeds_b1_p1_20260430`
+  - `eval_results/v3_vs_baseline_128_random_equal_newseeds_b2_p0_20260430`
+  - `eval_results/v3_vs_baseline_128_random_equal_newseeds_b2_p1_20260430`
+  - `eval_results/v3_vs_baseline_128_random_equal_newseeds_b3_p0_20260430`
+  - `eval_results/v3_vs_baseline_128_random_equal_newseeds_b3_p1_20260430`
+  - `eval_results/v3_vs_baseline_128_random_equal_newseeds_b4_p0_20260430`
+  - `eval_results/v3_vs_baseline_128_random_equal_newseeds_b4_p1_20260430`
+  - 总胜负：v3 `75`，baseline `53`
+  - 总血量差：v3 `+391`，平均每局 `+3.0547`
+  - v3 先手 64 局：`35-29`，血量差 `-39`
+  - v3 后手 64 局：`40-24`，血量差 `+430`
+  - 平均回合数：`497.6641`，达到 512 回合的局数 `98/128`
+- 座位侧效应记录：
+  - 同 seed 正反手配对后，v3 as p1 的血量比 v3 as p0 平均高 `+7.3281`
+  - 全 128 局按纯座位看，p1 侧血量差为 `+469`，平均 `+3.6641`
+  - 当前可能原因包括：p1 决策前已接收并应用 p0 本回合操作，存在当前回合信息差；连续 seed `1001:1064` 的首轮随机抽样不完全镜像，p0 首只蚂蚁全为 `Worker + Conservative`，p1 首只蚂蚁为混合 profile
+  - 由于 v3 理论上主要做防守评估，敌方非超武操作不应显著影响己方防守，后续应使用打散 seed，并通过 v4 vs v3、v3-v3、baseline-baseline 对照拆分协议侧效应和策略侧效应
+- 2026-04-30 已复制当前 v3 为 `cpp_lure_v4`，作为后续参数调节、行为分析和策略优化分支；当前阶段性最优仍记录为 `cpp_lure_v3`
+
+2026-04-29 历史最优 v3 测试：
+
 - v3 vs baseline 座位平衡 128 局：
   - `eval_results/v3_vs_baseline_128_c1_action_start_p0`
   - `eval_results/v3_vs_baseline_128_c1_action_start_p1`
@@ -291,8 +318,18 @@ debug summary 会输出 `v3_evasion_used`、`v3_evasion_reason`、`v3_evasion_wo
   - `eval_results/v3a_vs_v3_32_p1`
   - 总胜负：v3-a `1`，v3 `31`
   - 总血量差：v3-a `-781`
+- Saiblo 性能探针：
+  - 版本：`cpp_lure_v3n`
+  - 口径：每回合只计算 active lure 与 lightning 两类 root plan，永远不输出操作
+  - 原生 Saiblo 包：`eval_results/ai_cpp_lure_v3n_cppzip.zip`
+  - Saiblo entity/code：`v3n-perf-cppzip` / `cd02749306d642e3a409f2dd50d5d32f`
+  - 本机 16 组自我对战：`317.978ms / player-round`
+  - Saiblo 16 组自我对战：`515.530ms / player-round`
+  - Saiblo/本机比例：`1.621x`
+  - Saiblo 页面用时图来自 match detail 的 `message.record[].time`，平均 `512.608ms / call`；stderr 计时平均 `515.530ms / call`，总量差约 `0.57%`
+  - 详细打包方式与统计见 `Game1/antgame_ai_cpp/cpp_lure_v3n/README.md`
 
-结论：当前最优解为 `cpp_lure_v3`。v3-a 的过早 2 级基地蚂蚁策略明显牺牲防守经济，只保留为抗性测试变体。
+结论：当前阶段性最优解为 `cpp_lure_v3`。v3-a 的过早 2 级基地蚂蚁策略明显牺牲防守经济，只保留为抗性测试变体；后续优化从 `cpp_lure_v4` 开始。
 
 2026-04-27 测试：
 

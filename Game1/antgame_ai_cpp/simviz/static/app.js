@@ -382,7 +382,10 @@ function strategyParamsText() {
   if (!params) return "params unavailable";
   return [
     `rollout ${params.rollout_count ?? "-"}`,
-    `batch ${params.action_ucb_batch_rollouts ?? "-"}`,
+    `base ${params.action_base_total_rollouts ?? "-"}`,
+    `target min(${params.action_target_total_rollouts ?? "-"},${params.action_target_rollouts_per_action ?? "-"}xN)`,
+    `batch<=${params.action_max_rollouts_per_batch ?? "-"}`,
+    `time ${params.action_time_budget_ms ?? "-"}ms`,
     `ucb ${formatPlainNumber(params.action_ucb_exploration, 1)}`,
     `L ${params.lightning_ucb_total_rollouts ?? "-"}x${params.lightning_ucb_batch_rollouts ?? "-"}`,
     `L-ucb ${formatPlainNumber(params.lightning_ucb_exploration, 1)}`,

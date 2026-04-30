@@ -83,8 +83,8 @@ SDK 默认兼容入口 `lure_strategy.hpp` / `lure_strategy_params.hpp` 仍为 v
 - `base` 与 `lure` 不乘算，只有纯回收类 `base` 可与 `lure` 组合。
 - future rollout 仍不生成未来基地蚂蚁。
 - future rollout 仍只保留战斗蚁贴塔时的 reactive 降级/拆塔；若下一回合塔攻击阶段能杀掉所有贴身威胁战斗蚁，则不执行 reactive 回收。
-- 普通 root action 使用 action-level UCB：每次给一个普通 action 补 `action_ucb_batch_rollouts` 次，直到普通组总 rollout 数达到 `normal_action_count * rollout_count` 的平均目标。
-- 闪电和 `recycle + lightning` 使用独立 UCB：每次补 `lightning_ucb_batch_rollouts=1` 次，整个闪电组总预算默认为 `lightning_ucb_total_rollouts=500`，不与普通 action 抢 UCB 预算。
+- 闪电和 `recycle + lightning` 使用独立 UCB：若本回合有闪电候选，先完整跑完 `lightning_ucb_total_rollouts=500` 次，每次补 `lightning_ucb_batch_rollouts=1`。
+- 普通 root action 使用 3s 卡时的 action-level UCB：先把 `action_base_total_rollouts=10000` 均分给所有普通 action，单 action 基础 batch 被 `action_max_rollouts_per_batch=100` 截断，但每个普通 action 至少会计算一次；基础部分完成后，继续按 UCB 每次补同样的 batch，直到普通 action 总样本数达到 `min(action_target_total_rollouts=12500, action_target_rollouts_per_action=125 * 普通action数)` 或从本次评估开始计时超过 `action_time_budget_ms=3000`。
 
 ## v3 新增逻辑
 
@@ -128,9 +128,26 @@ EMP 对应输出 `v3_emp_used`、`v3_emp_reason`、`v3_emp_x/y`、`v3_emp_tower_
 当前参数默认值为：敌方闪电 CD 至少 `5`，best action 后金币大于 `30`，回避中心覆盖至少 `4` 只己方工蚁。
 EMP 默认开启，战斗蚁到敌方顶级塔触发距离为 `2`。
 
-## 2026-04-29 当前最优评测
+## 2026-04-30 阶段性最优评测
 
-当前 v3 以 `cpp_lure_v3` 作为最优提交候选。评测结果统一写入仓库根目录 `eval_results/`，不再写到 `Game1/antgame_ai_cpp/` 下。
+当前 v3 以 `cpp_lure_v3` 作为阶段性最优版本冻结。评测结果统一写入仓库根目录 `eval_results/`，不再写到 `Game1/antgame_ai_cpp/` 下。
+
+v3 vs baseline，座位平衡 128 局，使用全新 seed `1001:1064`，分 4 批完成：
+
+- 目录：`eval_results/v3_vs_baseline_128_random_equal_newseeds_b{1..4}_{p0,p1}_20260430/`
+- 总胜负：v3 `75` 胜，baseline `53` 胜。
+- 总血量差：v3 `+391`，平均每局 `+3.0547`。
+- v3 先手 64 局：`35-29`，血量差 `-39`。
+- v3 后手 64 局：`40-24`，血量差 `+430`。
+- 平均回合数：`497.6641`，达到 512 回合的局数 `98/128`。
+
+本轮记录到明显 p1 侧效应：同 seed 正反手配对后，v3 作为 p1 的血量比作为 p0 平均高 `+7.3281`。当前可能来源包括本地协议当前回合信息差，以及连续 seed `1001:1064` 的初始蚂蚁 profile 非完全镜像。后续评测应优先使用打散 seed，并用 v4 vs v3、v3-v3、baseline-baseline 对照拆分协议侧效应和策略侧效应。
+
+2026-04-30 已从当前 v3 复制出 `cpp_lure_v4`。v4 初始逻辑、参数和评测口径与当前 v3 一致，后续关键参数调节、行为分析和策略优化优先在 v4 上进行。
+
+## 2026-04-29 历史最优评测
+
+当时 v3 以 `cpp_lure_v3` 作为最优提交候选。评测结果统一写入仓库根目录 `eval_results/`，不再写到 `Game1/antgame_ai_cpp/` 下。
 
 v3 vs baseline，座位平衡 128 局：
 

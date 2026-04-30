@@ -1,6 +1,6 @@
 #pragma once
 
-#include "antgame_ai/lure_strategy_v3_root_plans.hpp"
+#include "antgame_ai/lure_strategy_v4_root_plans.hpp"
 
 namespace antgame::sdk::lure_strategy_detail {
 
