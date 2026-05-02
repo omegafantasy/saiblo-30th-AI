@@ -1,4 +1,6 @@
 #include <iostream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include "antgame_ai/lure_strategy_v4.hpp"
@@ -30,11 +32,42 @@ struct AiRuntime {
           simulator(seed_in) {}
 };
 
+std::string operation_text(const Operation &operation) {
+    const auto tokens = operation.to_protocol_tokens();
+    std::ostringstream oss;
+    for (std::size_t index = 0; index < tokens.size(); ++index) {
+        if (index) {
+            oss << ' ';
+        }
+        oss << tokens[index];
+    }
+    return oss.str();
+}
+
+std::string operations_text(const std::vector<Operation> &operations) {
+    std::ostringstream oss;
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+        if (index) {
+            oss << " | ";
+        }
+        oss << operation_text(operations[index]);
+    }
+    return oss.str();
+}
+
+void log_operations(ProtocolIO &io, const std::string &prefix, const std::vector<Operation> &operations) {
+    if (operations.empty()) {
+        return;
+    }
+    io.log(prefix + ": " + operations_text(operations));
+}
+
 bool receive_and_apply_opponent(AiRuntime &runtime, ProtocolIO &io) {
     try {
         const auto operations = io.recv_operations();
-        runtime.public_state.apply_operation_list(runtime.opponent, operations);
-        runtime.simulator.apply_operation_list(runtime.opponent, operations);
+        const auto native_illegal = runtime.simulator.apply_operation_list(runtime.opponent, operations);
+        log_operations(io, "opponent operations rejected by native mirror", native_illegal);
+        runtime.public_state.sync_public_round_state(runtime.simulator.to_public_round_state());
         runtime.opponent_ops_already_applied = true;
         return true;
     } catch (const std::exception &exc) {
@@ -49,8 +82,8 @@ bool receive_and_sync_round(AiRuntime &runtime, ProtocolIO &io) {
         if (!io.recv_round_state(round_state)) {
             return false;
         }
-        runtime.public_state.sync_public_round_state(round_state);
         runtime.simulator.sync_public_round_state(round_state);
+        runtime.public_state.sync_public_round_state(runtime.simulator.to_public_round_state());
         return true;
     } catch (const std::exception &exc) {
         io.log(std::string("sync_round failed: ") + exc.what());
@@ -70,13 +103,18 @@ std::vector<Operation> compute_turn(AiRuntime &runtime) {
 void perform_self_turn(AiRuntime &runtime, ProtocolIO &io) {
     const auto proposed = compute_turn(runtime);
     std::vector<Operation> accepted;
+    std::vector<Operation> rejected_by_public;
     for (const auto &operation : proposed) {
         if (runtime.public_state.can_apply_operation(runtime.player, operation, accepted)) {
             accepted.push_back(operation);
+        } else {
+            rejected_by_public.push_back(operation);
         }
     }
-    runtime.public_state.apply_operation_list(runtime.player, accepted);
-    runtime.simulator.apply_operation_list(runtime.player, accepted);
+    log_operations(io, "self proposed operations rejected by public mirror", rejected_by_public);
+    const auto native_illegal = runtime.simulator.apply_operation_list(runtime.player, accepted);
+    log_operations(io, "self accepted operations rejected by native mirror", native_illegal);
+    runtime.public_state.sync_public_round_state(runtime.simulator.to_public_round_state());
     io.send_operations(accepted);
 }
 

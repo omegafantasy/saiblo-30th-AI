@@ -1219,6 +1219,10 @@ class DefenseSimulator {
         move_cache.move_cache_dirty = true;
     }
 
+    void mark_move_cache_dirty() {
+        move_cache.move_cache_dirty = true;
+    }
+
     double cell_damage_hp(int x, int y) const {
         refresh_static_risk_fields();
         return move_cache.damage_risk_field[x][y] * 25.0;
@@ -2093,7 +2097,8 @@ class DefenseSimulator {
         }
         const int nx = ant.x + kOffset[ant.y & 1][move][0];
         const int ny = ant.y + kOffset[ant.y & 1][move][1];
-        SearchTower *tower = tower_at(nx, ny) != nullptr ? tower_by_id(tower_at(nx, ny)->tower_id) : nullptr;
+        const SearchTower *target_tower = tower_at(nx, ny);
+        SearchTower *tower = target_tower != nullptr ? tower_by_id(target_tower->tower_id) : nullptr;
         if (tower != nullptr) {
             attack_tower_from_ant(ant, *tower);
             return;
@@ -2455,7 +2460,8 @@ class DefenseSimulator {
         }
     }
 
-    void drift_effects(FastRng &rng, FixedList<SearchEffect, kMaxSimEffects> &effects) {
+    bool drift_effects(FastRng &rng, FixedList<SearchEffect, kMaxSimEffects> &effects) {
+        bool changed = false;
         for (auto &effect : effects) {
             if (!effect.active()) {
                 continue;
@@ -2474,34 +2480,44 @@ class DefenseSimulator {
                 }
             }
             const IntPair &selected = cells[rng.next_int(cell_count)];
+            changed = changed || selected.first != effect.x || selected.second != effect.y;
             effect.x = selected.first;
             effect.y = selected.second;
         }
+        return changed;
     }
 
     void update_effects(FastRng &rng) {
-        drift_effects(rng, my_effects);
-        drift_effects(rng, enemy_effects);
+        bool static_risk_changed = false;
+        static_risk_changed = drift_effects(rng, my_effects) || static_risk_changed;
+        static_risk_changed = drift_effects(rng, enemy_effects) || static_risk_changed;
         if (lightning_cooldown > 0) {
             --lightning_cooldown;
         }
         auto decay = [](FixedList<SearchEffect, kMaxSimEffects> &effects) {
             int write_index = 0;
+            bool expired = false;
             for (int read_index = 0; read_index < effects.size(); ++read_index) {
                 SearchEffect effect = effects[read_index];
                 if (effect.remaining_turns > 0) {
                     --effect.remaining_turns;
                 }
                 if (effect.remaining_turns <= 0) {
+                    expired = true;
                     continue;
                 }
                 effects[write_index++] = effect;
             }
             effects.resize(write_index);
+            return expired;
         };
-        decay(my_effects);
-        decay(enemy_effects);
-        mark_risk_fields_dirty();
+        static_risk_changed = decay(my_effects) || static_risk_changed;
+        static_risk_changed = decay(enemy_effects) || static_risk_changed;
+        if (static_risk_changed) {
+            mark_risk_fields_dirty();
+        } else {
+            mark_move_cache_dirty();
+        }
     }
 
     void update_income() {

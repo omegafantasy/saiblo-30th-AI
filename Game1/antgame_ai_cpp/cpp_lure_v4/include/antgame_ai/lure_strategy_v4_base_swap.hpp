@@ -37,6 +37,20 @@ inline FollowupAction swap_followup(TowerType source_type, int source_code, int 
     return followup;
 }
 
+inline FollowupAction swap_producer_medic_followup(TowerType source_type, int source_code, int target_code) {
+    FollowupAction followup;
+    if (swap_needs_second_turn_sell(source_type)) {
+        followup.push(downgrade_step(source_code, 1));
+        followup.push(build_step(target_code, 1));
+        followup.push(upgrade_step(target_code, TowerType::Producer, 2));
+        followup.push(upgrade_step(target_code, TowerType::ProducerMedic, 3));
+        return followup;
+    }
+    followup.push(upgrade_step(target_code, TowerType::Producer, 1));
+    followup.push(upgrade_step(target_code, TowerType::ProducerMedic, 2));
+    return followup;
+}
+
 inline std::vector<Operation> swap_root_operations(
     int player,
     int source_tower_id,
@@ -65,6 +79,7 @@ inline void append_base_swap_candidates(
         return;
     }
     const bool c1_sniper_ready = c1_has_sniper(state, player);
+    const bool producer_medic_enabled = producer_medic_branch_enabled(state, player);
     for (int target_code : base_codes()) {
         if (target_code == source_code || !base_build_enabled(target_code) ||
             tower_at_code(state, player, target_code) != nullptr) {
@@ -83,19 +98,30 @@ inline void append_base_swap_candidates(
                 swap_followup(source.tower_type, source_code, target_code, TowerType::Basic),
             });
         }
-        for (TowerType target_type : base_build_upgrade_targets(target_code, c1_sniper_ready)) {
+        for (TowerType target_type : base_build_upgrade_targets(target_code, c1_sniper_ready, producer_medic_enabled)) {
             const auto ops = swap_root_operations(
                 player,
                 source.tower_id,
                 source.tower_type,
                 target_code);
             if (!legalize_operations(state, player, ops).empty()) {
+                const FollowupAction followup = swap_followup(source.tower_type, source_code, target_code, target_type);
                 plans.push_back(SinglePlan{
                     swap_plan_name(source_code, target_code, target_type),
                     ops,
-                    0.0,
-                    swap_followup(source.tower_type, source_code, target_code, target_type),
+                    followup_upgrade_heuristic(followup),
+                    followup,
                 });
+                if (target_type == TowerType::Producer) {
+                    const FollowupAction medic_followup =
+                        swap_producer_medic_followup(source.tower_type, source_code, target_code);
+                    plans.push_back(SinglePlan{
+                        swap_plan_name(source_code, target_code, TowerType::ProducerMedic),
+                        ops,
+                        followup_upgrade_heuristic(medic_followup),
+                        medic_followup,
+                    });
+                }
             }
         }
     }
@@ -115,6 +141,7 @@ inline void append_base_swap_candidates(
         return;
     }
     const bool c1_sniper_ready = c1_has_sniper(simulator, player);
+    const bool producer_medic_enabled = producer_medic_branch_enabled(simulator, player);
     for (int target_code : base_codes()) {
         if (target_code == source_code || !base_build_enabled(target_code) ||
             tower_at_code(simulator, player, target_code) != nullptr) {
@@ -133,19 +160,30 @@ inline void append_base_swap_candidates(
                 swap_followup(source.tower_type, source_code, target_code, TowerType::Basic),
             });
         }
-        for (TowerType target_type : base_build_upgrade_targets(target_code, c1_sniper_ready)) {
+        for (TowerType target_type : base_build_upgrade_targets(target_code, c1_sniper_ready, producer_medic_enabled)) {
             const auto ops = swap_root_operations(
                 player,
                 source.tower_id,
                 source.tower_type,
                 target_code);
             if (!legalize_operations(simulator, ops).empty()) {
+                const FollowupAction followup = swap_followup(source.tower_type, source_code, target_code, target_type);
                 plans.push_back(SinglePlan{
                     swap_plan_name(source_code, target_code, target_type),
                     ops,
-                    0.0,
-                    swap_followup(source.tower_type, source_code, target_code, target_type),
+                    followup_upgrade_heuristic(followup),
+                    followup,
                 });
+                if (target_type == TowerType::Producer) {
+                    const FollowupAction medic_followup =
+                        swap_producer_medic_followup(source.tower_type, source_code, target_code);
+                    plans.push_back(SinglePlan{
+                        swap_plan_name(source_code, target_code, TowerType::ProducerMedic),
+                        ops,
+                        followup_upgrade_heuristic(medic_followup),
+                        medic_followup,
+                    });
+                }
             }
         }
     }

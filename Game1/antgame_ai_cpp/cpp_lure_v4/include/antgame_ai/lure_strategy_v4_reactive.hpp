@@ -19,7 +19,7 @@ inline std::vector<Operation> choose_reactive_turn_operations(const rs::DefenseS
         if (!plan.ops.empty() && combined.empty()) {
             return;
         }
-        const double heuristic = plan.heuristic - downgrade_penalty_for_ops(simulator, player, combined);
+        const double heuristic = plan.heuristic - downgrade_penalty_for_ops(simulator, combined);
         if (heuristic > best_heuristic) {
             best_heuristic = heuristic;
             best_ops = std::move(combined);
@@ -37,7 +37,7 @@ inline std::vector<Operation> choose_reactive_turn_operations(const rs::DefenseS
 inline double apply_reactive_turn_operations_with_penalty(rs::DefenseSimulator &simulator, int player) {
     if (const rs::SearchTower *forced = forced_reactive_sell_target(simulator, player); forced != nullptr) {
         const Operation downgrade(OperationType::DowngradeTower, forced->tower_id);
-        const double penalty = downgrade_operation_penalty(simulator, player, downgrade);
+        const double penalty = downgrade_operation_penalty(simulator, downgrade);
         if (simulator.apply_operation(downgrade)) {
             return penalty;
         }

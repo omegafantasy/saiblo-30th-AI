@@ -225,6 +225,10 @@ sdk::Ant to_sdk_ant(const Ant &ant) {
         static_cast<sdk::AntBehavior>(static_cast<int>(ant.get_behavior())),
         static_cast<sdk::AntKind>(static_cast<int>(ant.get_kind())),
         ant.get_last_move(),
+        ant.shield,
+        ant.defend,
+        ant.evasion_control_free_on_break,
+        true,
     };
 }
 
@@ -636,17 +640,25 @@ struct sdk::NativeSimulator::Impl {
                 }
                 ant.path_len_total = it->second.path_len_total;
                 ant.age = row.age;
-                ant.shield = same_kind ? it->second.shield : 0;
-                ant.defend = same_kind ? it->second.defend : false;
-                ant.evasion = same_kind ? it->second.evasion : false;
-                ant.evasion_control_free_on_break = same_kind ? it->second.evasion_control_free_on_break : false;
+                if (row.hidden_state_known) {
+                    ant.shield = row.shield;
+                    ant.defend = row.defend;
+                    ant.evasion = ant.shield > 0;
+                    ant.evasion_control_free_on_break = row.evasion_control_free_on_break;
+                } else {
+                    ant.shield = same_kind ? it->second.shield : 0;
+                    ant.defend = same_kind ? it->second.defend : false;
+                    ant.evasion = same_kind ? it->second.evasion : false;
+                    ant.evasion_control_free_on_break = same_kind ? it->second.evasion_control_free_on_break : false;
+                }
             } else {
                 ant.age = row.age;
                 ant.last_move = row.last_move >= 0 ? row.last_move : ::Ant::NoMove;
-                ant.shield = 0;
-                ant.defend = false;
-                ant.evasion = false;
-                ant.evasion_control_free_on_break = false;
+                ant.shield = row.hidden_state_known ? row.shield : 0;
+                ant.defend = row.hidden_state_known ? row.defend : false;
+                ant.evasion = ant.shield > 0;
+                ant.evasion_control_free_on_break =
+                    row.hidden_state_known ? row.evasion_control_free_on_break : false;
             }
             ant.pos_x = row.x;
             ant.pos_y = row.y;

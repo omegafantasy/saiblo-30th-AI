@@ -54,6 +54,9 @@ std::pair<std::string, std::string> action_category(const ls::CombinedPlan &plan
         plan.ops.empty() && !plan.followup.empty() && plan.base_name == "base_hold" &&
         plan.lure_name.rfind("hold_then_", 0) == 0;
 
+    if (plan.base_name.rfind("base_double_build_", 0) == 0) {
+        return {"double_build", "Double Build"};
+    }
     if (!has_base && !has_lure && plan.ops.empty() && plan.followup.empty()) {
         return {"hold", "Hold"};
     }
@@ -61,6 +64,9 @@ std::pair<std::string, std::string> action_category(const ls::CombinedPlan &plan
         return {"hold_followup", "Hold Followup"};
     }
     if (has_base && has_lure) {
+        if (plan.lure_name.rfind("lure_sell_", 0) == 0 || plan.lure_name.rfind("lure_forced_sell_", 0) == 0) {
+            return {"lure_sell_base", "Lure Sell + Base"};
+        }
         return {"base_lure", "Base + Lure"};
     }
     if (has_base) {
@@ -82,22 +88,16 @@ json v4_tuning_to_json() {
     const auto &tuning = v4_lure_config();
     return {
         {"strategy_version", "v4"},
-        {"rollout_count", tuning.rollout_count},
-        {"action_ucb_batch_rollouts", tuning.action_ucb_batch_rollouts},
         {"action_ucb_exploration", tuning.action_ucb_exploration},
         {"action_target_time_ms", tuning.action_target_time_ms},
         {"action_target_total_multiplier", tuning.action_target_total_multiplier},
         {"action_probe_min_samples", tuning.action_probe_min_samples},
-        {"action_probe_max_samples", tuning.action_probe_max_samples},
-        {"action_probe_samples_per_action", tuning.action_probe_samples_per_action},
-        {"action_timing_guard_ms", tuning.action_timing_guard_ms},
         {"action_target_rollouts_per_action", tuning.action_target_rollouts_per_action},
         {"action_max_rollouts_per_batch", tuning.action_max_rollouts_per_batch},
         {"action_time_budget_ms", tuning.action_time_budget_ms},
         {"lightning_ucb_total_rollouts", tuning.lightning_ucb_total_rollouts},
         {"lightning_ucb_batch_rollouts", tuning.lightning_ucb_batch_rollouts},
         {"lightning_ucb_exploration", tuning.lightning_ucb_exploration},
-        {"rollout_forced_ant_limit", tuning.rollout_forced_ant_limit},
         {"mid_eval_horizon", tuning.mid_eval_horizon},
         {"long_eval_horizon", tuning.long_eval_horizon},
         {"mid_eval_weight", tuning.mid_eval_weight},
@@ -105,15 +105,22 @@ json v4_tuning_to_json() {
         {"lightning_center_radius", tuning.lightning_center_radius},
         {"forced_lure_sell_distance", tuning.forced_lure_sell_distance},
         {"max_non_lure_towers", tuning.max_non_lure_towers},
+        {"rich_max_non_lure_towers", tuning.rich_max_non_lure_towers},
         {"c1_quick_transition_coin_threshold", tuning.c1_quick_transition_coin_threshold},
         {"hold_bonus", tuning.hold_bonus},
+        {"followup_plan_penalty", tuning.followup_plan_penalty},
         {"c1_build_bonus", tuning.c1_build_bonus},
         {"c1_heavy_bonus", tuning.c1_heavy_bonus},
         {"c1_heavy_side_trans_bonus", tuning.c1_heavy_side_trans_bonus},
         {"c1_quick_trans_bonus", tuning.c1_quick_trans_bonus},
         {"c1_sniper_trans_bonus", tuning.c1_sniper_trans_bonus},
-        {"downgrade_refund_penalty_scale", tuning.downgrade_refund_penalty_scale},
         {"sniper_downgrade_penalty", tuning.sniper_downgrade_penalty},
+        {"enable_producer_medic_branch", tuning.enable_producer_medic_branch},
+        {"producer_medic_equivalent_money_threshold", tuning.producer_medic_equivalent_money_threshold},
+        {"producer_upgrade_bonus", tuning.producer_upgrade_bonus},
+        {"medic_upgrade_bonus", tuning.medic_upgrade_bonus},
+        {"producer_downgrade_penalty", tuning.producer_downgrade_penalty},
+        {"medic_downgrade_penalty", tuning.medic_downgrade_penalty},
         {"base_hp_weight", tuning.base_hp_weight},
         {"tower_value_weight", tuning.tower_value_weight},
         {"money_weight", tuning.money_weight},
@@ -140,16 +147,12 @@ json v4_tuning_to_json() {
         {"hold_followup_heuristic_scale", tuning.hold_followup_heuristic_scale},
         {"lightning_enemy_super_bonus", tuning.lightning_enemy_super_bonus},
         {"lightning_no_enemy_super_penalty", tuning.lightning_no_enemy_super_penalty},
-        {"lightning_combat_threat_ratio", tuning.lightning_combat_threat_ratio},
         {"lightning_shield_break_bonus", tuning.lightning_shield_break_bonus},
         {"lightning_damage_bonus_per_hp", tuning.lightning_damage_bonus_per_hp},
-        {"lightning_kill_bonus", tuning.lightning_kill_bonus},
         {"lightning_tower_value_ratio", tuning.lightning_tower_value_ratio},
-        {"offensive_evasion_enabled", tuning.offensive_evasion_enabled},
         {"offensive_evasion_min_enemy_lightning_cd", tuning.offensive_evasion_min_enemy_lightning_cd},
         {"offensive_evasion_min_post_action_coins", tuning.offensive_evasion_min_post_action_coins},
         {"offensive_evasion_min_worker_count", tuning.offensive_evasion_min_worker_count},
-        {"offensive_emp_enabled", tuning.offensive_emp_enabled},
         {"offensive_emp_combat_to_top_tower_distance", tuning.offensive_emp_combat_to_top_tower_distance},
     };
 }
@@ -723,7 +726,6 @@ std::vector<EvaluatedPlanWithIndex> evaluate_root_plans(
     const NativeSimulator *native,
     int player,
     std::uint64_t serial,
-    int rollout_count,
     ls::UcbEvaluationTrace *trace = nullptr) {
     rs::DefenseSimulator defense_root = rs::make_defense_simulator(state, native, player);
     defense_root.ignore_enemy_spawns = true;
@@ -732,7 +734,7 @@ std::vector<EvaluatedPlanWithIndex> evaluate_root_plans(
     }
 
     const ls::RootPlanSet root_plans = ls::generate_root_plans(state, &defense_root, player);
-    return ls::evaluate_root_plans(state, defense_root, player, serial, rollout_count, root_plans, trace);
+    return ls::evaluate_root_plans(state, defense_root, player, serial, root_plans, trace);
 }
 
 const EvaluatedPlanWithIndex &require_plan_by_key(const std::vector<EvaluatedPlanWithIndex> &plans, const std::string &key) {
@@ -1290,7 +1292,7 @@ json plan_sample_trace(
             std::vector<Operation> reactive_ops;
             if (const rs::SearchTower *forced = ls::forced_reactive_sell_target(simulator, player); forced != nullptr) {
                 const Operation downgrade(OperationType::DowngradeTower, forced->tower_id);
-                const double penalty = ls::downgrade_operation_penalty(simulator, player, downgrade);
+                const double penalty = ls::downgrade_operation_penalty(simulator, downgrade);
                 if (simulator.apply_operation(downgrade)) {
                     reactive_ops.push_back(downgrade);
                     reactive_penalty += penalty;
@@ -1326,7 +1328,7 @@ json plan_sample_trace(
                 control.simulate_round(control_rng);
             }
             lightning_bonus_raw =
-                ls::lightning_counterfactual_bonus(simulator, control, player) + selected.plan.lightning_static_bonus;
+                ls::lightning_counterfactual_bonus(simulator, control) + selected.plan.lightning_static_bonus;
             lightning_bonus_score = lightning_bonus_raw;
             lightning_bonus_computed = true;
         }
@@ -1384,12 +1386,11 @@ json inspect_round_request(const json &request) {
     const std::string replay_path = request.at("replay_path").get<std::string>();
     const int round = request.at("round").get<int>();
     const int player = request.value("player", 0);
-    const int rollout_count = request.value("rollout_count", 0);
 
     ReplayRoundStart start = load_replay_round_start(replay_path, round);
     const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
     ls::UcbEvaluationTrace ucb_trace;
-    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count, &ucb_trace);
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, &ucb_trace);
 
     rs::DefenseSimulator defense_root = rs::make_defense_simulator(start.public_state, &start.native, player);
     defense_root.ignore_enemy_spawns = true;
@@ -1471,9 +1472,11 @@ json inspect_round_request(const json &request) {
         {"all", "All"},
         {"hold", "Hold"},
         {"hold_followup", "Hold Followup"},
+        {"double_build", "Double Build"},
         {"base", "Base"},
         {"base_followup", "Base Followup"},
         {"lure", "Lure"},
+        {"lure_sell_base", "Lure Sell + Base"},
         {"base_lure", "Base + Lure"},
         {"lightning", "Lightning"},
         {"recycle_lightning", "Recycle + Lightning"},
@@ -1572,12 +1575,11 @@ json inspect_plan_rollouts_request(const json &request) {
     const int round = request.at("round").get<int>();
     const int player = request.value("player", 0);
     const std::string plan_key = request.at("plan_key").get<std::string>();
-    const int rollout_count = request.value("rollout_count", 0);
 
     ReplayRoundStart start = load_replay_round_start(replay_path, round);
     const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
     ls::UcbEvaluationTrace ucb_trace;
-    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count, &ucb_trace);
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, &ucb_trace);
     const auto &selected = require_plan_by_key(evaluated, plan_key);
 
     json out;
@@ -1637,14 +1639,13 @@ json inspect_plan_trace_request(const json &request) {
     const int player = request.value("player", 0);
     const std::string plan_key = request.at("plan_key").get<std::string>();
     const int sample_index = request.value("sample_index", 0);
-    const int sample_count = request.value("sample_count", std::max(1, v4_lure_config().rollout_count));
-    const int rollout_count = request.value("rollout_count", 0);
+    const int sample_count = request.value("sample_count", 50);
     const bool use_ucb_actual_sample = request.value("ucb_actual_sample", true);
 
     ReplayRoundStart start = load_replay_round_start(replay_path, round);
     const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
     ls::UcbEvaluationTrace ucb_trace;
-    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, rollout_count, &ucb_trace);
+    const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, &ucb_trace);
     const auto &selected = require_plan_by_key(evaluated, plan_key);
     const ls::UcbRolloutRecord *ucb_sample =
         use_ucb_actual_sample ? ucb_sample_for(ucb_trace, selected.root_index, sample_index) : nullptr;

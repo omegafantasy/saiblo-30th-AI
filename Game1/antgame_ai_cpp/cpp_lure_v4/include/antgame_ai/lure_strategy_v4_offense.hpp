@@ -90,16 +90,15 @@ inline OffensiveEmpChoice choose_offensive_emp(
     int player,
     const std::vector<Operation> &best_ops) {
     OffensiveEmpChoice out;
-    if (!v4_lure_config().offensive_emp_enabled) {
-        out.reason = "disabled";
-        return out;
-    }
-
     const OffensivePostActionGate gate = make_offensive_post_action_gate(state, player, best_ops);
     out.post_action_coins = gate.post_action_coins;
     out.enemy_lightning_cooldown = gate.enemy_lightning_cooldown;
     if (!gate.ok) {
         out.reason = gate.reason;
+        return out;
+    }
+    if (!c1_has_sniper(gate.post_action, player)) {
+        out.reason = "no_c1_sniper";
         return out;
     }
     if (gate.post_action.weapon_cooldowns[player][static_cast<int>(SuperWeaponType::EmpBlaster)] > 0) {
@@ -170,11 +169,6 @@ inline OffensiveEvasionChoice choose_offensive_evasion(
     int player,
     const std::vector<Operation> &best_ops) {
     OffensiveEvasionChoice out;
-    if (!v4_lure_config().offensive_evasion_enabled) {
-        out.reason = "disabled";
-        return out;
-    }
-
     const OffensivePostActionGate gate = make_offensive_post_action_gate(state, player, best_ops);
     out.post_action_coins = gate.post_action_coins;
     out.enemy_lightning_cooldown = gate.enemy_lightning_cooldown;

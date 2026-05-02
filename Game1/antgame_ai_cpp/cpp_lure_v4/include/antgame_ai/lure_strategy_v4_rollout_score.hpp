@@ -20,18 +20,15 @@ inline std::vector<Operation> strip_lightning_operations(const std::vector<Opera
 
 inline double lightning_counterfactual_bonus(
     const rs::DefenseSimulator &with_lightning,
-    const rs::DefenseSimulator &without_lightning,
-    int player) {
+    const rs::DefenseSimulator &without_lightning) {
     double bonus = 0.0;
     for (const auto &ant : without_lightning.ants) {
         if (ant.kind != AntKind::Combat || !ant.alive()) {
             continue;
         }
-        const double before_threat = combat_threat_at(without_lightning, player, ant, ant.x, ant.y);
         const int without_shield = ant.shield;
         int with_shield = 0;
         int with_hp = 0;
-        double after_threat = 0.0;
         const rs::SearchAnt *with_ant = nullptr;
         for (const auto &candidate : with_lightning.ants) {
             if (candidate.ant_id == ant.ant_id && candidate.kind == AntKind::Combat && candidate.alive()) {
@@ -42,21 +39,24 @@ inline double lightning_counterfactual_bonus(
         if (with_ant != nullptr) {
             with_shield = with_ant->shield;
             with_hp = with_ant->hp;
-            after_threat = combat_threat_at(with_lightning, player, *with_ant, with_ant->x, with_ant->y);
         }
 
-        bonus += std::max(0.0, before_threat - after_threat) * v4_lure_config().lightning_combat_threat_ratio;
         if (without_shield > 0 && with_shield < without_shield) {
             bonus += v4_lure_config().lightning_shield_break_bonus;
         }
         const int damage = std::max(0, ant.hp - with_hp);
         bonus += static_cast<double>(damage) * v4_lure_config().lightning_damage_bonus_per_hp;
-        if (with_ant == nullptr) {
-            bonus += v4_lure_config().lightning_kill_bonus;
-        }
     }
     return bonus;
 }
+
+inline RolloutEvaluation rollout_plan_score_from_applied_root(
+    const rs::DefenseSimulator &pre_plan_root,
+    const rs::DefenseSimulator &post_plan_root,
+    int player,
+    const CombinedPlan &plan,
+    std::uint64_t rollout_seed,
+    const rs::FixedList<rs::ForcedMove, rs::kMaxImportantAnts> *first_round_forced_moves = nullptr);
 
 inline RolloutEvaluation rollout_plan_score(
     const rs::DefenseSimulator &root,
@@ -72,6 +72,17 @@ inline RolloutEvaluation rollout_plan_score(
             return failed;
         }
     }
+    return rollout_plan_score_from_applied_root(root, simulator, player, plan, rollout_seed, first_round_forced_moves);
+}
+
+inline RolloutEvaluation rollout_plan_score_from_applied_root(
+    const rs::DefenseSimulator &pre_plan_root,
+    const rs::DefenseSimulator &post_plan_root,
+    int player,
+    const CombinedPlan &plan,
+    std::uint64_t rollout_seed,
+    const rs::FixedList<rs::ForcedMove, rs::kMaxImportantAnts> *first_round_forced_moves) {
+    rs::DefenseSimulator simulator = post_plan_root.clone();
     rs::FastRng rng(rollout_seed);
     if (first_round_forced_moves != nullptr) {
         simulator.simulate_round(rng, *first_round_forced_moves);
@@ -80,7 +91,7 @@ inline RolloutEvaluation rollout_plan_score(
     }
     RolloutEvaluation out;
     if (plan.has_lightning) {
-        rs::DefenseSimulator control = root.clone();
+        rs::DefenseSimulator control = pre_plan_root.clone();
         if (!plan.ops.empty()) {
             apply_operations(control, strip_lightning_operations(plan.ops));
         }
@@ -90,7 +101,7 @@ inline RolloutEvaluation rollout_plan_score(
         } else {
             control.simulate_round(control_rng);
         }
-        out.lightning_bonus_raw = lightning_counterfactual_bonus(simulator, control, player) + plan.lightning_static_bonus;
+        out.lightning_bonus_raw = lightning_counterfactual_bonus(simulator, control) + plan.lightning_static_bonus;
         out.lightning_bonus_score = out.lightning_bonus_raw;
     }
     EvalBreakdown mid_eval;

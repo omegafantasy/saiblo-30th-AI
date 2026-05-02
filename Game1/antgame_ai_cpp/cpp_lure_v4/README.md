@@ -61,8 +61,8 @@ v4 初始状态完全继承 2026-04-30 的阶段性最优 v3；截至 2026-05-02
 
 - rollout 使用纯随机等权移动采样，不再使用 forced move 概率加权。
 - 闪电组先独立完整计算，再进入普通 action 搜索。
-- 普通 action 使用实时测速卡时：先对 normal action 做可复用 probe，再按 `action_target_time_ms=3000`、`action_timing_guard_ms=150` 估算本回合等效 base rollout 总数；target 总数为 base 的 `action_target_total_multiplier=1.25`，并继续受 `action_target_rollouts_per_action=125 * action_count` 截断。`action_time_budget_ms=4000` 是后续保底/补样阶段的硬预算停止条件。
-- probe 参数为 `action_probe_min_samples=10`、`action_probe_max_samples=256`、`action_probe_samples_per_action=1`；普通 action UCB 为 `action_ucb_batch_rollouts=40`、`action_ucb_exploration=600`、单批最多 `100`。
+- 普通 action 使用实时测速卡时：先对每个 normal action 做 `action_probe_min_samples=10` 次可复用 probe，这些样本计入最终 UCB 统计；再按 `action_target_time_ms=3000` 估算本回合等效 base rollout 总数。target 总数为 base 的 `action_target_total_multiplier=1.25`，并继续受 `action_target_rollouts_per_action=125 * action_count` 截断。`action_time_budget_ms=4000` 是后续保底/补样阶段的硬预算停止条件。
+- 普通 action UCB 为 `action_ucb_exploration=600`，单批最多 `100`。
 - 当前普通 rollout 为 `mid_eval_horizon=4`、`long_eval_horizon=8`，且 `mid_eval_weight=0`，即实际只采用第 8 回合终点评估。闪电 horizon 为 `10`，闪电 UCB 总预算为 `600`、batch 为 `2`、exploration 为 `300`。
 - `c1_quick_transition_coin_threshold` 按行动前己方等效总金币判断。
 - 己方经济估值使用 `400` 阈值阶梯权重：阈值内 `money_weight=10`，阈值以上 `money_weight_above_threshold=6`。
@@ -153,3 +153,18 @@ SimViz 的 `sdk_lure_inspector` 当前跟随 v4，并在页面顶部提供 `Futu
 - v2 / v3 / v4 的 `legalize_operations()` 与 downgrade penalty 计算同步使用顺序合法性检查。
 - 移除了之前错误方向的“p0 等效金币可筹 EMP 时 p1 禁止塔操作”防守性补丁；正确语义是 p1 读取 p0 实际已接受操作，而不是预测 p0 可筹钱。
 - 新增回归测试 `test_cpp_sdk_public_state_applies_salvage_funded_emp_before_p1_turn()`，覆盖 seed `711058` 这种 salvage-funded EMP 场景。
+
+## 2026-05-02 模拟性能分析检查点
+
+本轮分析目标是提高 v4 大量 action / 大量 rollout 下的模拟吞吐，暂不考虑每 10 回合随机传送；`RandomSearchParams::ignore_periodic_random_move` 默认已经为 true。`sdk_lure_inspector` 的单回合 profiling 显示，普通 action UCB 的核心瓶颈集中在 `DefenseSimulator::simulate_round()` 内部的 `move_phase()`，其中 `move_cache_ns` 长期占据 `move_ns` 和总模拟时间的大头，很多样本达到 80% 以上。因此优先优化方向应是减少重复构建移动准备数据，而不是先微调终局估值权重。
+
+已落地的低风险优化：
+
+- 普通 action rollout 从已经应用 root plan 的 `DefenseSimulator` 状态开始，避免每个样本重复 clone 根状态并再次应用同一个 plan。
+- 终点评估中复用 `terminal_evaluate_state()` 已经算出的塔全额回收价值，避免重复遍历塔。
+- SDK 的风险字段失效从移动缓存失效中拆开，仅在超武效果实际漂移或过期时重新计算静态风险。
+- `resolve_ant_step()` 去掉一次重复的 `tower_at()` 查询。
+
+下一步最可能的性能收益点是为单次决策增加精确缓存：相同局面下，多个 action 的大量 rollout 经常收敛到相同的后续模拟状态，此时 `prepare_move_cache()` 会重复构建反向路径、风险场、邻接拥堵等准备数据。为保证正确性，缓存不应保存最终 `move_options_for()` 的结果，也不应保存 `reservations` / `tower_claims` 这类依赖当前移动顺序的临时标注；较稳妥的做法是只缓存准备阶段的核心字段，并在命中后重新执行当轮的 reservation / attack annotation。
+
+候选缓存键必须保守覆盖所有会影响准备字段的输入：当前移动玩家、塔的位置 / 类型 / 等级 / 血量 / 冷却、仍存活且未冻结且未 too_old 的蚂蚁位置与种类、超武效果的位置 / 类型 / 剩余回合，以及地图和玩家静态配置。当前反向路径不依赖信息素，但最终移动打分会依赖信息素，因此信息素不应作为“准备核心缓存”命中后可跳过的最终决策输入；若未来缓存范围扩大，必须重新审计这一点。

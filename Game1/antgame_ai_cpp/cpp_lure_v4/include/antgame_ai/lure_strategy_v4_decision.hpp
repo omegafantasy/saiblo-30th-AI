@@ -31,7 +31,7 @@ inline std::vector<Operation> decide_lure_strategy(
 
     const std::uint64_t serial = session != nullptr ? session->decision_serial[context.player] : 0ULL;
     const std::vector<EvaluatedPlan> evaluated =
-        evaluate_root_plans(state, defense_root, context.player, serial, v4_lure_config().rollout_count, root_plans);
+        evaluate_root_plans(state, defense_root, context.player, serial, root_plans);
 
     OffensiveEmpChoice offensive_emp;
     OffensiveEvasionChoice offensive_evasion;

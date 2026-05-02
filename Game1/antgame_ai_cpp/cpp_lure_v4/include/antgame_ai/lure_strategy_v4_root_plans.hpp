@@ -8,7 +8,8 @@ inline bool root_ops_respect_non_lure_limit(
     const PublicState &state,
     int player,
     const std::vector<Operation> &operations) {
-    int post_count = non_lure_tower_count(state, player);
+    const int initial_count = non_lure_tower_count(state, player);
+    int post_count = initial_count;
     bool builds_base_tower = false;
     for (const Operation &operation : operations) {
         if (operation.op_type == OperationType::BuildTower) {
@@ -29,7 +30,10 @@ inline bool root_ops_respect_non_lure_limit(
             --post_count;
         }
     }
-    return !builds_base_tower || post_count <= v4_lure_config().max_non_lure_towers;
+    if (!builds_base_tower || post_count <= initial_count) {
+        return true;
+    }
+    return post_count <= non_lure_tower_build_limit(state, player);
 }
 
 inline bool push_followup_checked(FollowupAction &followup, FollowupStep step) {
@@ -152,6 +156,22 @@ inline bool base_lure_recycle_plan(
     return true;
 }
 
+inline bool is_lure_sell_only_plan(const PublicState &state, int player, const SinglePlan &plan) {
+    if (!plan.followup.empty() || plan.ops.size() != 1) {
+        return false;
+    }
+    const Operation &operation = plan.ops.front();
+    if (operation.op_type != OperationType::DowngradeTower) {
+        return false;
+    }
+    const Tower *tower = state.tower_by_id(operation.arg0);
+    return tower != nullptr && tower->player == player && is_lure_slot_code(code_at(*tower, player));
+}
+
+inline bool is_single_turn_base_plan(const SinglePlan &plan) {
+    return !plan.ops.empty() && plan.followup.empty();
+}
+
 inline RootPlanSet generate_root_plans(
     const PublicState &state,
     const rs::DefenseSimulator *simulator,
@@ -172,6 +192,7 @@ inline RootPlanSet generate_root_plans(
     out.raw_combo_count = out.base_count + out.lure_count;
     out.raw_plan_count = out.raw_combo_count + out.lightning_count;
     int base_lure_combo_count = 0;
+    int lure_sell_base_combo_count = 0;
     int lightning_recycle_combo_count = 0;
 
     std::vector<CombinedPlan> &plans = out.plans;
@@ -348,6 +369,34 @@ inline RootPlanSet generate_root_plans(
             lure_plan.followup);
     }
 
+    for (const auto &lure_plan : lure) {
+        if (!is_lure_sell_only_plan(state, player, lure_plan)) {
+            continue;
+        }
+        for (const auto &base_plan : base) {
+            if (!is_single_turn_base_plan(base_plan)) {
+                continue;
+            }
+            std::vector<Operation> ops;
+            ops.reserve(lure_plan.ops.size() + base_plan.ops.size());
+            ops.insert(ops.end(), lure_plan.ops.begin(), lure_plan.ops.end());
+            ops.insert(ops.end(), base_plan.ops.begin(), base_plan.ops.end());
+            ++lure_sell_base_combo_count;
+            add_plan(
+                lure_plan.name + "+" + base_plan.name,
+                base_plan.name,
+                lure_plan.name,
+                no_lightning.name,
+                ops,
+                base_plan.heuristic,
+                lure_plan.heuristic,
+                0.0,
+                false,
+                v4_lure_config().long_eval_horizon,
+                FollowupAction{});
+        }
+    }
+
     for (const auto &source : state.towers) {
         if (source.player != player || !is_base_slot_code(code_at(source, player))) {
             continue;
@@ -416,7 +465,7 @@ inline RootPlanSet generate_root_plans(
         }
     }
 
-    out.raw_combo_count = out.base_count + out.lure_count + base_lure_combo_count;
+    out.raw_combo_count = out.base_count + out.lure_count + base_lure_combo_count + lure_sell_base_combo_count;
     out.raw_plan_count = out.raw_combo_count + out.lightning_count + lightning_recycle_combo_count;
 
     std::sort(plans.begin(), plans.end(), [](const CombinedPlan &lhs, const CombinedPlan &rhs) {

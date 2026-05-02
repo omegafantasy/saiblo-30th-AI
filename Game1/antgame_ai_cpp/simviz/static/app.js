@@ -399,21 +399,20 @@ function strategyParamsText() {
   if (!params) return "params unavailable";
   return [
     `strategy ${params.strategy_version ?? "-"}`,
-    `rollout ${params.rollout_count ?? "-"}`,
     `target ${params.action_target_time_ms ?? "-"}ms x${formatPlainNumber(params.action_target_total_multiplier, 2)}`,
-    `probe ${params.action_probe_min_samples ?? "-"}-${params.action_probe_max_samples ?? "-"} @${params.action_probe_samples_per_action ?? "-"}xN`,
+    `probe ${params.action_probe_min_samples ?? "-"}`,
     `cap ${params.action_target_rollouts_per_action ?? "-"}xN`,
     `batch<=${params.action_max_rollouts_per_batch ?? "-"}`,
     `budget ${params.action_time_budget_ms ?? "-"}ms`,
     `ucb ${formatPlainNumber(params.action_ucb_exploration, 1)}`,
     `L ${params.lightning_ucb_total_rollouts ?? "-"}x${params.lightning_ucb_batch_rollouts ?? "-"}`,
     `L-ucb ${formatPlainNumber(params.lightning_ucb_exploration, 1)}`,
-    `forced ants ${params.rollout_forced_ant_limit ?? "-"}`,
     `h ${params.mid_eval_horizon ?? "-"}/${params.long_eval_horizon ?? "-"}`,
     `mid w ${formatPlainNumber(params.mid_eval_weight, 2)}`,
     `lightning h ${params.lightning_horizon ?? "-"}`,
     `radius ${params.lightning_center_radius ?? "-"}`,
     `money ${formatPlainNumber(params.money_weight, 1)}/${formatPlainNumber(params.money_weight_above_threshold, 1)}@${formatPlainNumber(params.money_decay_threshold, 0)}`,
+    `base ${params.max_non_lure_towers ?? "-"}/${params.rich_max_non_lure_towers ?? "-"}`,
     `future ${params.future_threat_eval_enabled ? `on/${params.future_threat_horizon ?? "-"}` : "off"}`,
     `hold+future ${params.hold_followup_enabled ? `on/${params.hold_followup_delay_turn ?? "-"}` : "off"}`,
   ].join(" | ");

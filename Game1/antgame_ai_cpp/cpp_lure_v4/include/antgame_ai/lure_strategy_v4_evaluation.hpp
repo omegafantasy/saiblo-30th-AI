@@ -91,7 +91,6 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
     const rs::DefenseSimulator &defense_root,
     int player,
     std::uint64_t serial,
-    int rollout_count,
     const RootPlanSet &root_plans,
     UcbEvaluationTrace *trace = nullptr) {
     if (trace != nullptr) {
@@ -109,8 +108,6 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         RolloutEvaluation weighted_total;
         double weight_sum = 0.0;
         double root_c1_bonus = 0.0;
-        RolloutForcedPlan forced_plan;
-        bool has_prebuilt_forced_plan = false;
         int samples = 0;
         int batches = 0;
         bool valid = true;
@@ -145,7 +142,6 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         }
     }
 
-    (void)rollout_count;
     const int action_target_per_action = std::max(1, v4_lure_config().action_target_rollouts_per_action);
     const int action_max_batch = std::max(1, v4_lure_config().action_max_rollouts_per_batch);
     const int normal_arm_count = static_cast<int>(normal_arm_indices.size());
@@ -188,8 +184,9 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
             const double weight = 1.0;
             const std::uint64_t rollout_seed =
                 plan_rollout_seed(state.seed, serial, arm.root_index, arm_sample_index, arm.plan.horizon);
-            RolloutEvaluation sample = rollout_plan_score(
+            RolloutEvaluation sample = rollout_plan_score_from_applied_root(
                 defense_root,
+                arm.plan_root,
                 player,
                 arm.plan,
                 rollout_seed,
@@ -261,12 +258,10 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
     auto run_ucb_group = [&](const std::vector<std::size_t> &indices,
                              int batch_size,
                              int group_target_total,
-                             double exploration,
-                             bool prebuild_forced_plan) {
+                             double exploration) {
         if (indices.empty() || batch_size <= 0 || group_target_total <= 0) {
             return 0;
         }
-        (void)prebuild_forced_plan;
 
         int group_samples = 0;
         for (std::size_t arm_index : indices) {
@@ -313,8 +308,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         lightning_arm_indices,
         lightning_batch_size,
         lightning_target_total,
-        v4_lure_config().lightning_ucb_exploration,
-        true);
+        v4_lure_config().lightning_ucb_exploration);
     if (trace != nullptr) {
         trace->target_total = lightning_target_total;
     }
@@ -325,27 +319,22 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         }
 
         int group_samples = 0;
-        const int probe_per_action = std::max(1, v4_lure_config().action_probe_samples_per_action);
-        const int probe_min = std::max(0, v4_lure_config().action_probe_min_samples);
-        const int probe_max = std::max(1, v4_lure_config().action_probe_max_samples);
-        const int probe_target =
-            std::min(probe_max, std::max(probe_min, normal_arm_count * probe_per_action));
+        const int probe_per_action = std::max(0, v4_lure_config().action_probe_min_samples);
 
         const auto probe_begin = std::chrono::steady_clock::now();
         int probe_samples = 0;
-        while (probe_samples < probe_target) {
-            int pass_added = 0;
-            for (std::size_t arm_index : normal_arm_indices) {
-                if (probe_samples >= probe_target) {
+        for (std::size_t arm_index : normal_arm_indices) {
+            int arm_probe_samples = 0;
+            while (arm_probe_samples < probe_per_action) {
+                const int needed = probe_per_action - arm_probe_samples;
+                const int count = std::min(action_max_batch, needed);
+                const int added = sample_arm_batch(arms[arm_index], count);
+                if (added <= 0) {
                     break;
                 }
-                const int added = sample_arm_batch(arms[arm_index], 1);
                 group_samples += added;
                 probe_samples += added;
-                pass_added += added;
-            }
-            if (pass_added <= 0) {
-                break;
+                arm_probe_samples += added;
             }
         }
         const double probe_elapsed_us =
@@ -359,8 +348,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
 
         const double us_per_sample = std::max(1.0, probe_elapsed_us / static_cast<double>(probe_samples));
         const double target_time_ms = static_cast<double>(std::max(0, v4_lure_config().action_target_time_ms));
-        const double guard_ms = static_cast<double>(std::max(0, v4_lure_config().action_timing_guard_ms));
-        const double remaining_target_ms = std::max(0.0, target_time_ms - elapsed_ms() - guard_ms);
+        const double remaining_target_ms = std::max(0.0, target_time_ms - elapsed_ms());
         const int estimated_additional_samples =
             static_cast<int>(std::floor((remaining_target_ms * 1000.0) / us_per_sample));
         const int effective_base_total = std::max(group_samples, group_samples + std::max(0, estimated_additional_samples));

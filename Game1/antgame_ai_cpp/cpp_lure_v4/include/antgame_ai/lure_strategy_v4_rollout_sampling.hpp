@@ -133,7 +133,7 @@ inline RolloutForcedPlan build_first_round_rollout_plan(
         return lhs->ant_id < rhs->ant_id;
     });
 
-    const int limit = std::min(v4_lure_config().rollout_forced_ant_limit, rs::kMaxImportantAnts);
+    const int limit = rs::kMaxImportantAnts;
     if (static_cast<int>(ranked.size()) > limit) {
         ranked.resize(static_cast<std::size_t>(limit));
     }

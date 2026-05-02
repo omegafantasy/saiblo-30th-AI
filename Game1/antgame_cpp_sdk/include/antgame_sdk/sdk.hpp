@@ -28,6 +28,7 @@ constexpr int kBasicIncomeInterval = 2;
 constexpr int kTowerBuildBaseCost = 15;
 constexpr int kLevel2TowerUpgradeCost = 60;
 constexpr int kLevel3TowerUpgradeCost = 200;
+constexpr int kLightningStormAntDamage = 20;
 constexpr double kTowerDowngradeRefundRatio = 0.9;
 
 constexpr std::array<std::pair<int, int>, 2> kPlayerBases = {{{2, kEdge - 1}, {kMapSize - 3, kEdge - 1}}};
@@ -417,10 +418,45 @@ struct Ant {
     AntBehavior behavior = AntBehavior::Default;
     AntKind kind = AntKind::Worker;
     int last_move = -1;
+    int shield = 0;
+    bool defend = false;
+    bool evasion_control_free_on_break = false;
+    bool hidden_state_known = false;
 
     bool is_alive() const { return (status == AntStatus::Alive || status == AntStatus::Frozen) && hp > 0; }
     int max_hp() const { return kind == AntKind::Combat ? 30 : ant_max_hp(level); }
     int kill_reward() const { return kind == AntKind::Combat ? 18 : ant_kill_reward(level); }
+
+    void grant_evasion(int stacks, bool grant_control_free_on_deplete) {
+        if (stacks <= 0) {
+            return;
+        }
+        hidden_state_known = true;
+        shield = std::max(shield, stacks);
+        evasion_control_free_on_break =
+            evasion_control_free_on_break || grant_control_free_on_deplete;
+    }
+
+    void apply_damage(int damage) {
+        if (damage <= 0 || !is_alive()) {
+            return;
+        }
+        if (hidden_state_known && shield > 0) {
+            --shield;
+            if (shield == 0 && evasion_control_free_on_break && behavior != AntBehavior::ControlFree) {
+                evasion_control_free_on_break = false;
+                behavior = AntBehavior::ControlFree;
+            }
+            return;
+        }
+        if (hidden_state_known && defend && damage * 2 < max_hp()) {
+            return;
+        }
+        hp -= damage;
+        if (hp <= 0) {
+            status = AntStatus::Fail;
+        }
+    }
 };
 
 struct Base {
@@ -860,6 +896,24 @@ class PublicState {
         }
     }
 
+    void apply_lightning_storm_now(int player, const WeaponEffect &effect) {
+        for (auto &ant : ants) {
+            if (ant.player == player || !effect.in_range(ant.x, ant.y)) {
+                continue;
+            }
+            ant.apply_damage(kLightningStormAntDamage);
+        }
+    }
+
+    void apply_emergency_evasion_now(int player, const WeaponEffect &effect) {
+        for (auto &ant : ants) {
+            if (ant.player != player || !effect.in_range(ant.x, ant.y)) {
+                continue;
+            }
+            ant.grant_evasion(2, true);
+        }
+    }
+
     void apply_operation(int player, const Operation &operation) {
         coins[player] += operation_income(player, operation);
         switch (operation.op_type) {
@@ -910,7 +964,13 @@ class PublicState {
             const auto weapon_type = operation_weapon_type(operation.op_type);
             weapon_cooldowns[player][static_cast<int>(weapon_type)] = weapon_stats(weapon_type).cooldown;
             ++super_weapon_usage[player];
-            active_effects.push_back(WeaponEffect{weapon_type, player, operation.arg0, operation.arg1, weapon_stats(weapon_type).duration});
+            WeaponEffect effect{weapon_type, player, operation.arg0, operation.arg1, weapon_stats(weapon_type).duration};
+            if (weapon_type == SuperWeaponType::LightningStorm) {
+                apply_lightning_storm_now(player, effect);
+            } else if (weapon_type == SuperWeaponType::EmergencyEvasion) {
+                apply_emergency_evasion_now(player, effect);
+            }
+            active_effects.push_back(effect);
             return;
         }
         }

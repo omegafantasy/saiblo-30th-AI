@@ -258,7 +258,7 @@ inline EvalBreakdown evaluate_terminal(const rs::DefenseSimulator &simulator, in
     out.base_hp_score = out.base_hp_raw * v4_lure_config().base_hp_weight;
     out.tower_value_raw = tower_full_salvage_value(simulator);
     out.money_raw = simulator.coins;
-    const double equivalent_money = own_equivalent_total_coins(simulator);
+    const double equivalent_money = out.money_raw + out.tower_value_raw;
     const double equivalent_money_score = own_equivalent_money_score(equivalent_money);
     if (equivalent_money > 0.0) {
         out.tower_value_score = equivalent_money_score * out.tower_value_raw / equivalent_money;
