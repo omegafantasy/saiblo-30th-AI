@@ -92,7 +92,7 @@ body {
 }
 
 .controls-grid {
-  grid-template-columns: minmax(320px, 1.8fr) 92px 82px auto;
+  grid-template-columns: minmax(320px, 1.8fr) 92px 82px minmax(220px, auto) auto;
   align-items: end;
   gap: 5px;
 }
@@ -101,6 +101,35 @@ body {
   grid-template-columns: repeat(2, auto);
   justify-content: end;
   gap: 5px;
+}
+
+.strategy-switches {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 1px;
+  min-width: 0;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  white-space: nowrap;
+}
+
+.toggle-label input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.toggle-label span {
+  display: inline;
+  margin: 0;
+  font-size: 10px;
+  color: var(--text);
 }
 
 .workspace {
@@ -427,6 +456,18 @@ tbody tr.selected {
   background: var(--accent);
   color: white;
   border-color: var(--accent);
+}
+
+.tab-row button.future-step {
+  background: #dceee7;
+  color: #173e34;
+  border-color: #74a896;
+}
+
+.tab-row button.future-step.active {
+  background: #1f7a67;
+  color: white;
+  border-color: #1f7a67;
 }
 
 .category-tabs {

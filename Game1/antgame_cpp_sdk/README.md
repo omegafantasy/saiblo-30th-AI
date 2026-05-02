@@ -14,6 +14,7 @@
 - SDK：当前目录
 - 冻结 baseline AI：`../antgame_ai_cpp/cpp_heavy_baseline/`
 - 当前最优 v3 AI：`../antgame_ai_cpp/cpp_lure_v3/`
+- 当前实验 v4 AI：`../antgame_ai_cpp/cpp_lure_v4/`
 
 `Ant-Game/` 只作为只读依赖，不在其中放 SDK 或 AI 改动。
 
@@ -40,6 +41,11 @@
 - `../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
   - v3 的策略参数入口
   - 参数类型为 `V3LureStrategyTuning`，访问函数为 `v3_lure_config()`
+- `../antgame_ai_cpp/cpp_lure_v4/include/antgame_ai/lure_strategy_v4.hpp`
+  - 当前 v4 实验分支核心决策逻辑；SimViz inspector 默认跟随该入口
+- `../antgame_ai_cpp/cpp_lure_v4/include/antgame_ai/lure_strategy_v4_params.hpp`
+  - v4 的策略参数入口
+  - 参数类型为 `V4LureStrategyTuning`，访问函数为 `v4_lure_config()`
 - `include/antgame_sdk/lure_strategy.hpp`
   - 默认兼容入口，目前同步为 v2
 - `include/antgame_sdk/lure_strategy_params.hpp`
@@ -67,6 +73,8 @@ v3 已新开独立入口，不改 baseline / v2：
 - 打包目标：`package_ai.sh cpp_lure_v3`
 
 `cpp_lure_v3a/` 是 2026-04-29 新增的激进抗性测试变体：金币 `>=200` 时优先尝试将基地生成蚂蚁升级到 2 级，其余操作沿用 v3。它用于测试当前 v3 对 25 血蚂蚁的抗性，不作为最优解。
+
+`cpp_lure_v4/` 是 2026-04-30 从阶段性最优 v3 复制出的实验分支。它当前用于 future threat、hold followup、动态测速预算和 SimViz 调试能力的试验；截至 2026-05-02 仍未替代 v3。当前默认关闭 `future_threat_eval_enabled` 与 `hold_followup_enabled`，普通 rollout 为 `4/8` 且 `mid_eval_weight=0`，普通 action 使用 `action_target_time_ms=3000` 的实时测速目标和 `action_time_budget_ms=4000` 的硬预算。
 
 v3 已从 SDK 公共头中独立出来，策略实现和参数均位于 `cpp_lure_v3/include/antgame_ai/`。当前 v3 在 v2 冻结口径上继续迭代 root 搜索、reactive 模拟与进攻性 `EMP Blaster` / `Emergency Evasion` 后处理。共享 gating 为：敌方闪电未生效、敌方闪电 CD 至少 `5`，执行 best action 后金币仍 `>30`。回避还要求 C1 仍为 `Sniper`，且存在一个回避中心覆盖至少 `4` 只己方 `Worker`；战斗蚁不计入覆盖数，平局时优先更靠近敌方基地的位置。EMP 要求己方战斗蚁距敌方顶级塔 `<=2`，释放中心固定为该顶级塔。v3 的己方等效金币终点评估使用阶梯权重：`400` 以内按 `money_weight=10`，超过 `400` 的部分按 `money_weight_above_threshold=6`。
 
@@ -114,13 +122,14 @@ baseline / v2 的共同核心口径是：
   - C1 未成 `Sniper` 时，其他 base 槽位二级候选为 `Heavy / Mortar`
   - 任意 base 槽位上的 `Quick` 后续都只允许继续升为 `Sniper`
   - `Sniper` 是当前唯一 3 级塔候选
-- `base` followup 支持最多 3 个未来单回合步骤：
+- `base` followup 支持最多 5 个未来单回合步骤：
   - `build slot -> upgrade allowed level-2 tower`
   - `upgrade Basic -> Quick -> Sniper`
   - `downgrade slot -> downgrade same slot`
   - `downgrade/sell source to bottom -> build another base slot`
   - `downgrade/sell source to bottom -> build another base slot -> followup upgrade allowed level-2 tower`
   - swap 源塔只允许 Basic 或一级塔，最多连续 2 次降级/出售，不处理顶级塔卖到底
+  - `base+lure` 回收链可使用更长 followup，以支持高级 base 塔先逐级降到 Basic，再在卖掉 base 塔的同一 future turn 执行 lure
   - 同回合多塔操作只允许多个 `downgrade/sell`
 - 除 `C1` 外，base 槽位不做额外结构奖励/惩罚
 - 当前 lure 建塔不再做额外位置打分
@@ -133,7 +142,7 @@ baseline / v2 的共同核心口径是：
   - 遍历以棋盘唯一中心 `(9,9)` 为中心、六边形距离 `<= lightning_center_radius` 的合法中心
   - 默认半径为 `5`，因此候选中心数为 `1 + (1+2+3+4+5)*6 = 91`
   - 只有战斗蚁贴身己方塔时，v3 会额外生成该塔回收 + 闪电的 `recycle + lightning` 候选
-  - v3 中普通 action 和闪电 action 使用两套独立 UCB；闪电组默认总预算 `lightning_ucb_total_rollouts=500`、每次补 `lightning_ucb_batch_rollouts=1`
+  - v3 中普通 action 和闪电 action 使用两套独立 UCB；当前 v3 闪电组默认总预算 `lightning_ucb_total_rollouts=600`、每次补 `lightning_ucb_batch_rollouts=2`
 
 当前冻结点还包含：
 
@@ -162,7 +171,7 @@ make
 - `build/sdk_smoke`
 - `build/sdk_json_runner`
 - `build/sdk_lure_inspector`
-  - simviz 后端和单回合在线审计入口；当前跟随 `cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
+  - simviz 后端和单回合在线审计入口；当前跟随 `cpp_lure_v4/include/antgame_ai/lure_strategy_v4.hpp`
 - `build/sdk_lure_perf`
   - 基于 replay 抽样若干回合，测当前 `lure_strategy` 的整套决策、根计划生成、rollout 和底层模拟 profile
 - `build/sdk_defense_parity`
@@ -236,6 +245,10 @@ build/sdk_defense_parity \
   - 具体实现已拆到同目录下的 `core`、`plan_types`、`base/lure/lightning/root_plans`、`reactive`、`evaluation`、`offense`、`decision` 分段头文件
 - `../antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
   - 当前 v3 参数入口
+- `../antgame_ai_cpp/cpp_lure_v4/include/antgame_ai/lure_strategy_v4.hpp`
+  - 当前 v4 实验分支聚合入口，继承 v3 后继续试验 future threat、hold followup、动态测速预算与 SimViz 调试输出
+- `../antgame_ai_cpp/cpp_lure_v4/include/antgame_ai/lure_strategy_v4_params.hpp`
+  - 当前 v4 参数入口；截至 2026-05-02，默认关闭 `future_threat_eval_enabled` 和 `hold_followup_enabled`
 - `include/antgame_sdk/lure_strategy.hpp`
   - 默认兼容入口，目前等同 v2
 - `include/antgame_sdk/lure_strategy_params.hpp`
@@ -243,7 +256,8 @@ build/sdk_defense_parity \
 - `include/antgame_sdk/position_slots.hpp`
   - 旧版位置名与坐标映射
 - `examples/sdk_lure_inspector.cpp`
-  - simviz 后端和单回合在线审计入口；当前跟随 `cpp_lure_v3/include/antgame_ai/lure_strategy_v3.hpp`
+  - simviz 后端和单回合在线审计入口；当前跟随 `cpp_lure_v4/include/antgame_ai/lure_strategy_v4.hpp`
+  - 支持 SimViz 通过 `strategy_overrides` 临时打开/关闭 v4 的 `future_threat_eval_enabled` 与 `hold_followup_enabled`
 - `examples/sdk_lure_perf.cpp`
   - 决策、候选生成、普通 action、闪电 UCB、底层模拟 profile
 - `examples/sdk_defense_parity.cpp`
@@ -339,6 +353,9 @@ python3 Game1/antgame_ai_cpp/tools/eval_cpp_partial_selfplay.py \
 - 官方基础收入为每 `2` 回合 `+3`
 - 超武部署当回合立即生效
 - 前手 `EMP` 可直接影响后手同回合塔操作
+- 官方 p0 操作会在 p1 读取前被裁剪并应用，因此 p1 的本地状态应包含 p0 本回合实际已接受的超武、金币、塔变更
+
+2026-05-02 修复了 `PublicState::apply_operation_list()` 的同回合顺序应用语义：旧实现一边修改状态，一边把已应用操作继续作为 `pending` 传入合法性判断，可能错误拒绝“先降/卖塔筹钱，再建塔，再 EMP”的 salvage-funded EMP。新实现使用 `can_apply_operation_sequential()` 与 `record_operation_turn_usage()`，在当前已变更状态上顺序检查操作，只额外记录本回合已使用的 tower id 和 base upgrade 状态。v2/v3/v4 的本地 legalize 与 downgrade penalty 路径已同步使用该顺序合法性检查，并新增 seed `711058` 的回归测试。
 
 如果未来 `Ant-Game` 更新，应优先重新检查：
 

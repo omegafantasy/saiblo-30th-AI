@@ -114,15 +114,16 @@ inline double downgrade_penalty_for_ops(
     const std::vector<Operation> &operations) {
     double penalty = 0.0;
     PublicState scratch = state.clone();
-    std::vector<Operation> accepted;
-    accepted.reserve(operations.size());
+    std::vector<int> used_towers;
+    bool base_upgraded = false;
     for (const auto &operation : sort_operations(state, operations)) {
-        if (!scratch.can_apply_operation(player, operation, accepted)) {
+        const int built_tower_id = scratch.next_tower_id;
+        if (!scratch.can_apply_operation_sequential(player, operation, used_towers, base_upgraded)) {
             return penalty;
         }
         penalty += downgrade_operation_penalty(scratch, player, operation);
         scratch.apply_operation(player, operation);
-        accepted.push_back(operation);
+        scratch.record_operation_turn_usage(operation, built_tower_id, used_towers, base_upgraded);
     }
     return penalty;
 }

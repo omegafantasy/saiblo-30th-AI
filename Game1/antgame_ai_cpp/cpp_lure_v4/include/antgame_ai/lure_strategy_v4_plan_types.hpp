@@ -23,7 +23,7 @@ struct FollowupStep {
 };
 
 struct FollowupAction {
-    static constexpr int kMaxSteps = 3;
+    static constexpr int kMaxSteps = 5;
 
     std::array<FollowupStep, kMaxSteps> steps{};
     int count = 0;
@@ -136,6 +136,7 @@ struct CombinedPlan {
     double lure_heuristic = 0.0;
     double lightning_heuristic = 0.0;
     double operation_penalty = 0.0;
+    double followup_penalty = 0.0;
     double lightning_static_bonus = 0.0;
     bool has_lightning = false;
     int horizon = 0;
@@ -168,6 +169,13 @@ struct EvalBreakdown {
     double worker_threat_score = 0.0;
     double combat_threat_raw = 0.0;
     double combat_threat_score = 0.0;
+    double future_base_damage_raw = 0.0;
+    double future_base_damage_score = 0.0;
+    double future_worker_threat_raw = 0.0;
+    double future_combat_threat_raw = 0.0;
+    double future_projected_threat_raw = 0.0;
+    double future_adjusted_threat_raw = 0.0;
+    double future_threat_adjustment_score = 0.0;
     double total_score = 0.0;
 
     EvalBreakdown &operator+=(const EvalBreakdown &other) {
@@ -183,6 +191,13 @@ struct EvalBreakdown {
         worker_threat_score += other.worker_threat_score;
         combat_threat_raw += other.combat_threat_raw;
         combat_threat_score += other.combat_threat_score;
+        future_base_damage_raw += other.future_base_damage_raw;
+        future_base_damage_score += other.future_base_damage_score;
+        future_worker_threat_raw += other.future_worker_threat_raw;
+        future_combat_threat_raw += other.future_combat_threat_raw;
+        future_projected_threat_raw += other.future_projected_threat_raw;
+        future_adjusted_threat_raw += other.future_adjusted_threat_raw;
+        future_threat_adjustment_score += other.future_threat_adjustment_score;
         total_score += other.total_score;
         return *this;
     }
@@ -201,6 +216,13 @@ struct EvalBreakdown {
         out.worker_threat_score *= factor;
         out.combat_threat_raw *= factor;
         out.combat_threat_score *= factor;
+        out.future_base_damage_raw *= factor;
+        out.future_base_damage_score *= factor;
+        out.future_worker_threat_raw *= factor;
+        out.future_combat_threat_raw *= factor;
+        out.future_projected_threat_raw *= factor;
+        out.future_adjusted_threat_raw *= factor;
+        out.future_threat_adjustment_score *= factor;
         out.total_score *= factor;
         return out;
     }

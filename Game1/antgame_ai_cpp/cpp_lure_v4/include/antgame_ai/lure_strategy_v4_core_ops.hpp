@@ -106,14 +106,15 @@ inline std::string join_plan_key(const std::vector<Operation> &operations) {
 inline std::vector<Operation> legalize_operations(const PublicState &state, int player, const std::vector<Operation> &operations) {
     PublicState scratch = state.clone();
     const std::vector<Operation> ordered = sort_operations(state, operations);
-    std::vector<Operation> accepted;
-    accepted.reserve(ordered.size());
+    std::vector<int> used_towers;
+    bool base_upgraded = false;
     for (const auto &operation : ordered) {
-        if (!scratch.can_apply_operation(player, operation, accepted)) {
+        const int built_tower_id = scratch.next_tower_id;
+        if (!scratch.can_apply_operation_sequential(player, operation, used_towers, base_upgraded)) {
             return {};
         }
         scratch.apply_operation(player, operation);
-        accepted.push_back(operation);
+        scratch.record_operation_turn_usage(operation, built_tower_id, used_towers, base_upgraded);
     }
     return ordered;
 }

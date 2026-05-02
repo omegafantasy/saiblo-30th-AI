@@ -88,6 +88,23 @@ async function getJSON(url) {
   return data;
 }
 
+function strategyOverridesPayload() {
+  return {
+    future_threat_eval_enabled: Boolean(dom.futureThreatToggle?.checked),
+    hold_followup_enabled: Boolean(dom.holdFollowupToggle?.checked),
+  };
+}
+
+function inspectPayload(extra = {}) {
+  return {
+    replay_path: dom.replayPath.value.trim(),
+    round: Number(dom.roundInput.value || 0),
+    player: Number(dom.playerSelect.value || 0),
+    strategy_overrides: strategyOverridesPayload(),
+    ...extra,
+  };
+}
+
 function buildSlotLookups() {
   appState.slotByPlayerCoord.clear();
   for (const slot of appState.map.slots) {
@@ -381,11 +398,13 @@ function strategyParamsText() {
   const params = appState.actions?.strategy_params;
   if (!params) return "params unavailable";
   return [
+    `strategy ${params.strategy_version ?? "-"}`,
     `rollout ${params.rollout_count ?? "-"}`,
-    `base ${params.action_base_total_rollouts ?? "-"}`,
-    `target min(${params.action_target_total_rollouts ?? "-"},${params.action_target_rollouts_per_action ?? "-"}xN)`,
+    `target ${params.action_target_time_ms ?? "-"}ms x${formatPlainNumber(params.action_target_total_multiplier, 2)}`,
+    `probe ${params.action_probe_min_samples ?? "-"}-${params.action_probe_max_samples ?? "-"} @${params.action_probe_samples_per_action ?? "-"}xN`,
+    `cap ${params.action_target_rollouts_per_action ?? "-"}xN`,
     `batch<=${params.action_max_rollouts_per_batch ?? "-"}`,
-    `time ${params.action_time_budget_ms ?? "-"}ms`,
+    `budget ${params.action_time_budget_ms ?? "-"}ms`,
     `ucb ${formatPlainNumber(params.action_ucb_exploration, 1)}`,
     `L ${params.lightning_ucb_total_rollouts ?? "-"}x${params.lightning_ucb_batch_rollouts ?? "-"}`,
     `L-ucb ${formatPlainNumber(params.lightning_ucb_exploration, 1)}`,
@@ -395,6 +414,8 @@ function strategyParamsText() {
     `lightning h ${params.lightning_horizon ?? "-"}`,
     `radius ${params.lightning_center_radius ?? "-"}`,
     `money ${formatPlainNumber(params.money_weight, 1)}/${formatPlainNumber(params.money_weight_above_threshold, 1)}@${formatPlainNumber(params.money_decay_threshold, 0)}`,
+    `future ${params.future_threat_eval_enabled ? `on/${params.future_threat_horizon ?? "-"}` : "off"}`,
+    `hold+future ${params.hold_followup_enabled ? `on/${params.hold_followup_delay_turn ?? "-"}` : "off"}`,
   ].join(" | ");
 }
 
@@ -404,6 +425,47 @@ function actionCategoryLabel(plan) {
 
 function sampleWeight(sample) {
   return sample?.normalized_path_weight ?? sample?.importance_weight ?? 0;
+}
+
+function terminalStaticThreat(terminal) {
+  return (terminal?.worker_threat_raw || 0) + (terminal?.combat_threat_raw || 0);
+}
+
+function terminalFutureThreatParts(terminal) {
+  return {
+    baseDamage: terminal?.future_base_damage_raw || 0,
+    baseDamageScore: terminal?.future_base_damage_score || 0,
+    worker: terminal?.future_worker_threat_raw || 0,
+    combat: terminal?.future_combat_threat_raw || 0,
+    projected: terminal?.future_projected_threat_raw || 0,
+    adjusted: terminal?.future_adjusted_threat_raw || 0,
+    adjustment: terminal?.future_threat_adjustment_score || 0,
+  };
+}
+
+function futureThreatShort(terminal) {
+  const future = terminalFutureThreatParts(terminal);
+  const enabled = appState.actions?.strategy_params?.future_threat_eval_enabled;
+  if (!enabled && Math.abs(future.adjustment) < 1e-9) return "-";
+  return formatNumber(future.adjustment);
+}
+
+function futureThreatDetail(terminal, finalTerminal = null) {
+  const future = terminalFutureThreatParts(terminal);
+  const rawFuture = finalTerminal ? terminalFutureThreatParts(finalTerminal) : future;
+  const enabled = appState.actions?.strategy_params?.future_threat_eval_enabled;
+  if (!enabled && Math.abs(future.adjustment) < 1e-9 && Math.abs(rawFuture.projected) < 1e-9) {
+    return "futureThreat off";
+  }
+  return [
+    `futureAdj ${formatNumber(future.adjustment)}`,
+    `futureBaseDmg ${formatNumber(rawFuture.baseDamage)}`,
+    `futureBaseScore ${formatNumber(rawFuture.baseDamageScore)}`,
+    `futureWorker ${formatNumber(rawFuture.worker)}`,
+    `futureCombat ${formatNumber(rawFuture.combat)}`,
+    `futureProjected ${formatNumber(rawFuture.projected)}`,
+    `futureAdjusted ${formatNumber(rawFuture.adjusted)}`,
+  ].join(" | ");
 }
 
 function timingSummaryItems() {
@@ -1076,6 +1138,11 @@ function resetStrategyViews() {
   renderUnifiedBoard();
 }
 
+function handleStrategySwitchChanged() {
+  resetStrategyViews();
+  setStatus("Strategy switches changed; compute actions again");
+}
+
 function renderBoardModeTabs() {
   const modes = [{ key: "replay", label: "Replay" }];
   if (appState.actions) modes.push({ key: "root", label: "Root" });
@@ -1159,15 +1226,15 @@ function renderUnifiedBoard() {
   dom.unifiedBoardMeta.innerHTML = model.meta;
   dom.unifiedBoardMeta.classList.remove("empty-box");
   if (selectedPlan) {
-    const threat =
-      (selectedPlan.mean_rollout.terminal.worker_threat_raw || 0) +
-      (selectedPlan.mean_rollout.terminal.combat_threat_raw || 0);
+    const terminal = selectedPlan.mean_rollout.terminal;
+    const threat = terminalStaticThreat(terminal);
     dom.selectedActionInfo.innerHTML = `
       action <code>${fullPlanPretty(selectedPlan)}</code> |
       total ${formatNumber(selectedPlan.mean_score)} |
       rollout ${formatNumber(selectedPlan.mean_rollout_score)} |
       heuristic ${formatNumber(selectedPlan.heuristic)} |
-      threat ${formatNumber(threat)}
+      threat ${formatNumber(threat)} |
+      ${futureThreatDetail(terminal)}
     `;
     dom.selectedActionInfo.classList.remove("empty-box");
   } else {
@@ -1282,7 +1349,8 @@ function renderActions() {
   visiblePlans.forEach((plan) => {
     const row = document.createElement("tr");
     if (plan.key === appState.selectedPlanKey) row.classList.add("selected");
-    const threat = (plan.mean_rollout.terminal.worker_threat_raw || 0) + (plan.mean_rollout.terminal.combat_threat_raw || 0);
+    const terminal = plan.mean_rollout.terminal;
+    const threat = terminalStaticThreat(terminal);
     const globalRank = (appState.actions.plans || []).findIndex((item) => item.key === plan.key) + 1;
     row.innerHTML = `
       <td>${globalRank}</td>
@@ -1296,6 +1364,7 @@ function renderActions() {
       <td>${formatNumber(plan.mean_rollout.terminal.base_hp_raw)}</td>
       <td>${formatNumber(plan.mean_rollout.terminal.money_raw)}</td>
       <td>${formatNumber(threat)}</td>
+      <td>${futureThreatShort(terminal)}</td>
     `;
     row.addEventListener("click", () => selectPlan(plan.key));
     tbody.appendChild(row);
@@ -1322,7 +1391,7 @@ function renderSamples() {
     if (sample.sample_index === appState.selectedSampleIndex) row.classList.add("selected");
     const terminal = sample.terminal;
     const moveCount = (sample.first_round_move_assignments || []).length;
-    const threat = (terminal.worker_threat_raw || 0) + (terminal.combat_threat_raw || 0);
+    const threat = terminalStaticThreat(terminal);
     const normalizedWeight = sampleWeight(sample);
     row.innerHTML = `
       <td>${sample.sample_index}</td>
@@ -1332,11 +1401,48 @@ function renderSamples() {
       <td>${formatNumber(terminal.base_hp_raw)}</td>
       <td>${formatNumber(terminal.money_raw)}</td>
       <td>${formatNumber(threat)}</td>
+      <td>${futureThreatShort(terminal)}</td>
       <td>${moveCount}</td>
     `;
     row.addEventListener("click", () => selectSample(sample.sample_index));
     tbody.appendChild(row);
   });
+}
+
+function traceStepItems() {
+  const trace = appState.trace?.trace;
+  if (!trace) return [];
+  const items = [];
+  (trace.rounds || []).forEach((step, index) => {
+    items.push({
+      kind: "rollout",
+      label: `Step ${index}`,
+      sourceIndex: index,
+      step,
+    });
+  });
+  const futureRounds = trace.future_rounds || trace.future_trace?.rounds || [];
+  futureRounds.forEach((step, index) => {
+    items.push({
+      kind: "future",
+      label: `F+${index + 1}`,
+      sourceIndex: index,
+      step,
+    });
+  });
+  return items;
+}
+
+function selectedTraceStepItem() {
+  const items = traceStepItems();
+  if (items.length === 0) return null;
+  if (appState.selectedTraceStep >= items.length) {
+    appState.selectedTraceStep = items.length - 1;
+  }
+  if (appState.selectedTraceStep < 0) {
+    appState.selectedTraceStep = 0;
+  }
+  return items[appState.selectedTraceStep];
 }
 
 function renderTracePanels() {
@@ -1350,9 +1456,13 @@ function renderTracePanels() {
   const ucbBits = trace.ucb_actual_sample
     ? ` | UCB batch ${trace.batch_index}:${trace.batch_local_index}/${trace.batch_size}`
     : "";
+  const futureRounds = trace.future_rounds || trace.future_trace?.rounds || [];
+  const futureBits = trace.future_trace?.enabled
+    ? ` | future ${futureRounds.length}/${trace.future_trace.horizon ?? "-"}`
+    : " | future off";
   dom.traceMeta.textContent = `${fullPlanPretty(appState.trace.plan)} | h ${
     appState.trace.plan?.horizon ?? trace.rounds?.length ?? "-"
-  } | steps ${trace.rounds?.length ?? "-"} | sample ${trace.sample_index}${ucbBits} | seed ${trace.seed}`;
+  } | steps ${trace.rounds?.length ?? "-"}${futureBits} | sample ${trace.sample_index}${ucbBits} | seed ${trace.seed}`;
   dom.traceEval.classList.remove("empty-box");
   dom.traceEval.innerHTML = `
     total ${formatNumber(trace.total_score)} |
@@ -1361,13 +1471,19 @@ function renderTracePanels() {
     tower ${formatNumber(trace.terminal.tower_value_raw)} |
     money ${formatNumber(trace.terminal.money_raw)} |
     workerThreat ${formatNumber(trace.terminal.worker_threat_raw)} |
-    combatThreat ${formatNumber(trace.terminal.combat_threat_raw)}
+    combatThreat ${formatNumber(trace.terminal.combat_threat_raw)} |
+    ${futureThreatDetail(trace.terminal, trace.final_terminal)}
   `;
 
   dom.traceStepTabs.innerHTML = "";
-  trace.rounds.forEach((round, index) => {
+  const stepItems = traceStepItems();
+  stepItems.forEach((item, index) => {
     const button = document.createElement("button");
-    button.textContent = `Step ${index}`;
+    button.textContent = item.label;
+    if (item.kind === "future") {
+      button.classList.add("future-step");
+      button.title = "Future threat projection step";
+    }
     if (index === appState.selectedTraceStep) button.classList.add("active");
     button.addEventListener("click", () => {
       appState.selectedTraceStep = index;
@@ -1377,10 +1493,14 @@ function renderTracePanels() {
     dom.traceStepTabs.appendChild(button);
   });
 
-  const step = trace.rounds[appState.selectedTraceStep];
-  if (!step) return;
+  const item = selectedTraceStepItem();
+  if (!item) return;
+  const step = item.step;
+  const isFutureStep = item.kind === "future";
 
-  dom.traceStartHeader.textContent = `step ${appState.selectedTraceStep} | ${step.phase}`;
+  dom.traceStartHeader.textContent = isFutureStep
+    ? `future threat ${item.sourceIndex + 1} | ${step.phase}`
+    : `step ${item.sourceIndex} | ${step.phase}`;
   renderBoard(dom.traceStartBoard, step.trace.state_start, {
     boardKey: "traceStartBoard",
     slotPlayer: Number(dom.playerSelect.value),
@@ -1393,12 +1513,14 @@ function renderTracePanels() {
   });
 
   dom.traceStartMeta.classList.remove("empty-box");
-  dom.traceStartMeta.innerHTML = `ops <code>${step.applied_operations_pretty || "HOLD-0"}</code> | move path prob ${formatNumber(
+  dom.traceStartMeta.innerHTML = `ops <code>${step.applied_operations_pretty || (isFutureStep ? "FUTURE-THREAT" : "HOLD-0")}</code> | move path prob ${formatNumber(
     step.trace.move_path_probability
   )}`;
 
   dom.traceStepMeta.classList.remove("empty-box");
-  dom.traceStepMeta.innerHTML = `phase ${step.phase} | move count ${(step.trace.move_assignments || []).length} | action preview is also available in Unified Board / Action`;
+  dom.traceStepMeta.innerHTML = isFutureStep
+    ? `phase ${step.phase} | move count ${(step.trace.move_assignments || []).length} | deterministic future threat: attack-tower moves filtered, highest-probability legal non-attack move chosen`
+    : `phase ${step.phase} | move count ${(step.trace.move_assignments || []).length} | action preview is also available in Unified Board / Action`;
   renderUnifiedBoard();
 }
 
@@ -1406,11 +1528,15 @@ function renderMovesTable() {
   const tbody = $("movesTable").querySelector("tbody");
   tbody.innerHTML = "";
   if (!appState.trace) return;
-  const step = appState.trace.trace.rounds[appState.selectedTraceStep];
-  if (!step) return;
+  const item = selectedTraceStepItem();
+  if (!item) return;
+  const step = item.step;
 
   const rows = step.trace.move_assignments || [];
-  dom.movesMeta.textContent = `step ${appState.selectedTraceStep} | ${rows.length} assignments`;
+  dom.movesMeta.textContent =
+    item.kind === "future"
+      ? `future threat ${item.sourceIndex + 1} | ${rows.length} assignments`
+      : `step ${item.sourceIndex} | ${rows.length} assignments`;
   if (rows.length === 0) {
     const row = document.createElement("tr");
     row.innerHTML = `<td colspan="7">No ant movement in this simulated round.</td>`;
@@ -1422,7 +1548,10 @@ function renderMovesTable() {
     const before = move.ant_before || {};
     const options = (move.options || [])
       .slice(0, 3)
-      .map((option) => `${option.direction}@(${option.nx},${option.ny}) p=${formatNumber(option.probability)}`)
+      .map((option) => {
+        const blocked = option.attacks_tower ? " xTower" : "";
+        return `${option.direction}@(${option.nx},${option.ny}) p=${formatNumber(option.probability)}${blocked}`;
+      })
       .join("<br>");
     const row = document.createElement("tr");
     row.innerHTML = `
@@ -1486,11 +1615,7 @@ async function computeActions() {
   if (!appState.replayMeta) return;
   try {
     setStatus("Computing actions...");
-    appState.actions = await postJSON("/api/inspect/actions", {
-      replay_path: dom.replayPath.value.trim(),
-      round: Number(dom.roundInput.value || 0),
-      player: Number(dom.playerSelect.value || 0),
-    });
+    appState.actions = await postJSON("/api/inspect/actions", inspectPayload());
     appState.actionCategoryFilter = "all";
     appState.selectedPlanKey = appState.actions.plans[0]?.key || null;
     appState.boardMode = "root";
@@ -1531,12 +1656,9 @@ async function loadRollouts() {
   if (!appState.selectedPlanKey) return;
   try {
     setStatus("Computing rollout samples...");
-    appState.rollouts = await postJSON("/api/inspect/rollouts", {
-      replay_path: dom.replayPath.value.trim(),
-      round: Number(dom.roundInput.value || 0),
-      player: Number(dom.playerSelect.value || 0),
+    appState.rollouts = await postJSON("/api/inspect/rollouts", inspectPayload({
       plan_key: appState.selectedPlanKey,
-    });
+    }));
     const bestSample = [...(appState.rollouts.samples || [])].sort((lhs, rhs) => {
       const lhsWeight = sampleWeight(lhs);
       const rhsWeight = sampleWeight(rhs);
@@ -1562,15 +1684,12 @@ async function loadTrace() {
   if (appState.selectedPlanKey == null || appState.selectedSampleIndex == null) return;
   try {
     setStatus("Computing rollout trace...");
-    appState.trace = await postJSON("/api/inspect/trace", {
-      replay_path: dom.replayPath.value.trim(),
-      round: Number(dom.roundInput.value || 0),
-      player: Number(dom.playerSelect.value || 0),
+    appState.trace = await postJSON("/api/inspect/trace", inspectPayload({
       plan_key: appState.selectedPlanKey,
       sample_index: appState.selectedSampleIndex,
       sample_count: Math.max(1, appState.rollouts?.samples?.length || 0),
       ucb_actual_sample: true,
-    });
+    }));
     appState.selectedTraceStep = 0;
     renderTracePanels();
     renderMovesTable();
@@ -1588,6 +1707,8 @@ async function init() {
     playerSelect: $("playerSelect"),
     roundInput: $("roundInput"),
     roundSlider: $("roundSlider"),
+    futureThreatToggle: $("futureThreatToggle"),
+    holdFollowupToggle: $("holdFollowupToggle"),
     columnLeft: document.querySelector(".column-left"),
     columnMiddle: document.querySelector(".column-middle"),
     dividerLeft: $("dividerLeft"),
@@ -1634,6 +1755,8 @@ async function init() {
     });
     $("loadReplayBtn").addEventListener("click", loadReplay);
     $("computeActionsBtn").addEventListener("click", computeActions);
+    dom.futureThreatToggle.addEventListener("change", handleStrategySwitchChanged);
+    dom.holdFollowupToggle.addEventListener("change", handleStrategySwitchChanged);
     dom.playerSelect.addEventListener("change", () => {
       renderReplayRound();
       renderActions();

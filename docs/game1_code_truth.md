@@ -41,7 +41,9 @@
   - 当前保留的 Game1 C++ AI 入口
   - 冻结对照：`cpp_heavy_baseline/`
   - 当前最优：`cpp_lure_v3/`
+  - 当前实验：`cpp_lure_v4/`
   - 抗性测试变体：`cpp_lure_v3a/`
+  - Saiblo/本机性能探针：`cpp_lure_v3n/`
 
 ## 4. 核心常量
 
@@ -188,6 +190,7 @@ native 当前整回合主流程：
 0. 玩家操作阶段：先玩家 `0`，再玩家 `1`
    - 超武在这里部署并立即生效
    - 因此同回合后手操作会受到前手刚放下的 `EMP` 影响
+   - 玩家 `0` 的 accepted 操作会在玩家 `1` 读取前应用到公开状态；本地 SDK 镜像必须按这个顺序同步
 
 1. `attack_ants`
 2. `move_ants`
@@ -234,6 +237,8 @@ native 当前整回合主流程：
   - 整个操作列表在顺序应用后钱包不能为负
   - `EMP` 会立即生效，因此同回合后续塔操作可能被卡掉
 
+2026-05-02 外置 C++ SDK 已修复 `PublicState::apply_operation_list()` 的顺序应用语义：操作列表现在在已变更的当前状态上逐条检查，只额外记录本回合已使用的 tower id 和 base upgrade 状态。该修复覆盖“先降/卖塔筹钱，再建塔，再 EMP”的 salvage-funded EMP，避免本地镜像错误拒绝官方可接受的操作序列。
+
 - `11`：建塔
 - `12`：升级塔
 - `13`：降级/拆塔
@@ -250,7 +255,10 @@ native 当前整回合主流程：
 - C++ baseline 构建：`Game1/antgame_ai_cpp/cpp_heavy_baseline/Makefile`
 - 当前最优 v3 源码：`Game1/antgame_ai_cpp/cpp_lure_v3/ai_cpp_lure_v3.cpp`
 - 当前最优 v3 参数：`Game1/antgame_ai_cpp/cpp_lure_v3/include/antgame_ai/lure_strategy_v3_params.hpp`
+- 当前实验 v4 源码：`Game1/antgame_ai_cpp/cpp_lure_v4/ai_cpp_lure_v4.cpp`
+- 当前实验 v4 参数：`Game1/antgame_ai_cpp/cpp_lure_v4/include/antgame_ai/lure_strategy_v4_params.hpp`
 - v3-a 抗性测试变体：`Game1/antgame_ai_cpp/cpp_lure_v3a/ai_cpp_lure_v3a.cpp`
+- v3-n 性能探针：`Game1/antgame_ai_cpp/cpp_lure_v3n/ai_cpp_lure_v3n.cpp`
 - `cpp_lure_v2` 源码目录和打包目标已删除
 - baseline 主逻辑：`Game1/antgame_cpp_sdk/include/antgame_sdk/lure_strategy_v2.hpp`
 - 快速模拟器：`Game1/antgame_cpp_sdk/include/antgame_sdk/random_search_baseline.hpp`

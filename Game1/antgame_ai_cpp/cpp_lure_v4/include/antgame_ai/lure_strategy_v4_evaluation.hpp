@@ -49,15 +49,39 @@ struct UcbBatchRecord {
 struct UcbEvaluationTrace {
     std::vector<UcbRolloutRecord> samples;
     std::vector<UcbBatchRecord> batches;
+    rs::DefenseSimulatorProfile simulator_profile;
+    V4ReactiveProfile reactive_profile;
     int target_total = 0;
     int total_samples = 0;
+    int lightning_target_total = 0;
+    int action_normal_arm_count = 0;
+    int action_probe_samples = 0;
+    double action_probe_elapsed_us = 0.0;
+    double action_estimated_us_per_sample = 0.0;
+    double action_remaining_target_ms = 0.0;
+    int action_effective_base_total_rollouts = 0;
+    int action_effective_target_total_rollouts = 0;
+    int action_normal_batch_size = 0;
+    int action_normal_guaranteed_total = 0;
     double total_elapsed_us = 0.0;
 
     void clear() {
         samples.clear();
         batches.clear();
+        simulator_profile = rs::DefenseSimulatorProfile{};
+        reactive_profile = V4ReactiveProfile{};
         target_total = 0;
         total_samples = 0;
+        lightning_target_total = 0;
+        action_normal_arm_count = 0;
+        action_probe_samples = 0;
+        action_probe_elapsed_us = 0.0;
+        action_estimated_us_per_sample = 0.0;
+        action_remaining_target_ms = 0.0;
+        action_effective_base_total_rollouts = 0;
+        action_effective_target_total_rollouts = 0;
+        action_normal_batch_size = 0;
+        action_normal_guaranteed_total = 0;
         total_elapsed_us = 0.0;
     }
 };
@@ -73,6 +97,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
     if (trace != nullptr) {
         trace->clear();
     }
+    V4ReactiveProfileScope reactive_profile_scope(trace != nullptr ? &trace->reactive_profile : nullptr);
     const auto evaluation_begin = std::chrono::steady_clock::now();
     std::vector<EvaluatedPlan> evaluated;
     evaluated.reserve(root_plans.plans.size());
@@ -121,27 +146,9 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
     }
 
     (void)rollout_count;
-    const int action_base_total = std::max(0, v4_lure_config().action_base_total_rollouts);
-    const int action_target_total = std::max(0, v4_lure_config().action_target_total_rollouts);
     const int action_target_per_action = std::max(1, v4_lure_config().action_target_rollouts_per_action);
     const int action_max_batch = std::max(1, v4_lure_config().action_max_rollouts_per_batch);
     const int normal_arm_count = static_cast<int>(normal_arm_indices.size());
-    const int normal_batch_size = normal_arm_indices.empty()
-                                      ? 0
-                                      : std::max(
-                                            1,
-                                            std::min(
-                                                action_max_batch,
-                                                action_base_total / normal_arm_count));
-    const int normal_guaranteed_total = normal_batch_size * normal_arm_count;
-    const int normal_target_total =
-        normal_arm_indices.empty()
-            ? 0
-            : std::max(
-                  normal_guaranteed_total,
-                  std::min(
-                      action_target_total,
-                      action_target_per_action * normal_arm_count));
     const int lightning_batch_size = std::max(1, v4_lure_config().lightning_ucb_batch_rollouts);
     const int lightning_budget = lightning_arm_indices.empty()
                                      ? 0
@@ -152,9 +159,9 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
                                                  std::ceil(static_cast<double>(lightning_budget) /
                                                            static_cast<double>(lightning_batch_size))) *
                                                  lightning_batch_size;
-    const int target_total = lightning_target_total + normal_target_total;
     if (trace != nullptr) {
-        trace->target_total = target_total;
+        trace->lightning_target_total = lightning_target_total;
+        trace->action_normal_arm_count = normal_arm_count;
     }
 
     auto arm_mean_score = [](const UcbArm &arm) {
@@ -240,12 +247,15 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         return added;
     };
 
-    auto elapsed_ms = [&]() {
+    auto elapsed_us = [&]() {
         return static_cast<double>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - evaluation_begin)
-                .count()) /
-               1000.0;
+                .count());
+    };
+
+    auto elapsed_ms = [&]() {
+        return elapsed_us() / 1000.0;
     };
 
     auto run_ucb_group = [&](const std::vector<std::size_t> &indices,
@@ -305,20 +315,99 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         lightning_target_total,
         v4_lure_config().lightning_ucb_exploration,
         true);
+    if (trace != nullptr) {
+        trace->target_total = lightning_target_total;
+    }
 
     auto run_budgeted_action_group = [&]() {
-        if (normal_arm_indices.empty() || normal_batch_size <= 0) {
+        if (normal_arm_indices.empty()) {
             return 0;
         }
 
         int group_samples = 0;
-        for (std::size_t arm_index : normal_arm_indices) {
-            group_samples += sample_arm_batch(arms[arm_index], normal_batch_size);
+        const int probe_per_action = std::max(1, v4_lure_config().action_probe_samples_per_action);
+        const int probe_min = std::max(0, v4_lure_config().action_probe_min_samples);
+        const int probe_max = std::max(1, v4_lure_config().action_probe_max_samples);
+        const int probe_target =
+            std::min(probe_max, std::max(probe_min, normal_arm_count * probe_per_action));
+
+        const auto probe_begin = std::chrono::steady_clock::now();
+        int probe_samples = 0;
+        while (probe_samples < probe_target) {
+            int pass_added = 0;
+            for (std::size_t arm_index : normal_arm_indices) {
+                if (probe_samples >= probe_target) {
+                    break;
+                }
+                const int added = sample_arm_batch(arms[arm_index], 1);
+                group_samples += added;
+                probe_samples += added;
+                pass_added += added;
+            }
+            if (pass_added <= 0) {
+                break;
+            }
+        }
+        const double probe_elapsed_us =
+            static_cast<double>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - probe_begin)
+                    .count());
+        if (probe_samples <= 0) {
+            return group_samples;
         }
 
+        const double us_per_sample = std::max(1.0, probe_elapsed_us / static_cast<double>(probe_samples));
+        const double target_time_ms = static_cast<double>(std::max(0, v4_lure_config().action_target_time_ms));
+        const double guard_ms = static_cast<double>(std::max(0, v4_lure_config().action_timing_guard_ms));
+        const double remaining_target_ms = std::max(0.0, target_time_ms - elapsed_ms() - guard_ms);
+        const int estimated_additional_samples =
+            static_cast<int>(std::floor((remaining_target_ms * 1000.0) / us_per_sample));
+        const int effective_base_total = std::max(group_samples, group_samples + std::max(0, estimated_additional_samples));
+        const int normal_batch_size =
+            std::max(1, std::min(action_max_batch, effective_base_total / normal_arm_count));
+        const double target_multiplier = std::max(1.0, v4_lure_config().action_target_total_multiplier);
+        const int dynamic_target_total =
+            static_cast<int>(std::ceil(static_cast<double>(effective_base_total) * target_multiplier));
+        const int per_action_target_total = action_target_per_action * normal_arm_count;
         const double budget_ms = static_cast<double>(std::max(0, v4_lure_config().action_time_budget_ms));
+        auto over_budget = [&]() {
+            return budget_ms > 0.0 && elapsed_ms() >= budget_ms;
+        };
+
+        for (std::size_t arm_index : normal_arm_indices) {
+            if (arms[arm_index].samples <= 0) {
+                group_samples += sample_arm_batch(arms[arm_index], 1);
+            }
+        }
+
+        for (std::size_t arm_index : normal_arm_indices) {
+            if (over_budget()) {
+                break;
+            }
+            const int needed = normal_batch_size - arms[arm_index].samples;
+            if (needed <= 0) {
+                continue;
+            }
+            group_samples += sample_arm_batch(arms[arm_index], needed);
+        }
+
+        const int normal_target_total =
+            std::max(group_samples, std::min(dynamic_target_total, per_action_target_total));
+        if (trace != nullptr) {
+            trace->action_probe_samples = probe_samples;
+            trace->action_probe_elapsed_us = probe_elapsed_us;
+            trace->action_estimated_us_per_sample = us_per_sample;
+            trace->action_remaining_target_ms = remaining_target_ms;
+            trace->action_effective_base_total_rollouts = effective_base_total;
+            trace->action_effective_target_total_rollouts = normal_target_total;
+            trace->action_normal_batch_size = normal_batch_size;
+            trace->action_normal_guaranteed_total = normal_batch_size * normal_arm_count;
+            trace->target_total = lightning_target_total + normal_target_total;
+        }
+
         while (group_samples < normal_target_total) {
-            if (budget_ms > 0.0 && elapsed_ms() >= budget_ms) {
+            if (over_budget()) {
                 break;
             }
             int best_index = -1;

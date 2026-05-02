@@ -32,6 +32,126 @@ inline bool root_ops_respect_non_lure_limit(
     return !builds_base_tower || post_count <= v4_lure_config().max_non_lure_towers;
 }
 
+inline bool push_followup_checked(FollowupAction &followup, FollowupStep step) {
+    if (step.empty() || followup.count >= FollowupAction::kMaxSteps) {
+        return false;
+    }
+    followup.push(step);
+    return true;
+}
+
+inline bool append_delayed_operation_followup(
+    const PublicState &state,
+    int player,
+    const Operation &operation,
+    int turn,
+    FollowupAction &followup) {
+    if (operation.op_type == OperationType::BuildTower) {
+        const int code = old_ai_position_code_at(player, operation.arg0, operation.arg1);
+        if (code < 0) {
+            return false;
+        }
+        return push_followup_checked(followup, build_step(code, turn));
+    }
+
+    const Tower *tower = state.tower_by_id(operation.arg0);
+    if (tower == nullptr || tower->player != player) {
+        return false;
+    }
+    const int code = code_at(*tower, player);
+    if (operation.op_type == OperationType::UpgradeTower) {
+        return push_followup_checked(
+            followup,
+            upgrade_step(code, static_cast<TowerType>(operation.arg1), turn));
+    }
+    if (operation.op_type == OperationType::DowngradeTower) {
+        return push_followup_checked(followup, downgrade_step(code, turn));
+    }
+    return false;
+}
+
+inline bool delayed_followup_from_plan(
+    const PublicState &state,
+    int player,
+    const SinglePlan &plan,
+    int delay_turn,
+    FollowupAction &out) {
+    if (plan.ops.empty() || delay_turn <= 0) {
+        return false;
+    }
+    FollowupAction followup;
+    for (const Operation &operation : plan.ops) {
+        if (!append_delayed_operation_followup(state, player, operation, delay_turn, followup)) {
+            return false;
+        }
+    }
+    for (int index = 0; index < plan.followup.count; ++index) {
+        FollowupStep step = plan.followup.steps[static_cast<std::size_t>(index)];
+        if (step.empty()) {
+            continue;
+        }
+        step.turn += delay_turn;
+        if (!push_followup_checked(followup, step)) {
+            return false;
+        }
+    }
+    out = followup;
+    return !out.empty();
+}
+
+inline bool append_followup_steps(FollowupAction &target, const FollowupAction &source) {
+    for (int index = 0; index < source.count; ++index) {
+        if (!push_followup_checked(target, source.steps[static_cast<std::size_t>(index)])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline bool base_lure_recycle_plan(
+    const PublicState &state,
+    int player,
+    const Tower &source,
+    const SinglePlan &lure_plan,
+    std::vector<Operation> &ops,
+    FollowupAction &followup) {
+    const int source_code = code_at(source, player);
+    if (source.player != player || !is_base_slot_code(source_code) || lure_plan.ops.empty()) {
+        return false;
+    }
+
+    const Operation first_downgrade(OperationType::DowngradeTower, source.tower_id);
+    if (legalize_operations(state, player, {first_downgrade}).empty()) {
+        return false;
+    }
+
+    const int source_level = tower_level(source.tower_type);
+    if (source_level <= 0) {
+        ops = {first_downgrade};
+        ops.insert(ops.end(), lure_plan.ops.begin(), lure_plan.ops.end());
+        followup = lure_plan.followup;
+        return true;
+    }
+
+    ops = {first_downgrade};
+    FollowupAction combined;
+    for (int turn = 1; turn <= source_level; ++turn) {
+        if (!push_followup_checked(combined, downgrade_step(source_code, turn))) {
+            return false;
+        }
+    }
+
+    FollowupAction delayed_lure;
+    if (!delayed_followup_from_plan(state, player, lure_plan, source_level, delayed_lure)) {
+        return false;
+    }
+    if (!append_followup_steps(combined, delayed_lure)) {
+        return false;
+    }
+    followup = combined;
+    return true;
+}
+
 inline RootPlanSet generate_root_plans(
     const PublicState &state,
     const rs::DefenseSimulator *simulator,
@@ -78,7 +198,9 @@ inline RootPlanSet generate_root_plans(
         }
         const std::string key = plan_key(combined, followup);
         const double operation_penalty = downgrade_penalty_for_ops(state, player, combined);
-        const double heuristic = base_heuristic + lure_heuristic + lightning_heuristic - operation_penalty;
+        const double followup_penalty = followup.empty() ? 0.0 : v4_lure_config().followup_plan_penalty;
+        const double heuristic =
+            base_heuristic + lure_heuristic + lightning_heuristic - operation_penalty - followup_penalty;
         double lightning_static_bonus = 0.0;
         if (has_lightning && !combined.empty()) {
             lightning_static_bonus += enemy_super_effect_active(state, player)
@@ -107,6 +229,7 @@ inline RootPlanSet generate_root_plans(
             item.lure_heuristic = lure_heuristic;
             item.lightning_heuristic = lightning_heuristic;
             item.operation_penalty = operation_penalty;
+            item.followup_penalty = followup_penalty;
             item.lightning_static_bonus = lightning_static_bonus;
             item.has_lightning = has_lightning;
             item.horizon = horizon;
@@ -125,6 +248,7 @@ inline RootPlanSet generate_root_plans(
             plans[it->second].lure_heuristic = lure_heuristic;
             plans[it->second].lightning_heuristic = lightning_heuristic;
             plans[it->second].operation_penalty = operation_penalty;
+            plans[it->second].followup_penalty = followup_penalty;
             plans[it->second].lightning_static_bonus = lightning_static_bonus;
             plans[it->second].has_lightning = has_lightning;
             plans[it->second].horizon = horizon;
@@ -134,47 +258,6 @@ inline RootPlanSet generate_root_plans(
 
     const auto is_hold = [](const SinglePlan &plan) {
         return plan.ops.empty() && plan.followup.empty();
-    };
-    const auto is_downgrade_only_followup = [](const FollowupAction &followup) {
-        for (int index = 0; index < followup.count; ++index) {
-            if (followup.steps[static_cast<std::size_t>(index)].type != FollowupType::DowngradeAtCode) {
-                return false;
-            }
-        }
-        return true;
-    };
-    const auto is_recycle_only = [&](const SinglePlan &plan) {
-        if (plan.ops.empty() || !is_downgrade_only_followup(plan.followup)) {
-            return false;
-        }
-        int recycle_code = -1;
-        const auto note_code = [&](int code) {
-            if (code < 0) {
-                return false;
-            }
-            if (recycle_code < 0) {
-                recycle_code = code;
-                return true;
-            }
-            return recycle_code == code;
-        };
-        for (const auto &operation : plan.ops) {
-            if (operation.op_type != OperationType::DowngradeTower) {
-                return false;
-            }
-            const Tower *tower = state.tower_by_id(operation.arg0);
-            if (tower == nullptr || !note_code(code_at(*tower, player))) {
-                return false;
-            }
-        }
-        for (int index = 0; index < plan.followup.count; ++index) {
-            if (plan.followup.steps[static_cast<std::size_t>(index)].type == FollowupType::DowngradeAtCode) {
-                if (!note_code(plan.followup.steps[static_cast<std::size_t>(index)].code)) {
-                    return false;
-                }
-            }
-        }
-        return recycle_code >= 0;
     };
     bool has_base_hold = false;
     bool has_lure_hold = false;
@@ -201,6 +284,32 @@ inline RootPlanSet generate_root_plans(
             false,
             v4_lure_config().long_eval_horizon,
             FollowupAction{});
+    }
+
+    if (v4_lure_config().hold_followup_enabled && v4_lure_config().hold_followup_delay_turn > 0) {
+        const int delay_turn = std::max(1, v4_lure_config().hold_followup_delay_turn);
+        const double scale = std::max(0.0, v4_lure_config().hold_followup_heuristic_scale);
+        for (const auto &lure_plan : lure) {
+            if (is_hold(lure_plan)) {
+                continue;
+            }
+            FollowupAction delayed;
+            if (!delayed_followup_from_plan(state, player, lure_plan, delay_turn, delayed)) {
+                continue;
+            }
+            add_plan(
+                "hold_then_" + lure_plan.name,
+                "base_hold",
+                "hold_then_" + lure_plan.name,
+                no_lightning.name,
+                {},
+                v4_lure_config().hold_bonus,
+                lure_plan.heuristic * scale,
+                0.0,
+                false,
+                v4_lure_config().long_eval_horizon,
+                delayed);
+        }
     }
 
     for (const auto &base_plan : base) {
@@ -239,29 +348,33 @@ inline RootPlanSet generate_root_plans(
             lure_plan.followup);
     }
 
-    for (const auto &base_plan : base) {
-        if (!is_recycle_only(base_plan)) {
+    for (const auto &source : state.towers) {
+        if (source.player != player || !is_base_slot_code(code_at(source, player))) {
             continue;
         }
         for (const auto &lure_plan : lure) {
             if (is_hold(lure_plan)) {
                 continue;
             }
+            std::vector<Operation> ops;
+            FollowupAction followup;
+            if (!base_lure_recycle_plan(state, player, source, lure_plan, ops, followup)) {
+                continue;
+            }
             ++base_lure_combo_count;
-            std::vector<Operation> ops = base_plan.ops;
-            ops.insert(ops.end(), lure_plan.ops.begin(), lure_plan.ops.end());
+            const std::string base_name = std::string("base_recycle_") + code_name(code_at(source, player));
             add_plan(
-                base_plan.name + "+" + lure_plan.name,
-                base_plan.name,
+                base_name + "+" + lure_plan.name,
+                base_name,
                 lure_plan.name,
                 no_lightning.name,
                 ops,
-                base_plan.heuristic,
+                0.0,
                 lure_plan.heuristic,
                 0.0,
                 false,
                 v4_lure_config().long_eval_horizon,
-                base_plan.followup);
+                followup);
         }
     }
 

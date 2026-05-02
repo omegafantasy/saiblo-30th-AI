@@ -31,6 +31,16 @@
           <span>Round</span>
           <input id="roundInput" type="number" min="0" value="0" />
         </label>
+        <div class="strategy-switches" aria-label="Strategy switches">
+          <label class="toggle-label">
+            <input id="futureThreatToggle" type="checkbox" />
+            <span>Future Threat</span>
+          </label>
+          <label class="toggle-label">
+            <input id="holdFollowupToggle" type="checkbox" />
+            <span>Hold Followup</span>
+          </label>
+        </div>
         <div class="button-row">
           <button id="loadReplayBtn">Load Replay</button>
           <button id="computeActionsBtn">Compute Actions</button>
@@ -104,6 +114,7 @@
                   <th>BaseHP</th>
                   <th>Coins</th>
                   <th>Threat</th>
+                  <th>FAdj</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -127,6 +138,7 @@
                   <th>BaseHP</th>
                   <th>Coins</th>
                   <th>Threat</th>
+                  <th>FAdj</th>
                   <th>First Moves</th>
                 </tr>
               </thead>

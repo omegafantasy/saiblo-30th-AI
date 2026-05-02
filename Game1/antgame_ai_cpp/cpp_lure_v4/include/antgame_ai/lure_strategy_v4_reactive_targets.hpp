@@ -1,12 +1,46 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
 #include "antgame_ai/lure_strategy_v4_base_rules.hpp"
 
 namespace antgame::sdk::lure_strategy_detail {
+
+struct V4ReactiveProfile {
+    std::uint64_t forced_sell_calls = 0;
+    std::uint64_t forced_sell_elapsed_us = 0;
+    std::uint64_t forced_sell_candidate_towers = 0;
+    std::uint64_t tower_clear_calls = 0;
+    std::uint64_t tower_clear_elapsed_us = 0;
+    std::uint64_t tower_clear_projected_calls = 0;
+    std::uint64_t tower_clear_projected_elapsed_us = 0;
+    std::uint64_t tower_clear_threatening_ants = 0;
+};
+
+inline thread_local V4ReactiveProfile *v4_reactive_profile = nullptr;
+
+struct V4ReactiveProfileScope {
+    V4ReactiveProfile *previous = nullptr;
+
+    explicit V4ReactiveProfileScope(V4ReactiveProfile *next) : previous(v4_reactive_profile) {
+        v4_reactive_profile = next;
+    }
+
+    ~V4ReactiveProfileScope() {
+        v4_reactive_profile = previous;
+    }
+};
+
+inline std::uint64_t v4_reactive_elapsed_us(std::chrono::steady_clock::time_point begin) {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - begin)
+            .count());
+}
 
 inline const Tower *forced_lure_sell_target(const PublicState &state, int player) {
     const Tower *best = nullptr;
@@ -74,6 +108,16 @@ inline const rs::SearchTower *forced_lure_sell_target(const rs::DefenseSimulator
 }
 
 inline bool tower_threats_cleared_by_next_attack_phase(const rs::DefenseSimulator &simulator, const rs::SearchTower &tower) {
+    V4ReactiveProfile *profile = v4_reactive_profile;
+    const auto begin = profile != nullptr ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (profile != nullptr) {
+        ++profile->tower_clear_calls;
+    }
+    auto finish = [&]() {
+        if (profile != nullptr) {
+            profile->tower_clear_elapsed_us += v4_reactive_elapsed_us(begin);
+        }
+    };
     std::vector<int> threatening_ant_ids;
     threatening_ant_ids.reserve(4);
     for (const auto &ant : simulator.ants) {
@@ -85,30 +129,52 @@ inline bool tower_threats_cleared_by_next_attack_phase(const rs::DefenseSimulato
         }
     }
     if (threatening_ant_ids.empty()) {
+        finish();
         return true;
     }
+    if (profile != nullptr) {
+        profile->tower_clear_threatening_ants += static_cast<std::uint64_t>(threatening_ant_ids.size());
+        ++profile->tower_clear_projected_calls;
+    }
 
+    const auto projected_begin = profile != nullptr ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     rs::DefenseSimulator projected = simulator.clone();
     rs::FastRng rng(
         static_cast<std::uint64_t>(0x9e3779b97f4a7c15ULL) ^
         static_cast<std::uint64_t>((simulator.round_index + 1) * 131 + tower.tower_id * 977));
     projected.tower_attack_phase(rng);
+    if (profile != nullptr) {
+        profile->tower_clear_projected_elapsed_us += v4_reactive_elapsed_us(projected_begin);
+    }
 
     const rs::SearchTower *projected_tower = projected.tower_by_id(tower.tower_id);
     if (projected_tower == nullptr || !projected_tower->alive()) {
+        finish();
         return false;
     }
     for (int ant_id : threatening_ant_ids) {
         for (const auto &ant : projected.ants) {
             if (ant.ant_id == ant_id && ant.alive()) {
+                finish();
                 return false;
             }
         }
     }
+    finish();
     return true;
 }
 
 inline const rs::SearchTower *forced_reactive_sell_target(const rs::DefenseSimulator &simulator, int player) {
+    V4ReactiveProfile *profile = v4_reactive_profile;
+    const auto begin = profile != nullptr ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (profile != nullptr) {
+        ++profile->forced_sell_calls;
+    }
+    auto finish = [&]() {
+        if (profile != nullptr) {
+            profile->forced_sell_elapsed_us += v4_reactive_elapsed_us(begin);
+        }
+    };
     const rs::SearchTower *best = nullptr;
     int best_distance = 32;
     double best_value = -1.0;
@@ -127,6 +193,9 @@ inline const rs::SearchTower *forced_reactive_sell_target(const rs::DefenseSimul
         if (nearest > v4_lure_config().forced_lure_sell_distance) {
             continue;
         }
+        if (profile != nullptr) {
+            ++profile->forced_sell_candidate_towers;
+        }
         if (tower_threats_cleared_by_next_attack_phase(simulator, tower)) {
             continue;
         }
@@ -138,6 +207,7 @@ inline const rs::SearchTower *forced_reactive_sell_target(const rs::DefenseSimul
         }
     }
     static_cast<void>(player);
+    finish();
     return best;
 }
 

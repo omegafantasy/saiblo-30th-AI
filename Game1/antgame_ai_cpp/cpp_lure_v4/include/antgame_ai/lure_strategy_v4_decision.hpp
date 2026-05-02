@@ -76,6 +76,7 @@ inline std::vector<Operation> decide_lure_strategy(
                     << ",\"lure_heuristic\":" << item.plan.lure_heuristic
                     << ",\"lightning_heuristic\":" << item.plan.lightning_heuristic
                     << ",\"operation_penalty\":" << item.plan.operation_penalty
+                    << ",\"followup_penalty\":" << item.plan.followup_penalty
                     << ",\"heuristic\":" << item.plan.heuristic
                     << ",\"score_before_heuristic\":" << item.mean_rollout_score
                     << ",\"score_before_penalty\":" << item.mean_score
@@ -92,6 +93,14 @@ inline std::vector<Operation> decide_lure_strategy(
                     << ",\"mean_worker_threat_score\":" << item.mean_rollout.terminal.worker_threat_score
                     << ",\"mean_combat_threat_raw\":" << item.mean_rollout.terminal.combat_threat_raw
                     << ",\"mean_combat_threat_score\":" << item.mean_rollout.terminal.combat_threat_score
+                    << ",\"mean_future_base_damage_raw\":" << item.mean_rollout.terminal.future_base_damage_raw
+                    << ",\"mean_future_base_damage_score\":" << item.mean_rollout.terminal.future_base_damage_score
+                    << ",\"mean_future_worker_threat_raw\":" << item.mean_rollout.terminal.future_worker_threat_raw
+                    << ",\"mean_future_combat_threat_raw\":" << item.mean_rollout.terminal.future_combat_threat_raw
+                    << ",\"mean_future_projected_threat_raw\":" << item.mean_rollout.terminal.future_projected_threat_raw
+                    << ",\"mean_future_adjusted_threat_raw\":" << item.mean_rollout.terminal.future_adjusted_threat_raw
+                    << ",\"mean_future_threat_adjustment_score\":"
+                    << item.mean_rollout.terminal.future_threat_adjustment_score
                     << ",\"mean_terminal_score\":" << item.mean_rollout.terminal.total_score
                     << ",\"mean_lightning_bonus_raw\":" << item.mean_rollout.lightning_bonus_raw
                     << ",\"mean_lightning_bonus_score\":" << item.mean_rollout.lightning_bonus_score
@@ -181,6 +190,7 @@ inline std::vector<Operation> decide_lure_strategy(
             << ",\"best_lure_heuristic\":" << best.lure_heuristic
             << ",\"best_lightning_heuristic\":" << best.lightning_heuristic
             << ",\"best_operation_penalty\":" << best.operation_penalty
+            << ",\"best_followup_penalty\":" << best.followup_penalty
             << ",\"best_heuristic\":" << best.heuristic
             << ",\"best_score_before_heuristic\":" << best_eval.mean_rollout_score
             << ",\"best_mean_base_hp_raw\":" << best_eval.mean_rollout.terminal.base_hp_raw
@@ -195,6 +205,14 @@ inline std::vector<Operation> decide_lure_strategy(
             << ",\"best_mean_worker_threat_score\":" << best_eval.mean_rollout.terminal.worker_threat_score
             << ",\"best_mean_combat_threat_raw\":" << best_eval.mean_rollout.terminal.combat_threat_raw
             << ",\"best_mean_combat_threat_score\":" << best_eval.mean_rollout.terminal.combat_threat_score
+            << ",\"best_mean_future_base_damage_raw\":" << best_eval.mean_rollout.terminal.future_base_damage_raw
+            << ",\"best_mean_future_base_damage_score\":" << best_eval.mean_rollout.terminal.future_base_damage_score
+            << ",\"best_mean_future_worker_threat_raw\":" << best_eval.mean_rollout.terminal.future_worker_threat_raw
+            << ",\"best_mean_future_combat_threat_raw\":" << best_eval.mean_rollout.terminal.future_combat_threat_raw
+            << ",\"best_mean_future_projected_threat_raw\":" << best_eval.mean_rollout.terminal.future_projected_threat_raw
+            << ",\"best_mean_future_adjusted_threat_raw\":" << best_eval.mean_rollout.terminal.future_adjusted_threat_raw
+            << ",\"best_mean_future_threat_adjustment_score\":"
+            << best_eval.mean_rollout.terminal.future_threat_adjustment_score
             << ",\"best_mean_terminal_score\":" << best_eval.mean_rollout.terminal.total_score
             << ",\"best_mean_lightning_bonus_raw\":" << best_eval.mean_rollout.lightning_bonus_raw
             << ",\"best_mean_lightning_bonus_score\":" << best_eval.mean_rollout.lightning_bonus_score

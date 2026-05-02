@@ -83,8 +83,10 @@ SDK 默认兼容入口 `lure_strategy.hpp` / `lure_strategy_params.hpp` 仍为 v
 - `base` 与 `lure` 不乘算，只有纯回收类 `base` 可与 `lure` 组合。
 - future rollout 仍不生成未来基地蚂蚁。
 - future rollout 仍只保留战斗蚁贴塔时的 reactive 降级/拆塔；若下一回合塔攻击阶段能杀掉所有贴身威胁战斗蚁，则不执行 reactive 回收。
-- 闪电和 `recycle + lightning` 使用独立 UCB：若本回合有闪电候选，先完整跑完 `lightning_ucb_total_rollouts=500` 次，每次补 `lightning_ucb_batch_rollouts=1`。
-- 普通 root action 使用 3s 卡时的 action-level UCB：先把 `action_base_total_rollouts=10000` 均分给所有普通 action，单 action 基础 batch 被 `action_max_rollouts_per_batch=100` 截断，但每个普通 action 至少会计算一次；基础部分完成后，继续按 UCB 每次补同样的 batch，直到普通 action 总样本数达到 `min(action_target_total_rollouts=12500, action_target_rollouts_per_action=125 * 普通action数)` 或从本次评估开始计时超过 `action_time_budget_ms=3000`。
+- 闪电和 `recycle + lightning` 使用独立 UCB：若本回合有闪电候选，先完整跑完 `lightning_ucb_total_rollouts=600` 次，每次补 `lightning_ucb_batch_rollouts=2`。
+- 普通 root action 使用 3s 卡时的 action-level UCB：先把 `action_base_total_rollouts=8000` 均分给所有普通 action，单 action 基础 batch 被 `action_max_rollouts_per_batch=100` 截断，但每个普通 action 至少会计算一次；基础部分完成后，继续按 UCB 每次补同样的 batch，直到普通 action 总样本数达到 `min(action_target_total_rollouts=10000, action_target_rollouts_per_action=125 * 普通action数)` 或从本次评估开始计时超过 `action_time_budget_ms=3000`。
+
+2026-05-02 同步 SDK 顺序操作修复后，v3 的 `legalize_operations()` 与 downgrade penalty 计算也改为使用 `can_apply_operation_sequential()`。这保证本地合法化与官方同回合有序操作列表一致，尤其覆盖“先降/卖塔筹钱，再建塔，再 EMP”的 salvage-funded EMP。
 
 ## v3 新增逻辑
 

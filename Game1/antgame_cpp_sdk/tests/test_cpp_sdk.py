@@ -562,6 +562,62 @@ def test_cpp_sdk_public_state_same_turn_emp_blocks_later_player_tower_op() -> No
     assert second_eval["can_apply"] == [False]
 
 
+def test_cpp_sdk_public_state_applies_salvage_funded_emp_before_p1_turn() -> None:
+    seed = 711058
+    python_state = GameState.initial(seed=seed, movement_policy=MOVEMENT_POLICY_ENHANCED)
+    python_state.coins = [100, 25]
+    python_state.towers = [
+        Tower(62, 0, 4, 9, TowerType.QUICK, cooldown_clock=1.0, hp=3),
+        Tower(71, 0, 6, 2, TowerType.BASIC, cooldown_clock=0.0, hp=10),
+        Tower(73, 0, 4, 15, TowerType.BASIC, cooldown_clock=0.0, hp=10),
+        Tower(51, 1, 14, 9, TowerType.SNIPER, cooldown_clock=1.0, hp=15),
+        Tower(74, 1, 10, 8, TowerType.BASIC, cooldown_clock=0.0, hp=10),
+    ]
+    snapshot = python_state.to_public_round_state()
+
+    p0_ops = [
+        Operation(OperationType.DOWNGRADE_TOWER, 71),
+        Operation(OperationType.DOWNGRADE_TOWER, 73),
+        Operation(OperationType.BUILD_TOWER, 7, 17),
+        Operation(OperationType.USE_EMP_BLASTER, 14, 9),
+    ]
+    p1_downgrade = Operation(OperationType.DOWNGRADE_TOWER, 51)
+
+    after_p0 = _run_cpp_sdk_runner(
+        {
+            "mode": "public_eval",
+            "seed": seed,
+            "movement_policy": MOVEMENT_POLICY_ENHANCED,
+            "cold_handle_rule_illegal": False,
+            "player": 0,
+            "public_state": _public_round_state_to_payload(snapshot),
+            "query_operations": [],
+            "apply_operations": [_operation_tokens(op) for op in p0_ops],
+            "slot_points": [],
+        }
+    )
+
+    assert after_p0["illegal"] == []
+    assert after_p0["state"]["coins"] == [2, 25]
+    assert [2, 0, 14, 9, 10] in after_p0["state"]["active_effects"]
+
+    p1_eval = _run_cpp_sdk_runner(
+        {
+            "mode": "public_eval",
+            "seed": seed,
+            "movement_policy": MOVEMENT_POLICY_ENHANCED,
+            "cold_handle_rule_illegal": False,
+            "player": 1,
+            "public_state": after_p0["state"],
+            "query_operations": [_operation_tokens(p1_downgrade)],
+            "apply_operations": [],
+            "slot_points": [],
+        }
+    )
+
+    assert p1_eval["can_apply"] == [False]
+
+
 def test_cpp_sdk_public_advance_keeps_basic_range_one() -> None:
     seed = 0
     baseline_state = GameState.initial(seed=seed, movement_policy=MOVEMENT_POLICY_ENHANCED)

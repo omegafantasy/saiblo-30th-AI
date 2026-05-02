@@ -6,18 +6,22 @@ struct V4LureStrategyTuning {
     int rollout_count = 50;
     int action_ucb_batch_rollouts = 40;
     double action_ucb_exploration = 600.0;
-    int action_base_total_rollouts = 8000;
-    int action_target_total_rollouts = 10000;
+    int action_target_time_ms = 3000;
+    double action_target_total_multiplier = 1.25;
+    int action_probe_min_samples = 10;
+    int action_probe_max_samples = 256;
+    int action_probe_samples_per_action = 1;
+    int action_timing_guard_ms = 150;
     int action_target_rollouts_per_action = 125;
     int action_max_rollouts_per_batch = 100;
-    int action_time_budget_ms = 3000;
+    int action_time_budget_ms = 4000;
     int lightning_ucb_total_rollouts = 600;
     int lightning_ucb_batch_rollouts = 2;
     double lightning_ucb_exploration = 300.0;
     int rollout_forced_ant_limit = 5;
-    int mid_eval_horizon = 6;
-    int long_eval_horizon = 10;
-    double mid_eval_weight = 0.5;
+    int mid_eval_horizon = 4;
+    int long_eval_horizon = 8;
+    double mid_eval_weight = 0.0;
     int lightning_horizon = 10;
 
     // Lightning centers are legal when hex_distance(board_center, center) <= lightning_center_radius.
@@ -28,8 +32,11 @@ struct V4LureStrategyTuning {
     int c1_quick_transition_coin_threshold = 290;
 
     // root_score(plan) = mean_rollout_score(plan) + plan_heuristic(plan).
-    // plan_heuristic = base_heuristic + lure_heuristic + lightning_heuristic - operation_penalty.
-    double hold_bonus = 60.0;
+    // plan_heuristic =
+    //   base_heuristic + lure_heuristic + lightning_heuristic
+    // - operation_penalty - followup_plan_penalty(if the plan depends on future-turn followup).
+    double hold_bonus = 80.0;
+    double followup_plan_penalty = 20.0;
 
     double c1_build_bonus = 50.0;
     double c1_heavy_bonus = 60.0;
@@ -68,6 +75,20 @@ struct V4LureStrategyTuning {
     double randomized_threat_scale = 0.6;
     double bewitched_threat_scale = 0.3;
 
+    bool future_threat_eval_enabled = false;
+    int future_threat_horizon = 4;
+    double future_threat_blend = 0.5;
+    double future_base_damage_scale = 1.0;
+    double future_worker_residual_scale = 1.0;
+    double future_combat_residual_scale = 1.0;
+    bool future_threat_apply_to_mid_eval = false;
+    bool future_threat_apply_teleport = false;
+    bool future_threat_drift_effects = false;
+
+    bool hold_followup_enabled = false;
+    int hold_followup_delay_turn = 2;
+    double hold_followup_heuristic_scale = 1.0;
+
     // lightning_bonus is added to terminal_score:
     //   enemy_super_bonus + enemy_tower_damage_value + combat_threat_reduction * ratio
     // + shield_break_bonus + hp_damage_bonus + kill_bonus.
@@ -90,8 +111,17 @@ struct V4LureStrategyTuning {
 
 inline constexpr V4LureStrategyTuning kV4LureStrategyTuning{};
 
-inline constexpr const V4LureStrategyTuning &v4_lure_config() {
-    return kV4LureStrategyTuning;
+inline V4LureStrategyTuning &v4_lure_config_mutable() {
+    static V4LureStrategyTuning tuning = kV4LureStrategyTuning;
+    return tuning;
+}
+
+inline const V4LureStrategyTuning &v4_lure_config() {
+    return v4_lure_config_mutable();
+}
+
+inline void reset_v4_lure_config() {
+    v4_lure_config_mutable() = kV4LureStrategyTuning;
 }
 
 } // namespace antgame::sdk

@@ -18,8 +18,10 @@
 
 - `docs/game1_code_truth.md`
 - `docs/game1_known_discrepancies.md`
+- `docs/game1_lure_strategy.md`
+- `Game1/antgame_ai_cpp/cpp_lure_v4/README.md`
 
-`docs/` 中的历史自动化结果、旧版本结论、细节策略和 Game1 旧规则快照已经清空。
+`docs/` 中的旧规则快照已经清空；当前 v3/v4 策略状态、历史尝试和被污染评测结论保留在上述 Game1 文档中。
 
 ## 3. 目录说明
 
@@ -27,6 +29,8 @@
   当前规则实现与测试基线
 - `Game1/antgame_ai_cpp/`
   Game1 AI 代码
+- `Game1/antgame_cpp_sdk/`
+  Game1 外置 C++ SDK、native 对拍和 SimViz inspector
 - `Game2/`
   第二个游戏目录
 - `docs/`

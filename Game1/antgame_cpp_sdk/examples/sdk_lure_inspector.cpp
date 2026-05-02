@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "../../Ant-Game/game/include/json.hpp"
-#include "antgame_ai/lure_strategy_v3.hpp"
+#include "antgame_ai/lure_strategy_v4.hpp"
 #include "antgame_sdk/native_sim.hpp"
 #include "antgame_sdk/sdk.hpp"
 
@@ -50,9 +50,15 @@ std::pair<std::string, std::string> action_category(const ls::CombinedPlan &plan
 
     const bool has_base = !plan.base_name.empty() && plan.base_name != "none" && plan.base_name != "base_hold";
     const bool has_lure = !plan.lure_name.empty() && plan.lure_name != "none" && plan.lure_name != "lure_hold";
+    const bool is_hold_followup =
+        plan.ops.empty() && !plan.followup.empty() && plan.base_name == "base_hold" &&
+        plan.lure_name.rfind("hold_then_", 0) == 0;
 
     if (!has_base && !has_lure && plan.ops.empty() && plan.followup.empty()) {
         return {"hold", "Hold"};
+    }
+    if (is_hold_followup) {
+        return {"hold_followup", "Hold Followup"};
     }
     if (has_base && has_lure) {
         return {"base_lure", "Base + Lure"};
@@ -72,14 +78,19 @@ std::pair<std::string, std::string> action_category(const ls::CombinedPlan &plan
     return {"other", "Other"};
 }
 
-json v3_tuning_to_json() {
-    const auto &tuning = v3_lure_config();
+json v4_tuning_to_json() {
+    const auto &tuning = v4_lure_config();
     return {
+        {"strategy_version", "v4"},
         {"rollout_count", tuning.rollout_count},
         {"action_ucb_batch_rollouts", tuning.action_ucb_batch_rollouts},
         {"action_ucb_exploration", tuning.action_ucb_exploration},
-        {"action_base_total_rollouts", tuning.action_base_total_rollouts},
-        {"action_target_total_rollouts", tuning.action_target_total_rollouts},
+        {"action_target_time_ms", tuning.action_target_time_ms},
+        {"action_target_total_multiplier", tuning.action_target_total_multiplier},
+        {"action_probe_min_samples", tuning.action_probe_min_samples},
+        {"action_probe_max_samples", tuning.action_probe_max_samples},
+        {"action_probe_samples_per_action", tuning.action_probe_samples_per_action},
+        {"action_timing_guard_ms", tuning.action_timing_guard_ms},
         {"action_target_rollouts_per_action", tuning.action_target_rollouts_per_action},
         {"action_max_rollouts_per_batch", tuning.action_max_rollouts_per_batch},
         {"action_time_budget_ms", tuning.action_time_budget_ms},
@@ -115,6 +126,18 @@ json v3_tuning_to_json() {
         {"combat_anchor_ring1_bonus_ratio", tuning.combat_anchor_ring1_bonus_ratio},
         {"randomized_threat_scale", tuning.randomized_threat_scale},
         {"bewitched_threat_scale", tuning.bewitched_threat_scale},
+        {"future_threat_eval_enabled", tuning.future_threat_eval_enabled},
+        {"future_threat_horizon", tuning.future_threat_horizon},
+        {"future_threat_blend", tuning.future_threat_blend},
+        {"future_base_damage_scale", tuning.future_base_damage_scale},
+        {"future_worker_residual_scale", tuning.future_worker_residual_scale},
+        {"future_combat_residual_scale", tuning.future_combat_residual_scale},
+        {"future_threat_apply_to_mid_eval", tuning.future_threat_apply_to_mid_eval},
+        {"future_threat_apply_teleport", tuning.future_threat_apply_teleport},
+        {"future_threat_drift_effects", tuning.future_threat_drift_effects},
+        {"hold_followup_enabled", tuning.hold_followup_enabled},
+        {"hold_followup_delay_turn", tuning.hold_followup_delay_turn},
+        {"hold_followup_heuristic_scale", tuning.hold_followup_heuristic_scale},
         {"lightning_enemy_super_bonus", tuning.lightning_enemy_super_bonus},
         {"lightning_no_enemy_super_penalty", tuning.lightning_no_enemy_super_penalty},
         {"lightning_combat_threat_ratio", tuning.lightning_combat_threat_ratio},
@@ -129,6 +152,38 @@ json v3_tuning_to_json() {
         {"offensive_emp_enabled", tuning.offensive_emp_enabled},
         {"offensive_emp_combat_to_top_tower_distance", tuning.offensive_emp_combat_to_top_tower_distance},
     };
+}
+
+bool parse_bool_override(const json &value, bool fallback) {
+    if (value.is_boolean()) {
+        return value.get<bool>();
+    }
+    if (value.is_number_integer()) {
+        return value.get<int>() != 0;
+    }
+    if (value.is_string()) {
+        const std::string text = value.get<std::string>();
+        return text == "1" || text == "true" || text == "on" || text == "yes";
+    }
+    return fallback;
+}
+
+void apply_bool_override(const json &overrides, const char *name, bool &target) {
+    if (!overrides.contains(name)) {
+        return;
+    }
+    target = parse_bool_override(overrides.at(name), target);
+}
+
+void apply_strategy_overrides(const json &request) {
+    reset_v4_lure_config();
+    if (!request.contains("strategy_overrides") || !request.at("strategy_overrides").is_object()) {
+        return;
+    }
+    auto &tuning = v4_lure_config_mutable();
+    const json &overrides = request.at("strategy_overrides");
+    apply_bool_override(overrides, "future_threat_eval_enabled", tuning.future_threat_eval_enabled);
+    apply_bool_override(overrides, "hold_followup_enabled", tuning.hold_followup_enabled);
 }
 
 const char *tower_type_name(TowerType type) {
@@ -391,6 +446,13 @@ json eval_breakdown_to_json(const ls::EvalBreakdown &value) {
     out["worker_threat_score"] = value.worker_threat_score;
     out["combat_threat_raw"] = value.combat_threat_raw;
     out["combat_threat_score"] = value.combat_threat_score;
+    out["future_base_damage_raw"] = value.future_base_damage_raw;
+    out["future_base_damage_score"] = value.future_base_damage_score;
+    out["future_worker_threat_raw"] = value.future_worker_threat_raw;
+    out["future_combat_threat_raw"] = value.future_combat_threat_raw;
+    out["future_projected_threat_raw"] = value.future_projected_threat_raw;
+    out["future_adjusted_threat_raw"] = value.future_adjusted_threat_raw;
+    out["future_threat_adjustment_score"] = value.future_threat_adjustment_score;
     out["total_score"] = value.total_score;
     return out;
 }
@@ -665,6 +727,9 @@ std::vector<EvaluatedPlanWithIndex> evaluate_root_plans(
     ls::UcbEvaluationTrace *trace = nullptr) {
     rs::DefenseSimulator defense_root = rs::make_defense_simulator(state, native, player);
     defense_root.ignore_enemy_spawns = true;
+    if (trace != nullptr) {
+        defense_root.profile = &trace->simulator_profile;
+    }
 
     const ls::RootPlanSet root_plans = ls::generate_root_plans(state, &defense_root, player);
     return ls::evaluate_root_plans(state, defense_root, player, serial, rollout_count, root_plans, trace);
@@ -989,6 +1054,142 @@ json simulate_traced_round(
     return out;
 }
 
+MoveTraceSummary trace_future_threat_move_phase(rs::DefenseSimulator &simulator, int player) {
+    MoveTraceSummary summary;
+    simulator.ensure_move_cache(true);
+
+    for (auto &ant : simulator.ants) {
+        if (!ant.alive() || ant.too_old() || ant.is_frozen) {
+            continue;
+        }
+
+        json row;
+        row["ant_before"] = search_ant_to_json(ant);
+
+        rs::MoveOption best{rs::kNoMove, ant.x, ant.y, 1.0, 0.0};
+        bool has_best = false;
+        bool filtered_attack_option = false;
+        json options = json::array();
+        const auto evaluated = simulator.move_options_for(ant);
+        for (int index = 0; index < evaluated.size(); ++index) {
+            const rs::MoveOption &option = evaluated[index];
+            const bool attacks_tower = ls::future_move_option_attacks_tower(simulator, option);
+            options.push_back(json{
+                {"direction", option.direction},
+                {"nx", option.nx},
+                {"ny", option.ny},
+                {"probability", option.probability},
+                {"danger", option.danger},
+                {"attacks_tower", attacks_tower},
+                {"future_allowed", !attacks_tower},
+            });
+            if (attacks_tower) {
+                filtered_attack_option = true;
+                continue;
+            }
+            if (ls::future_move_option_better(option, best, has_best, player)) {
+                best = option;
+                has_best = true;
+            }
+        }
+
+        const rs::MoveOption chosen =
+            has_best ? best : rs::MoveOption{rs::kNoMove, ant.x, ant.y, 1.0, 0.0};
+        simulator.record_move_annotation_for_direction(ant, chosen.direction);
+        if (chosen.direction == rs::kNoMove) {
+            ant.last_move = rs::kNoMove;
+        } else {
+            ant.x = chosen.nx;
+            ant.y = chosen.ny;
+            ant.last_move = chosen.direction;
+            rs::mark_ant_trail(ant, ant.x, ant.y);
+        }
+
+        row["choice_source"] = has_best ? "future_best_non_attack" : "future_no_non_attack";
+        row["chosen_direction"] = chosen.direction;
+        row["chosen_probability"] = chosen.probability;
+        row["options"] = options;
+        row["filtered_attack_option"] = filtered_attack_option;
+        row["attacked_tower"] = false;
+        row["attacked_tower_id"] = -1;
+        row["ant_after"] = search_ant_to_json(ant);
+        summary.moves.push_back(row);
+        summary.log_probability += std::log(std::max(chosen.probability, 1e-12));
+    }
+
+    return summary;
+}
+
+json simulate_future_threat_traced_round(rs::DefenseSimulator &simulator, int player, rs::FastRng &rng) {
+    json out;
+    out["state_start"] = defense_sim_to_json(simulator);
+    if (simulator.terminal) {
+        out["state_after_tower_phase"] = defense_sim_to_json(simulator);
+        out["move_assignments"] = json::array();
+        out["move_log_probability"] = 0.0;
+        out["move_path_probability"] = 1.0;
+        out["state_after_move_phase"] = defense_sim_to_json(simulator);
+        out["state_after_teleport_phase"] = defense_sim_to_json(simulator);
+        out["state_end"] = defense_sim_to_json(simulator);
+        return out;
+    }
+
+    simulator.tower_attack_phase(rng);
+    out["state_after_tower_phase"] = defense_sim_to_json(simulator);
+    const MoveTraceSummary move_summary = trace_future_threat_move_phase(simulator, player);
+    out["move_assignments"] = move_summary.moves;
+    out["move_log_probability"] = move_summary.log_probability;
+    out["move_path_probability"] = std::exp(std::max(-700.0, move_summary.log_probability));
+    out["state_after_move_phase"] = defense_sim_to_json(simulator);
+    if (v4_lure_config().future_threat_apply_teleport) {
+        simulator.teleport_phase(rng);
+    }
+    out["future_teleport_applied"] = v4_lure_config().future_threat_apply_teleport;
+    out["state_after_teleport_phase"] = defense_sim_to_json(simulator);
+    simulator.decay_pheromone();
+    simulator.manage_ants();
+    simulator.increase_ant_age();
+    if (v4_lure_config().future_threat_drift_effects) {
+        simulator.update_effects(rng);
+    } else {
+        ls::future_decay_effects_no_drift(simulator);
+    }
+    ++simulator.round_index;
+    if (simulator.base_hp <= 0) {
+        simulator.terminal = true;
+    }
+    out["state_end"] = defense_sim_to_json(simulator);
+    return out;
+}
+
+json future_threat_trace_rounds(const rs::DefenseSimulator &terminal_simulator, int player) {
+    json out;
+    out["enabled"] = v4_lure_config().future_threat_eval_enabled;
+    out["horizon"] = v4_lure_config().future_threat_horizon;
+    out["rounds"] = json::array();
+    if (!v4_lure_config().future_threat_eval_enabled || v4_lure_config().future_threat_horizon <= 0) {
+        return out;
+    }
+
+    rs::DefenseSimulator projected = terminal_simulator.clone();
+    const int start_base_hp = projected.base_hp;
+    out["start_base_hp"] = start_base_hp;
+    rs::FastRng rng(ls::future_threat_seed(projected, player));
+    for (int step = 0; step < v4_lure_config().future_threat_horizon && !projected.terminal; ++step) {
+        json row;
+        row["phase"] = "future_threat";
+        row["step"] = step;
+        row["applied_operations_pretty"] = "FUTURE-THREAT";
+        row["applied_operations"] = json::array();
+        row["trace"] = simulate_future_threat_traced_round(projected, player, rng);
+        out["rounds"].push_back(row);
+    }
+    out["end_base_hp"] = projected.base_hp;
+    out["base_damage"] = std::max(0, start_base_hp - projected.base_hp);
+    out["state_end"] = defense_sim_to_json(projected);
+    return out;
+}
+
 json plan_sample_trace(
     const PublicState &state,
     const NativeSimulator *native,
@@ -1061,7 +1262,7 @@ json plan_sample_trace(
     double mid_reactive_penalty = 0.0;
     ls::EvalBreakdown mid_eval;
     bool has_mid_eval = false;
-    const int mid_horizon = std::max(0, std::min(selected.plan.horizon, v3_lure_config().mid_eval_horizon));
+    const int mid_horizon = std::max(0, std::min(selected.plan.horizon, v4_lure_config().mid_eval_horizon));
     auto capture_mid_eval = [&](int simulated_rounds) {
         if (!has_mid_eval && simulated_rounds >= mid_horizon) {
             mid_eval = ls::evaluate_terminal(simulator, player);
@@ -1138,13 +1339,13 @@ json plan_sample_trace(
         mid_reactive_penalty = reactive_penalty;
     }
     ls::EvalBreakdown terminal =
-        ls::combine_eval_breakdowns(mid_eval, final_terminal, v3_lure_config().mid_eval_weight);
+        ls::combine_eval_breakdowns(mid_eval, final_terminal, v4_lure_config().mid_eval_weight);
     terminal.c1_bonus_raw = root_c1_bonus;
     terminal.c1_bonus_score = root_c1_bonus;
     terminal.total_score += root_c1_bonus;
     const double weighted_reactive_penalty =
-        std::max(0.0, std::min(1.0, v3_lure_config().mid_eval_weight)) * mid_reactive_penalty +
-        (1.0 - std::max(0.0, std::min(1.0, v3_lure_config().mid_eval_weight))) * reactive_penalty;
+        std::max(0.0, std::min(1.0, v4_lure_config().mid_eval_weight)) * mid_reactive_penalty +
+        (1.0 - std::max(0.0, std::min(1.0, v4_lure_config().mid_eval_weight))) * reactive_penalty;
     json out;
     out["seed"] = seed;
     out["sample_index"] = rollout_index;
@@ -1168,6 +1369,8 @@ json plan_sample_trace(
     out["terminal"] = eval_breakdown_to_json(terminal);
     out["mid_terminal"] = eval_breakdown_to_json(mid_eval);
     out["final_terminal"] = eval_breakdown_to_json(final_terminal);
+    out["future_trace"] = future_threat_trace_rounds(simulator, player);
+    out["future_rounds"] = out["future_trace"]["rounds"];
     out["root_c1_bonus"] = root_c1_bonus;
     out["lightning_bonus_raw"] = lightning_bonus_raw;
     out["lightning_bonus_score"] = lightning_bonus_score;
@@ -1199,11 +1402,51 @@ json inspect_round_request(const json &request) {
     out["player"] = player;
     out["seed"] = start.seed;
     out["serial"] = serial;
-    out["strategy_params"] = v3_tuning_to_json();
+    out["strategy_params"] = v4_tuning_to_json();
     out["ucb"] = {
         {"target_total", ucb_trace.target_total},
         {"total_samples", ucb_trace.total_samples},
+        {"lightning_target_total", ucb_trace.lightning_target_total},
+        {"action_normal_arm_count", ucb_trace.action_normal_arm_count},
+        {"action_probe_samples", ucb_trace.action_probe_samples},
+        {"action_probe_elapsed_us", ucb_trace.action_probe_elapsed_us},
+        {"action_estimated_us_per_sample", ucb_trace.action_estimated_us_per_sample},
+        {"action_remaining_target_ms", ucb_trace.action_remaining_target_ms},
+        {"action_effective_base_total_rollouts", ucb_trace.action_effective_base_total_rollouts},
+        {"action_effective_target_total_rollouts", ucb_trace.action_effective_target_total_rollouts},
+        {"action_normal_batch_size", ucb_trace.action_normal_batch_size},
+        {"action_normal_guaranteed_total", ucb_trace.action_normal_guaranteed_total},
         {"total_elapsed_us", ucb_trace.total_elapsed_us},
+        {"simulator_profile", {
+            {"rounds", ucb_trace.simulator_profile.rounds},
+            {"tower_attack_ns", ucb_trace.simulator_profile.tower_attack_ns},
+            {"move_ns", ucb_trace.simulator_profile.move_ns},
+            {"move_cache_ns", ucb_trace.simulator_profile.move_cache_ns},
+            {"move_sample_ns", ucb_trace.simulator_profile.move_sample_ns},
+            {"move_random_ns", ucb_trace.simulator_profile.move_random_ns},
+            {"move_resolve_ns", ucb_trace.simulator_profile.move_resolve_ns},
+            {"teleport_ns", ucb_trace.simulator_profile.teleport_ns},
+            {"pheromone_ns", ucb_trace.simulator_profile.pheromone_ns},
+            {"manage_ns", ucb_trace.simulator_profile.manage_ns},
+            {"spawn_ns", ucb_trace.simulator_profile.spawn_ns},
+            {"age_ns", ucb_trace.simulator_profile.age_ns},
+            {"income_ns", ucb_trace.simulator_profile.income_ns},
+            {"effects_ns", ucb_trace.simulator_profile.effects_ns},
+            {"move_sample_calls", ucb_trace.simulator_profile.move_sample_calls},
+            {"move_random_calls", ucb_trace.simulator_profile.move_random_calls},
+            {"move_resolve_calls", ucb_trace.simulator_profile.move_resolve_calls},
+            {"move_cache_calls", ucb_trace.simulator_profile.move_cache_calls},
+        }},
+        {"reactive_profile", {
+            {"forced_sell_calls", ucb_trace.reactive_profile.forced_sell_calls},
+            {"forced_sell_elapsed_us", ucb_trace.reactive_profile.forced_sell_elapsed_us},
+            {"forced_sell_candidate_towers", ucb_trace.reactive_profile.forced_sell_candidate_towers},
+            {"tower_clear_calls", ucb_trace.reactive_profile.tower_clear_calls},
+            {"tower_clear_elapsed_us", ucb_trace.reactive_profile.tower_clear_elapsed_us},
+            {"tower_clear_projected_calls", ucb_trace.reactive_profile.tower_clear_projected_calls},
+            {"tower_clear_projected_elapsed_us", ucb_trace.reactive_profile.tower_clear_projected_elapsed_us},
+            {"tower_clear_threatening_ants", ucb_trace.reactive_profile.tower_clear_threatening_ants},
+        }},
     };
     out["start_state"] = public_round_state_to_json(start.native.to_public_round_state());
     out["defense_start_state"] = defense_sim_to_json(defense_root);
@@ -1227,6 +1470,7 @@ json inspect_round_request(const json &request) {
     const std::vector<std::pair<std::string, std::string>> category_order = {
         {"all", "All"},
         {"hold", "Hold"},
+        {"hold_followup", "Hold Followup"},
         {"base", "Base"},
         {"base_followup", "Base Followup"},
         {"lure", "Lure"},
@@ -1342,7 +1586,7 @@ json inspect_plan_rollouts_request(const json &request) {
     out["round"] = round;
     out["player"] = player;
     out["serial"] = serial;
-    out["strategy_params"] = v3_tuning_to_json();
+    out["strategy_params"] = v4_tuning_to_json();
     out["plan"] = evaluated_plan_to_json(start.public_state, player, selected, &ucb_trace);
     out["samples"] = json::array();
 
@@ -1393,7 +1637,7 @@ json inspect_plan_trace_request(const json &request) {
     const int player = request.value("player", 0);
     const std::string plan_key = request.at("plan_key").get<std::string>();
     const int sample_index = request.value("sample_index", 0);
-    const int sample_count = request.value("sample_count", std::max(1, v3_lure_config().rollout_count));
+    const int sample_count = request.value("sample_count", std::max(1, v4_lure_config().rollout_count));
     const int rollout_count = request.value("rollout_count", 0);
     const bool use_ucb_actual_sample = request.value("ucb_actual_sample", true);
 
@@ -1411,7 +1655,7 @@ json inspect_plan_trace_request(const json &request) {
     out["round"] = round;
     out["player"] = player;
     out["serial"] = serial;
-    out["strategy_params"] = v3_tuning_to_json();
+    out["strategy_params"] = v4_tuning_to_json();
     out["plan"] = evaluated_plan_to_json(start.public_state, player, selected, &ucb_trace);
     out["trace"] =
         plan_sample_trace(start.public_state, &start.native, player, serial, selected, sample_index, sample_count, ucb_sample);
@@ -1427,6 +1671,7 @@ int main() {
         json request;
         std::cin >> request;
         const std::string mode = request.value("mode", std::string());
+        apply_strategy_overrides(request);
         json response;
         if (mode == "round_summary") {
             response = inspect_round_request(request);

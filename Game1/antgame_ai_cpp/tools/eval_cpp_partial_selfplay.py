@@ -731,7 +731,8 @@ def load_official_replay(replay_path: Path, max_rounds: int, seed: int) -> list[
 
 def run_partial_match(
     seed: int,
-    packaged_ai_dir: Path,
+    packaged_ai0_dir: Path,
+    packaged_ai1_dir: Path,
     game_bin: Path,
     out_dir: Path,
     debug_mode: str | None,
@@ -785,8 +786,8 @@ def run_partial_match(
         active_round_ops = {0: [], 1: []}
 
     try:
-        ai0, ai0_stderr_handle = launch_ai(packaged_ai_dir, ai0_stderr_path, debug_mode)
-        ai1, ai1_stderr_handle = launch_ai(packaged_ai_dir, ai1_stderr_path, debug_mode)
+        ai0, ai0_stderr_handle = launch_ai(packaged_ai0_dir, ai0_stderr_path, debug_mode)
+        ai1, ai1_stderr_handle = launch_ai(packaged_ai1_dir, ai1_stderr_path, debug_mode)
 
         game = subprocess.Popen(
             [str(game_bin)],
@@ -933,6 +934,9 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 1) - 1))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--target", default=DEFAULT_TARGET)
+    parser.add_argument("--target0", default=None)
+    parser.add_argument("--target1", default=None)
+    parser.add_argument("--debug-mode", choices=("none", "summary", "plans"), default="none")
     parser.add_argument("--debug-seeds", default="")
     parser.add_argument("--game-bin", type=Path, default=DEFAULT_GAME_BIN)
     parser.add_argument("--max-rounds", type=int, default=200)
@@ -955,8 +959,12 @@ def main() -> int:
     if not game_bin.exists():
         subprocess.run(["make"], cwd=GAME_DIR, check=True)
 
-    packaged_ai_dir = output_dir / "packaged_ai"
-    subprocess.run([str(PACKAGE_AI), args.target, str(packaged_ai_dir)], cwd=GAME1_ROOT, check=True)
+    target0 = args.target0 or args.target
+    target1 = args.target1 or args.target
+    packaged_ai0_dir = output_dir / "packaged_ai_p0"
+    packaged_ai1_dir = output_dir / "packaged_ai_p1"
+    subprocess.run([str(PACKAGE_AI), target0, str(packaged_ai0_dir)], cwd=GAME1_ROOT, check=True)
+    subprocess.run([str(PACKAGE_AI), target1, str(packaged_ai1_dir)], cwd=GAME1_ROOT, check=True)
 
     jobs = max(1, min(args.jobs, len(seeds)))
     results: list[dict[str, Any]] = []
@@ -965,8 +973,17 @@ def main() -> int:
     with ProcessPoolExecutor(max_workers=jobs) as executor:
         future_map = {}
         for seed in seeds:
-            debug_mode = "plans" if seed in debug_seeds else "summary"
-            future = executor.submit(run_partial_match, seed, packaged_ai_dir, game_bin, output_dir / "matches", debug_mode, args.max_rounds)
+            debug_mode = "plans" if seed in debug_seeds else (None if args.debug_mode == "none" else args.debug_mode)
+            future = executor.submit(
+                run_partial_match,
+                seed,
+                packaged_ai0_dir,
+                packaged_ai1_dir,
+                game_bin,
+                output_dir / "matches",
+                debug_mode,
+                args.max_rounds,
+            )
             future_map[future] = seed
         for future in as_completed(future_map):
             seed = future_map[future]
@@ -994,9 +1011,13 @@ def main() -> int:
             "jobs": jobs,
             "debug_seeds": sorted(debug_seeds),
             "target": args.target,
+            "target0": target0,
+            "target1": target1,
             "game_bin": str(game_bin),
-            "packaged_ai_dir": str(packaged_ai_dir),
+            "packaged_ai0_dir": str(packaged_ai0_dir),
+            "packaged_ai1_dir": str(packaged_ai1_dir),
             "max_rounds": args.max_rounds,
+            "debug_mode": args.debug_mode,
         },
         "aggregate": aggregate_summary,
         "failures": failures,

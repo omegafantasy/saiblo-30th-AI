@@ -829,6 +829,37 @@ class PublicState {
         return coins[player] + income >= 0;
     }
 
+    bool can_apply_operation_sequential(
+        int player,
+        const Operation &operation,
+        const std::vector<int> &used_towers,
+        bool base_upgraded) const {
+        if ((operation.op_type == OperationType::UpgradeTower || operation.op_type == OperationType::DowngradeTower) &&
+            std::find(used_towers.begin(), used_towers.end(), operation.arg0) != used_towers.end()) {
+            return false;
+        }
+        if (is_base_upgrade_operation(operation.op_type) && base_upgraded) {
+            return false;
+        }
+        return can_apply_operation(player, operation);
+    }
+
+    void record_operation_turn_usage(
+        const Operation &operation,
+        int built_tower_id,
+        std::vector<int> &used_towers,
+        bool &base_upgraded) const {
+        if (operation.op_type == OperationType::BuildTower) {
+            used_towers.push_back(built_tower_id);
+        } else if (operation.op_type == OperationType::UpgradeTower ||
+                   operation.op_type == OperationType::DowngradeTower) {
+            used_towers.push_back(operation.arg0);
+        }
+        if (is_base_upgrade_operation(operation.op_type)) {
+            base_upgraded = true;
+        }
+    }
+
     void apply_operation(int player, const Operation &operation) {
         coins[player] += operation_income(player, operation);
         switch (operation.op_type) {
@@ -887,11 +918,13 @@ class PublicState {
 
     std::vector<Operation> apply_operation_list(int player, const std::vector<Operation> &operations) {
         std::vector<Operation> illegal;
-        std::vector<Operation> accepted;
+        std::vector<int> used_towers;
+        bool base_upgraded = false;
         for (const auto &operation : operations) {
-            if (can_apply_operation(player, operation, accepted)) {
+            const int built_tower_id = next_tower_id;
+            if (can_apply_operation_sequential(player, operation, used_towers, base_upgraded)) {
                 apply_operation(player, operation);
-                accepted.push_back(operation);
+                record_operation_turn_usage(operation, built_tower_id, used_towers, base_upgraded);
             } else {
                 illegal.push_back(operation);
                 if (!cold_handle_rule_illegal) {

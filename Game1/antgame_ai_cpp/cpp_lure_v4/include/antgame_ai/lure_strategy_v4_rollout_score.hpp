@@ -101,7 +101,7 @@ inline RolloutEvaluation rollout_plan_score(
     int step = 1;
     auto capture_mid_eval = [&]() {
         if (!has_mid_eval && step >= mid_horizon) {
-            mid_eval = evaluate_terminal(simulator, player);
+            mid_eval = evaluate_terminal(simulator, player, v4_lure_config().future_threat_apply_to_mid_eval);
             mid_reactive_penalty = reactive_penalty;
             has_mid_eval = true;
         }
@@ -119,7 +119,7 @@ inline RolloutEvaluation rollout_plan_score(
         ++step;
         capture_mid_eval();
     }
-    const EvalBreakdown terminal_eval = evaluate_terminal(simulator, player);
+    const EvalBreakdown terminal_eval = evaluate_terminal(simulator, player, true);
     if (!has_mid_eval) {
         mid_eval = terminal_eval;
         mid_reactive_penalty = reactive_penalty;

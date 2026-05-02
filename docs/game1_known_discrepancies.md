@@ -101,15 +101,16 @@
 结果：
 
 - 看到 `summary.json` 里的 `max_rounds` 字段时，不要默认以为 replay 真被硬截到了该值
-- 若需要“严格前 256 回合”的强度结论，应对 replay 和 decision log 做前 `256` 回合裁切后再统计
-- 若未来要做真正受控的固定回合评测，应在评测驱动层本地强制截断，或改用会主动执行 round cap 的 SDK 环境
+- 若需要“严格前 256 回合”的强度结论，应使用 `Game1/antgame_ai_cpp/tools/eval_cpp_partial_selfplay.py` 这种会在评测驱动层主动截断的 wrapper，或对 replay 和 decision log 做前 `256` 回合裁切后再统计
+- 不要把 `eval_cpp_selfplay.py --max-rounds 256` 的完整 replay 结果当成严格 256 回合结果
 
 ## 3. 已对齐的历史分叉
 
-以下两项此前确实存在 Python / native 认识不一致，现在统一按 Python 语义处理：
+以下几项此前确实存在认识不一致或 SDK 镜像偏差，现在已经对齐：
 
 - `Basic` 塔从新建开始射程就是 `1`
 - `Lightning Storm` 对蚂蚁不是 `true damage`，会先消耗回避层
+- `PublicState::apply_operation_list()` 现在按官方有序操作列表语义顺序应用，覆盖“先降/卖塔筹钱，再建塔，再 EMP”的 salvage-funded EMP；p0 accepted 操作会在 p1 读取前进入公开状态
 
 ## 4. 当前使用建议
 
