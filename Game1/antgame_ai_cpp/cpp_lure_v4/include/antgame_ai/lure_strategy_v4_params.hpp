@@ -7,10 +7,16 @@ struct V4LureStrategyTuning {
     int action_target_time_ms = 3000;
     double action_target_total_multiplier = 1.25;
     // Reusable timing probe samples per normal action arm; these samples count toward final UCB totals.
-    int action_probe_min_samples = 10;
+    int action_probe_min_samples = 5;
     int action_target_rollouts_per_action = 125;
     int action_max_rollouts_per_batch = 100;
     int action_time_budget_ms = 4000;
+    bool rollout_static_risk_cache_enabled = true;
+    int rollout_static_risk_cache_entries = 1024;
+    bool rollout_reverse_path_cache_enabled = false;
+    int rollout_reverse_path_cache_entries = 2048;
+    bool rollout_move_cache_memo_enabled = true;
+    int rollout_move_cache_memo_entries = 2048;
     int lightning_ucb_total_rollouts = 600;
     int lightning_ucb_batch_rollouts = 2;
     double lightning_ucb_exploration = 300.0;

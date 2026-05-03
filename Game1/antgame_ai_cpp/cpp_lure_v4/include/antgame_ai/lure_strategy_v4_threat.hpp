@@ -55,7 +55,8 @@ inline double worker_threat_score(const rs::DefenseSimulator &simulator, int pla
     const auto [base_x, base_y] = kPlayerBases[player];
     double threat = 0.0;
     for (const auto &ant : simulator.ants) {
-        if (ant.kind != AntKind::Worker || !ant.alive()) {
+        if (ant.kind != AntKind::Worker || !ant.alive() || ant.too_old() ||
+            (ant.x == base_x && ant.y == base_y)) {
             continue;
         }
         const int distance = std::max(1, hex_distance(ant.x, ant.y, base_x, base_y));
@@ -114,9 +115,11 @@ inline double forced_rollout_ant_priority(const rs::DefenseSimulator &simulator,
 }
 
 inline double combat_threat_score(const rs::DefenseSimulator &terminal_simulator, int player) {
+    const auto [base_x, base_y] = kPlayerBases[player];
     double threat = 0.0;
     for (const auto &ant : terminal_simulator.ants) {
-        if (ant.kind != AntKind::Combat || !ant.alive()) {
+        if (ant.kind != AntKind::Combat || !ant.alive() || ant.too_old() ||
+            (ant.x == base_x && ant.y == base_y)) {
             continue;
         }
         threat += combat_threat_at(terminal_simulator, player, ant, ant.x, ant.y);

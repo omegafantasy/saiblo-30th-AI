@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <vector>
 
 #include "antgame_ai/lure_strategy_v4_rollout_score.hpp"
@@ -100,6 +101,33 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
     const auto evaluation_begin = std::chrono::steady_clock::now();
     std::vector<EvaluatedPlan> evaluated;
     evaluated.reserve(root_plans.plans.size());
+    const bool use_static_risk_cache =
+        v4_lure_config().rollout_static_risk_cache_enabled && v4_lure_config().rollout_static_risk_cache_entries > 0;
+    const bool use_reverse_path_cache =
+        v4_lure_config().rollout_reverse_path_cache_enabled && v4_lure_config().rollout_reverse_path_cache_entries > 0;
+    const bool use_move_cache_memo =
+        v4_lure_config().rollout_move_cache_memo_enabled && v4_lure_config().rollout_move_cache_memo_entries > 0;
+    rs::DefenseSimulator::StaticRiskCache static_risk_cache(
+        use_static_risk_cache ? std::max(1, v4_lure_config().rollout_static_risk_cache_entries) : 0);
+    rs::DefenseSimulator::ReversePathCache reverse_path_cache(
+        use_reverse_path_cache ? std::max(1, v4_lure_config().rollout_reverse_path_cache_entries) : 0);
+    rs::DefenseSimulator::MoveCacheMemo move_cache_memo(
+        use_move_cache_memo ? std::max(1, v4_lure_config().rollout_move_cache_memo_entries) : 0);
+    std::unique_ptr<rs::DefenseSimulator> rollout_defense_root;
+    const rs::DefenseSimulator *rollout_root = &defense_root;
+    if (use_static_risk_cache || use_reverse_path_cache || use_move_cache_memo) {
+        rollout_defense_root = std::make_unique<rs::DefenseSimulator>(defense_root.clone());
+        if (use_static_risk_cache) {
+            rollout_defense_root->static_risk_cache = &static_risk_cache;
+        }
+        if (use_reverse_path_cache) {
+            rollout_defense_root->reverse_path_cache = &reverse_path_cache;
+        }
+        if (use_move_cache_memo) {
+            rollout_defense_root->move_cache_memo = &move_cache_memo;
+        }
+        rollout_root = rollout_defense_root.get();
+    }
 
     struct UcbArm {
         std::size_t root_index = 0;
@@ -121,7 +149,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
         UcbArm arm;
         arm.root_index = index;
         arm.plan = plan;
-        arm.plan_root = defense_root.clone();
+        arm.plan_root = rollout_root->clone();
         if (!plan.ops.empty() && !apply_operations(arm.plan_root, plan.ops)) {
             arm.valid = false;
         } else {
@@ -185,7 +213,7 @@ inline std::vector<EvaluatedPlan> evaluate_root_plans(
             const std::uint64_t rollout_seed =
                 plan_rollout_seed(state.seed, serial, arm.root_index, arm_sample_index, arm.plan.horizon);
             RolloutEvaluation sample = rollout_plan_score_from_applied_root(
-                defense_root,
+                *rollout_root,
                 arm.plan_root,
                 player,
                 arm.plan,

@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -271,14 +272,14 @@ struct ForcedMove {
 };
 
 struct ReverseHeapNode {
-    int cell_index = -1;
-    float total = 0.0f;
-    float damage = 0.0f;
+    int cell_index;
+    float total;
+    float damage;
 };
 
 struct ReverseHeap {
     int count = 0;
-    ReverseHeapNode nodes[kMaxReverseHeapEntries]{};
+    ReverseHeapNode nodes[kMaxReverseHeapEntries];
 
     static bool better(const ReverseHeapNode &lhs, const ReverseHeapNode &rhs) {
         if (lhs.total != rhs.total) {
@@ -373,15 +374,16 @@ inline std::uint64_t mix_seed(std::uint64_t seed, std::uint64_t value) {
 }
 
 struct FastRng {
+    static constexpr std::uint64_t kMask = (1ULL << 48U) - 1ULL;
+    static constexpr std::uint64_t kMultiplier = 25214903917ULL;
+    static constexpr std::uint64_t kIncrement = 11ULL;
     std::uint64_t state = 0;
 
-    explicit FastRng(std::uint64_t seed) : state(seed ? seed : 0x853c49e6748fea9bULL) {}
+    explicit FastRng(std::uint64_t seed) : state((seed ^ kMultiplier) & kMask) {}
 
     std::uint64_t next_u64() {
-        state ^= state >> 12U;
-        state ^= state << 25U;
-        state ^= state >> 27U;
-        return state * 2685821657736338717ULL;
+        state = (kMultiplier * state + kIncrement) & kMask;
+        return state;
     }
 
     int next_int(int bound) {
@@ -392,8 +394,9 @@ struct FastRng {
     }
 
     double next_double() {
-        constexpr double kInv = 1.0 / static_cast<double>(1ULL << 53U);
-        return static_cast<double>(next_u64() >> 11U) * kInv;
+        constexpr int kBits = 24;
+        constexpr double kInv = 1.0 / static_cast<double>(1ULL << kBits);
+        return static_cast<double>((next_u64() >> (48U - kBits)) & ((1ULL << kBits) - 1ULL)) * kInv;
     }
 };
 
@@ -961,6 +964,19 @@ struct DefenseSimulatorProfile {
     std::uint64_t tower_attack_ns = 0;
     std::uint64_t move_ns = 0;
     std::uint64_t move_cache_ns = 0;
+    std::uint64_t move_cache_static_ns = 0;
+    std::uint64_t move_cache_dynamic_ns = 0;
+    std::uint64_t move_cache_weight_ns = 0;
+    std::uint64_t move_cache_worker_path_ns = 0;
+    std::uint64_t move_cache_tower_path_ns = 0;
+    std::uint64_t move_cache_annotation_ns = 0;
+    std::uint64_t move_cache_worker_path_calls = 0;
+    std::uint64_t move_cache_tower_path_calls = 0;
+    std::uint64_t move_cache_tower_path_skipped = 0;
+    std::uint64_t reverse_path_cache_lookups = 0;
+    std::uint64_t reverse_path_cache_hits = 0;
+    std::uint64_t reverse_path_cache_misses = 0;
+    std::uint64_t reverse_path_cache_stores = 0;
     std::uint64_t move_sample_ns = 0;
     std::uint64_t move_random_ns = 0;
     std::uint64_t move_resolve_ns = 0;
@@ -976,6 +992,18 @@ struct DefenseSimulatorProfile {
     std::uint64_t move_random_calls = 0;
     std::uint64_t move_resolve_calls = 0;
     std::uint64_t move_cache_calls = 0;
+    std::uint64_t move_cache_memo_key_ns = 0;
+    std::uint64_t move_cache_memo_lookup_ns = 0;
+    std::uint64_t move_cache_memo_restore_ns = 0;
+    std::uint64_t move_cache_memo_store_ns = 0;
+    std::uint64_t move_cache_memo_lookups = 0;
+    std::uint64_t move_cache_memo_hits = 0;
+    std::uint64_t move_cache_memo_misses = 0;
+    std::uint64_t move_cache_memo_stores = 0;
+    std::uint64_t static_risk_cache_lookups = 0;
+    std::uint64_t static_risk_cache_hits = 0;
+    std::uint64_t static_risk_cache_misses = 0;
+    std::uint64_t static_risk_cache_stores = 0;
 };
 
 inline std::uint64_t profile_now_ns() {
@@ -999,6 +1027,7 @@ class DefenseSimulator {
     int lightning_cooldown = 0;
     bool terminal = false;
     bool ignore_enemy_spawns = false;
+    bool ignore_periodic_random_move = config().ignore_periodic_random_move;
     DefenseSimulatorProfile *profile = nullptr;
 
     FixedList<SearchTower, kMaxSimTowers> towers;
@@ -1021,7 +1050,13 @@ class DefenseSimulator {
         out.lightning_cooldown = lightning_cooldown;
         out.terminal = terminal;
         out.ignore_enemy_spawns = ignore_enemy_spawns;
+        out.ignore_periodic_random_move = ignore_periodic_random_move;
         out.profile = profile;
+        out.move_cache_memo = move_cache_memo;
+        out.static_risk_cache = static_risk_cache;
+        out.reverse_path_cache = reverse_path_cache;
+        out.limit_move_phase_paths_to_targets = limit_move_phase_paths_to_targets;
+        out.move_option_limit = move_option_limit;
         out.towers = towers;
         out.ants = ants;
         out.my_effects = my_effects;
@@ -1144,9 +1179,91 @@ class DefenseSimulator {
         FloatCells damage_cost{};
     };
 
+    struct ReversePathCacheKey {
+        std::uint64_t hash0 = 0x510e527fade682d1ULL;
+        std::uint64_t hash1 = 0x9b05688c2b3e6c1fULL;
+        int word_count = 0;
+
+        void append(std::uint64_t value) {
+            ++word_count;
+            hash0 = mix_seed(hash0, value);
+            hash1 = mix_seed(hash1, value ^ 0x1f83d9abfb41bd6bULL);
+        }
+
+        bool equals(const ReversePathCacheKey &other) const {
+            return hash0 == other.hash0 && hash1 == other.hash1 && word_count == other.word_count;
+        }
+    };
+
+    struct ReversePathCacheEntry {
+        ReversePathCacheKey key;
+        ReversePathPlan plan;
+    };
+
+    struct ReversePathCache {
+        explicit ReversePathCache(int capacity) : max_entries(std::max(0, capacity)) {
+            entries.reserve(static_cast<std::size_t>(std::max(1, max_entries)));
+            index_by_hash.reserve(static_cast<std::size_t>(std::max(1, max_entries)));
+        }
+
+        const ReversePathPlan *lookup(const ReversePathCacheKey &key) const {
+            const auto range = index_by_hash.equal_range(fingerprint(key));
+            for (auto it = range.first; it != range.second; ++it) {
+                const int index = it->second;
+                if (index >= 0 && index < static_cast<int>(entries.size()) && entries[index].key.equals(key)) {
+                    return &entries[index].plan;
+                }
+            }
+            return nullptr;
+        }
+
+        bool store(const ReversePathCacheKey &key, const ReversePathPlan &plan) {
+            if (max_entries <= 0) {
+                return false;
+            }
+            const std::uint64_t key_hash = fingerprint(key);
+            const auto range = index_by_hash.equal_range(key_hash);
+            for (auto it = range.first; it != range.second; ++it) {
+                const int index = it->second;
+                if (index >= 0 && index < static_cast<int>(entries.size()) && entries[index].key.equals(key)) {
+                    entries[index].plan = plan;
+                    return true;
+                }
+            }
+            if (static_cast<int>(entries.size()) >= max_entries) {
+                return false;
+            }
+            entries.emplace_back();
+            const int index = static_cast<int>(entries.size()) - 1;
+            entries.back().key = key;
+            entries.back().plan = plan;
+            index_by_hash.emplace(key_hash, index);
+            return true;
+        }
+
+        static std::uint64_t fingerprint(const ReversePathCacheKey &key) {
+            return key.hash0 ^ (key.hash1 + 0x9e3779b97f4a7c15ULL + (key.hash0 << 6U) + (key.hash0 >> 2U));
+        }
+
+        int max_entries = 0;
+        std::vector<ReversePathCacheEntry> entries;
+        std::unordered_multimap<std::uint64_t, int> index_by_hash;
+    };
+
     struct TowerPathCache {
         int tower_id = -1;
+        int tower_index = -1;
         ReversePathPlan plan{};
+    };
+
+    struct TowerPathRange {
+        const TowerPathCache *data = nullptr;
+        int count = 0;
+
+        int size() const { return count; }
+        bool empty() const { return count <= 0; }
+        const TowerPathCache *begin() const { return data; }
+        const TowerPathCache *end() const { return count > 0 ? data + count : data; }
     };
 
     struct MoveCache {
@@ -1165,6 +1282,8 @@ class DefenseSimulator {
         FloatCells combat_base_costs{};
         Grid reservations{};
         FixedList<TowerPathCache, kMaxSimTowers> tower_plans;
+        const TowerPathCache *memo_tower_plan_data = nullptr;
+        int memo_tower_plan_count = 0;
         IdCountMap<kMaxSimTowers> tower_claims;
     };
 
@@ -1173,8 +1292,281 @@ class DefenseSimulator {
         IntGrid index_by_cell{};
     };
 
+    struct MovePathTargetCells {
+        unsigned char worker[kMaxValidCells]{};
+        unsigned char combat[kMaxValidCells]{};
+        int worker_count = 0;
+        int combat_count = 0;
+    };
+
+    struct StaticRiskCacheKey {
+        std::uint64_t hash0 = 0x6a09e667f3bcc909ULL;
+        std::uint64_t hash1 = 0xbb67ae8584caa73bULL;
+        int word_count = 0;
+
+        void append(std::uint64_t value) {
+            ++word_count;
+            hash0 = mix_seed(hash0, value);
+            hash1 = mix_seed(hash1, value ^ 0x3c6ef372fe94f82bULL);
+        }
+
+        bool equals(const StaticRiskCacheKey &other) const {
+            return hash0 == other.hash0 && hash1 == other.hash1 && word_count == other.word_count;
+        }
+    };
+
+    struct StaticRiskCacheCore {
+        unsigned char walkable_cells[kMaxValidCells]{};
+        unsigned char walkable_neighbor_count[kMaxValidCells]{};
+        int walkable_neighbors[kMaxValidCells][6]{};
+        Grid damage_risk_field{};
+        Grid control_risk_field{};
+        Grid effect_pull_field{};
+
+        void capture_from(const MoveCache &cache) {
+            std::memcpy(walkable_cells, cache.walkable_cells, sizeof(walkable_cells));
+            std::memcpy(walkable_neighbor_count, cache.walkable_neighbor_count, sizeof(walkable_neighbor_count));
+            std::memcpy(walkable_neighbors, cache.walkable_neighbors, sizeof(walkable_neighbors));
+            damage_risk_field = cache.damage_risk_field;
+            control_risk_field = cache.control_risk_field;
+            effect_pull_field = cache.effect_pull_field;
+        }
+
+        void restore_to(MoveCache &cache) const {
+            std::memcpy(cache.walkable_cells, walkable_cells, sizeof(walkable_cells));
+            std::memcpy(cache.walkable_neighbor_count, walkable_neighbor_count, sizeof(walkable_neighbor_count));
+            std::memcpy(cache.walkable_neighbors, walkable_neighbors, sizeof(walkable_neighbors));
+            cache.damage_risk_field = damage_risk_field;
+            cache.control_risk_field = control_risk_field;
+            cache.effect_pull_field = effect_pull_field;
+            cache.static_risk_dirty = false;
+        }
+    };
+
+    struct StaticRiskCacheEntry {
+        StaticRiskCacheKey key;
+        StaticRiskCacheCore core;
+    };
+
+    struct StaticRiskCache {
+        explicit StaticRiskCache(int capacity) : max_entries(std::max(0, capacity)) {
+            entries.reserve(static_cast<std::size_t>(std::max(1, max_entries)));
+            index_by_hash.reserve(static_cast<std::size_t>(std::max(1, max_entries)));
+        }
+
+        const StaticRiskCacheCore *lookup(const StaticRiskCacheKey &key) const {
+            const auto range = index_by_hash.equal_range(fingerprint(key));
+            for (auto it = range.first; it != range.second; ++it) {
+                const int index = it->second;
+                if (index >= 0 && index < static_cast<int>(entries.size()) && entries[index].key.equals(key)) {
+                    return &entries[index].core;
+                }
+            }
+            return nullptr;
+        }
+
+        bool store(const StaticRiskCacheKey &key, const MoveCache &cache) {
+            if (max_entries <= 0) {
+                return false;
+            }
+            const std::uint64_t key_hash = fingerprint(key);
+            const auto range = index_by_hash.equal_range(key_hash);
+            for (auto it = range.first; it != range.second; ++it) {
+                const int index = it->second;
+                if (index >= 0 && index < static_cast<int>(entries.size()) && entries[index].key.equals(key)) {
+                    entries[index].core.capture_from(cache);
+                    return true;
+                }
+            }
+            if (static_cast<int>(entries.size()) >= max_entries) {
+                return false;
+            }
+            entries.emplace_back();
+            const int index = static_cast<int>(entries.size()) - 1;
+            StaticRiskCacheEntry &entry = entries.back();
+            entry.key = key;
+            entry.core.capture_from(cache);
+            index_by_hash.emplace(key_hash, index);
+            return true;
+        }
+
+        static std::uint64_t fingerprint(const StaticRiskCacheKey &key) {
+            return key.hash0 ^ (key.hash1 + 0x9e3779b97f4a7c15ULL + (key.hash0 << 6U) + (key.hash0 >> 2U));
+        }
+
+        int max_entries = 0;
+        std::vector<StaticRiskCacheEntry> entries;
+        std::unordered_multimap<std::uint64_t, int> index_by_hash;
+    };
+
+    static constexpr int kMoveCacheMemoDefaultCapacity = 128;
+
+    struct MoveCacheMemoKey {
+        std::uint64_t hash0 = 0x9e3779b97f4a7c15ULL;
+        std::uint64_t hash1 = 0x94d049bb133111ebULL;
+        int word_count = 0;
+
+        void append(std::uint64_t value) {
+            ++word_count;
+            hash0 = mix_seed(hash0, value);
+            hash1 = mix_seed(hash1, value ^ 0xbf58476d1ce4e5b9ULL);
+        }
+
+        bool equals(const MoveCacheMemoKey &other) const {
+            return hash0 == other.hash0 && hash1 == other.hash1 && word_count == other.word_count;
+        }
+    };
+
+    struct PreparedMoveCacheCore {
+        unsigned char walkable_cells[kMaxValidCells]{};
+        unsigned char walkable_neighbor_count[kMaxValidCells]{};
+        int walkable_neighbors[kMaxValidCells][6]{};
+        Grid damage_risk_field{};
+        Grid control_risk_field{};
+        Grid effect_pull_field{};
+        Grid traffic_field{};
+        IntGrid occupied_count{};
+        IntGrid adjacent_count{};
+        FloatCells worker_costs{};
+        FloatCells combat_base_costs{};
+        std::vector<TowerPathCache> tower_plans;
+
+        void capture_from(const MoveCache &cache) {
+            std::memcpy(walkable_cells, cache.walkable_cells, sizeof(walkable_cells));
+            std::memcpy(walkable_neighbor_count, cache.walkable_neighbor_count, sizeof(walkable_neighbor_count));
+            std::memcpy(walkable_neighbors, cache.walkable_neighbors, sizeof(walkable_neighbors));
+            damage_risk_field = cache.damage_risk_field;
+            control_risk_field = cache.control_risk_field;
+            effect_pull_field = cache.effect_pull_field;
+            traffic_field = cache.traffic_field;
+            occupied_count = cache.occupied_count;
+            adjacent_count = cache.adjacent_count;
+            worker_costs = cache.worker_costs;
+            combat_base_costs = cache.combat_base_costs;
+            const TowerPathCache *source_data =
+                cache.memo_tower_plan_data != nullptr ? cache.memo_tower_plan_data : cache.tower_plans.begin();
+            const int source_count =
+                cache.memo_tower_plan_data != nullptr ? cache.memo_tower_plan_count : cache.tower_plans.size();
+            if (source_count > 0) {
+                tower_plans.assign(source_data, source_data + source_count);
+            } else {
+                tower_plans.clear();
+            }
+        }
+
+        void restore_to(MoveCache &cache) const {
+            std::memcpy(cache.walkable_cells, walkable_cells, sizeof(walkable_cells));
+            std::memcpy(cache.walkable_neighbor_count, walkable_neighbor_count, sizeof(walkable_neighbor_count));
+            std::memcpy(cache.walkable_neighbors, walkable_neighbors, sizeof(walkable_neighbors));
+            cache.damage_risk_field = damage_risk_field;
+            cache.control_risk_field = control_risk_field;
+            cache.effect_pull_field = effect_pull_field;
+            cache.traffic_field = traffic_field;
+            cache.occupied_count = occupied_count;
+            cache.adjacent_count = adjacent_count;
+            cache.worker_costs = worker_costs;
+            cache.combat_base_costs = combat_base_costs;
+            cache.memo_tower_plan_data = tower_plans.empty() ? nullptr : tower_plans.data();
+            cache.memo_tower_plan_count = static_cast<int>(tower_plans.size());
+            cache.static_risk_dirty = false;
+            cache.move_cache_dirty = false;
+        }
+    };
+
+    struct MoveCacheMemoEntry {
+        MoveCacheMemoKey key;
+        PreparedMoveCacheCore prepared;
+        std::uint64_t last_used = 0;
+    };
+
+    struct MoveCacheMemo {
+        explicit MoveCacheMemo(int capacity = kMoveCacheMemoDefaultCapacity)
+            : max_entries(std::max(0, capacity)) {
+            entries.reserve(static_cast<std::size_t>(std::max(1, max_entries)));
+            index_by_hash.reserve(static_cast<std::size_t>(std::max(1, max_entries)));
+            seen_hashes.reserve(static_cast<std::size_t>(std::max(1, max_entries * 16)));
+        }
+
+        PreparedMoveCacheCore *lookup(const MoveCacheMemoKey &key) {
+            ++clock;
+            const auto range = index_by_hash.equal_range(fingerprint(key));
+            for (auto it = range.first; it != range.second; ++it) {
+                const int index = it->second;
+                if (index >= 0 && index < static_cast<int>(entries.size()) && entries[index].key.equals(key)) {
+                    entries[index].last_used = clock;
+                    return &entries[index].prepared;
+                }
+            }
+            return nullptr;
+        }
+
+        bool store(const MoveCacheMemoKey &key, const MoveCache &cache) {
+            if (max_entries <= 0) {
+                return false;
+            }
+            ++clock;
+            const std::uint64_t key_hash = fingerprint(key);
+            const auto range = index_by_hash.equal_range(key_hash);
+            for (auto it = range.first; it != range.second; ++it) {
+                const int index = it->second;
+                if (index >= 0 && index < static_cast<int>(entries.size()) && entries[index].key.equals(key)) {
+                    entries[index].last_used = clock;
+                    entries[index].prepared.capture_from(cache);
+                    return true;
+                }
+            }
+
+            if (static_cast<int>(entries.size()) >= max_entries) {
+                return false;
+            }
+            const std::uint64_t seen_hash = key_hash;
+            if (seen_hashes.find(seen_hash) == seen_hashes.end()) {
+                if (static_cast<int>(seen_hashes.size()) < max_entries * 16) {
+                    seen_hashes.insert(seen_hash);
+                }
+                return false;
+            }
+
+            entries.emplace_back();
+            MoveCacheMemoEntry *entry = &entries.back();
+            entry->key = key;
+            entry->last_used = clock;
+            entry->prepared.capture_from(cache);
+            index_by_hash.emplace(key_hash, static_cast<int>(entries.size()) - 1);
+            return true;
+        }
+
+        static std::uint64_t fingerprint(const MoveCacheMemoKey &key) {
+            return key.hash0 ^ (key.hash1 + 0x9e3779b97f4a7c15ULL + (key.hash0 << 6U) + (key.hash0 >> 2U));
+        }
+
+        int max_entries = kMoveCacheMemoDefaultCapacity;
+        std::uint64_t clock = 0;
+        std::vector<MoveCacheMemoEntry> entries;
+        std::unordered_multimap<std::uint64_t, int> index_by_hash;
+        std::unordered_set<std::uint64_t> seen_hashes;
+    };
+
     mutable MoveCache move_cache;
     mutable TowerLookupCache tower_lookup;
+    MoveCacheMemo *move_cache_memo = nullptr;
+    StaticRiskCache *static_risk_cache = nullptr;
+    ReversePathCache *reverse_path_cache = nullptr;
+    bool limit_move_phase_paths_to_targets = true;
+    int move_option_limit = config().move_option_limit;
+    mutable bool scope_tower_paths_to_current_move_phase = false;
+    mutable bool limit_paths_to_current_move_phase_targets = false;
+
+    template <typename Fn>
+    void measure_profile_part(std::uint64_t DefenseSimulatorProfile::*field, Fn &&fn) const {
+        if (profile == nullptr) {
+            fn();
+            return;
+        }
+        const std::uint64_t begin_ns = profile_now_ns();
+        fn();
+        profile->*field += profile_now_ns() - begin_ns;
+    }
 
     double ant_progress_weight(const SearchAnt &ant) const { return ant.kind == AntKind::Combat ? 1.3 : 1.05; }
     double ant_crowding_weight(const SearchAnt &ant) const { return ant.kind == AntKind::Combat ? 0.15 : 0.4; }
@@ -1223,6 +1615,182 @@ class DefenseSimulator {
         move_cache.move_cache_dirty = true;
     }
 
+    static std::uint64_t cache_word(int value) {
+        return static_cast<std::uint64_t>(static_cast<std::int64_t>(value));
+    }
+
+    static std::uint64_t cache_float_word(float value) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        return static_cast<std::uint64_t>(bits);
+    }
+
+    static std::uint64_t pack_small_fields(
+        int a,
+        int b = 0,
+        int c = 0,
+        int d = 0,
+        int e = 0,
+        int f = 0,
+        int g = 0,
+        int h = 0) {
+        return (static_cast<std::uint64_t>(a & 0xff) << 0U) |
+               (static_cast<std::uint64_t>(b & 0xff) << 8U) |
+               (static_cast<std::uint64_t>(c & 0xff) << 16U) |
+               (static_cast<std::uint64_t>(d & 0xff) << 24U) |
+               (static_cast<std::uint64_t>(e & 0xff) << 32U) |
+               (static_cast<std::uint64_t>(f & 0xff) << 40U) |
+               (static_cast<std::uint64_t>(g & 0xff) << 48U) |
+               (static_cast<std::uint64_t>(h & 0xff) << 56U);
+    }
+
+    StaticRiskCacheKey build_static_risk_cache_key() const {
+        StaticRiskCacheKey key;
+        key.append(0x535441544943524bULL); // STATICRK key version.
+        key.append(cache_word(player));
+
+        key.append(0x544f574552530001ULL);
+        for (const auto &tower : towers) {
+            if (!tower.alive()) {
+                continue;
+            }
+            key.append(pack_small_fields(
+                tower.x,
+                tower.y,
+                static_cast<int>(tower.tower_type),
+                0,
+                0,
+                0,
+                0,
+                0));
+        }
+
+        key.append(0x4d594c53544f524dULL);
+        for (const auto &effect : my_effects) {
+            if (!effect.active() || effect.weapon_type != SuperWeaponType::LightningStorm) {
+                continue;
+            }
+            key.append(pack_small_fields(effect.x, effect.y, static_cast<int>(effect.weapon_type), 0, 0, 0, 0, 0));
+        }
+
+        key.append(0x454e50554c4c0001ULL);
+        for (const auto &effect : enemy_effects) {
+            if (!effect.active()) {
+                continue;
+            }
+            if (effect.weapon_type != SuperWeaponType::Deflector &&
+                effect.weapon_type != SuperWeaponType::EmergencyEvasion) {
+                continue;
+            }
+            key.append(pack_small_fields(effect.x, effect.y, static_cast<int>(effect.weapon_type), 0, 0, 0, 0, 0));
+        }
+        return key;
+    }
+
+    void build_current_move_phase_target_cells(MovePathTargetCells &targets) const {
+        auto mark_needed = [](unsigned char needed_cells[kMaxValidCells], int &needed_count, int cell_index) {
+            if (cell_index < 0 || needed_cells[cell_index] != 0) {
+                return;
+            }
+            needed_cells[cell_index] = 1;
+            ++needed_count;
+        };
+        for (const auto &ant : ants) {
+            if (!ant.alive() || ant.too_old() || ant.is_frozen) {
+                continue;
+            }
+            if (ant.behavior == AntBehavior::Random || ant.behavior == AntBehavior::Bewitched) {
+                continue;
+            }
+            const auto candidates = legal_move_candidates(ant);
+            if (ant.kind == AntKind::Worker) {
+                mark_needed(targets.worker, targets.worker_count, cell_index_of(ant.x, ant.y));
+            } else {
+                for (const auto &candidate : candidates) {
+                    if (tower_at(candidate.nx, candidate.ny) == nullptr) {
+                        mark_needed(targets.combat, targets.combat_count, cell_index_of(candidate.nx, candidate.ny));
+                    }
+                }
+                continue;
+            }
+            for (const auto &candidate : candidates) {
+                if (tower_at(candidate.nx, candidate.ny) == nullptr) {
+                    mark_needed(targets.worker, targets.worker_count, cell_index_of(candidate.nx, candidate.ny));
+                }
+            }
+        }
+    }
+
+    MoveCacheMemoKey build_move_cache_memo_key(bool include_move_phase_path_roles = false) const {
+        MoveCacheMemoKey key;
+        key.append(0x4d4f564543414349ULL); // MOVECACI key version.
+        key.append(cache_word(player));
+
+        key.append(0x544f574552530001ULL);
+        for (const auto &tower : towers) {
+            if (!tower.alive()) {
+                continue;
+            }
+            key.append(cache_word(tower.tower_id));
+            key.append(pack_small_fields(
+                tower.x,
+                tower.y,
+                static_cast<int>(tower.tower_type),
+                1,
+                0,
+                0,
+                0,
+                0));
+        }
+
+        int path_mask = 0;
+        for (const auto &ant : ants) {
+            if (!ant.alive()) {
+                continue;
+            }
+            int path_role = 0;
+            if (!ant.too_old() && !ant.is_frozen &&
+                ant.behavior != AntBehavior::Random && ant.behavior != AntBehavior::Bewitched) {
+                path_role = ant.kind == AntKind::Combat ? 2 : 1;
+                path_mask |= path_role;
+            }
+            key.append(pack_small_fields(
+                ant.x,
+                ant.y,
+                include_move_phase_path_roles ? path_role : 0,
+                include_move_phase_path_roles && path_role != 0 ? ant.last_move + 1 : 0,
+                0,
+                0,
+                0,
+                0));
+        }
+
+        key.append(0x504154484d41534bULL);
+        key.append(cache_word(path_mask));
+
+        auto append_effects = [&](std::uint64_t marker, const FixedList<SearchEffect, kMaxSimEffects> &effects) {
+            key.append(marker);
+            for (const auto &effect : effects) {
+                if (!effect.active()) {
+                    continue;
+                }
+                key.append(pack_small_fields(
+                    effect.x,
+                    effect.y,
+                    static_cast<int>(effect.weapon_type),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0));
+                key.append(cache_word(effect.remaining_turns));
+            }
+        };
+        append_effects(0x4d59454646530001ULL, my_effects);
+        append_effects(0x454e454645460001ULL, enemy_effects);
+        return key;
+    }
+
     double cell_damage_hp(int x, int y) const {
         refresh_static_risk_fields();
         return move_cache.damage_risk_field[x][y] * 25.0;
@@ -1238,14 +1806,21 @@ class DefenseSimulator {
         return move_cache.effect_pull_field[x][y];
     }
 
-    Grid compute_traffic_field() const {
-        Grid traffic{};
+    void refresh_dynamic_move_fields() const {
         const auto &geometry = geometry_cache();
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            const int x = geometry.cell_x[index];
+            const int y = geometry.cell_y[index];
+            move_cache.traffic_field[x][y] = 0.0;
+            move_cache.occupied_count[x][y] = 0;
+            move_cache.adjacent_count[x][y] = 0;
+        }
         for (const auto &ant : ants) {
             if (!ant.alive()) {
                 continue;
             }
-            traffic[ant.x][ant.y] += 1.0;
+            move_cache.traffic_field[ant.x][ant.y] += 1.0;
+            ++move_cache.occupied_count[ant.x][ant.y];
             const int ant_index = cell_index_of(ant.x, ant.y);
             if (ant_index < 0) {
                 continue;
@@ -1254,28 +1829,7 @@ class DefenseSimulator {
                 const int neighbor_index = move_cache.walkable_neighbors[ant_index][slot];
                 const int nx = geometry.cell_x[neighbor_index];
                 const int ny = geometry.cell_y[neighbor_index];
-                traffic[nx][ny] += 0.35;
-            }
-        }
-        return traffic;
-    }
-
-    void refresh_crowding_fields() const {
-        const auto &geometry = geometry_cache();
-        for (int index = 0; index < geometry.valid_count; ++index) {
-            const int x = geometry.cell_x[index];
-            const int y = geometry.cell_y[index];
-            move_cache.occupied_count[x][y] = 0;
-            move_cache.adjacent_count[x][y] = 0;
-        }
-        for (const auto &ant : ants) {
-            if (!ant.alive()) {
-                continue;
-            }
-            ++move_cache.occupied_count[ant.x][ant.y];
-            const int ant_index = cell_index_of(ant.x, ant.y);
-            if (ant_index < 0) {
-                continue;
+                move_cache.traffic_field[nx][ny] += 0.35;
             }
             for (int direction = 0; direction < 6; ++direction) {
                 const int neighbor_index = geometry.neighbor_by_dir[ant_index][direction];
@@ -1287,9 +1841,101 @@ class DefenseSimulator {
         }
     }
 
+    int compute_walkable_components(int component_by_cell[kMaxValidCells]) const {
+        const auto &geometry = geometry_cache();
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            component_by_cell[index] = -1;
+        }
+        int component_count = 0;
+        int queue[kMaxValidCells]{};
+        for (int start = 0; start < geometry.valid_count; ++start) {
+            if (move_cache.walkable_cells[start] == 0 || component_by_cell[start] >= 0) {
+                continue;
+            }
+            int head = 0;
+            int tail = 0;
+            queue[tail++] = start;
+            component_by_cell[start] = component_count;
+            while (head < tail) {
+                const int cell = queue[head++];
+                for (int slot = 0; slot < move_cache.walkable_neighbor_count[cell]; ++slot) {
+                    const int next = move_cache.walkable_neighbors[cell][slot];
+                    if (next < 0 || component_by_cell[next] >= 0) {
+                        continue;
+                    }
+                    component_by_cell[next] = component_count;
+                    queue[tail++] = next;
+                }
+            }
+            ++component_count;
+        }
+        return component_count;
+    }
+
+    bool combat_ant_uses_tower_paths(const SearchAnt &ant) const {
+        return ant.alive() && !ant.too_old() && !ant.is_frozen && ant.kind == AntKind::Combat &&
+               ant.behavior != AntBehavior::Random && ant.behavior != AntBehavior::Bewitched;
+    }
+
+    int mark_needed_combat_path_components(
+        const int component_by_cell[kMaxValidCells],
+        unsigned char needed_components[kMaxValidCells]) const {
+        const auto &geometry = geometry_cache();
+        int needed_count = 0;
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            needed_components[index] = 0;
+        }
+        for (const auto &ant : ants) {
+            if (!combat_ant_uses_tower_paths(ant)) {
+                continue;
+            }
+            const auto candidates = legal_move_candidates(ant);
+            for (const auto &candidate : candidates) {
+                if (tower_at(candidate.nx, candidate.ny) != nullptr) {
+                    continue;
+                }
+                const int candidate_index = cell_index_of(candidate.nx, candidate.ny);
+                if (candidate_index < 0) {
+                    continue;
+                }
+                const int component = component_by_cell[candidate_index];
+                if (component < 0 || needed_components[component] != 0) {
+                    continue;
+                }
+                needed_components[component] = 1;
+                ++needed_count;
+            }
+        }
+        return needed_count;
+    }
+
     void refresh_static_risk_fields() const {
         if (!move_cache.static_risk_dirty) {
             return;
+        }
+        const std::uint64_t begin_ns = profile != nullptr ? profile_now_ns() : 0ULL;
+        auto finish_profile = [&]() {
+            if (profile != nullptr) {
+                profile->move_cache_static_ns += profile_now_ns() - begin_ns;
+            }
+        };
+        StaticRiskCacheKey cache_key;
+        if (static_risk_cache != nullptr) {
+            cache_key = build_static_risk_cache_key();
+            if (profile != nullptr) {
+                ++profile->static_risk_cache_lookups;
+            }
+            if (const StaticRiskCacheCore *cached = static_risk_cache->lookup(cache_key)) {
+                cached->restore_to(move_cache);
+                if (profile != nullptr) {
+                    ++profile->static_risk_cache_hits;
+                }
+                finish_profile();
+                return;
+            }
+            if (profile != nullptr) {
+                ++profile->static_risk_cache_misses;
+            }
         }
         refresh_tower_lookup();
         const auto &geometry = geometry_cache();
@@ -1390,95 +2036,270 @@ class DefenseSimulator {
         }
 
         move_cache.static_risk_dirty = false;
+        if (static_risk_cache != nullptr && static_risk_cache->store(cache_key, move_cache) && profile != nullptr) {
+            ++profile->static_risk_cache_stores;
+        }
+        finish_profile();
     }
 
-    void prepare_move_cache(bool reset_reservations) const {
+    void prepare_move_cache_uncached(
+        bool reset_reservations,
+        const MovePathTargetCells *limited_target_cells = nullptr) const {
+        move_cache.memo_tower_plan_data = nullptr;
+        move_cache.memo_tower_plan_count = 0;
         refresh_static_risk_fields();
-        move_cache.traffic_field = compute_traffic_field();
-        refresh_crowding_fields();
 
         bool has_worker = false;
         bool has_combat = false;
-        for (const auto &ant : ants) {
-            if (!ant.alive() || ant.too_old() || ant.is_frozen) {
-                continue;
+        measure_profile_part(&DefenseSimulatorProfile::move_cache_dynamic_ns, [&]() {
+            refresh_dynamic_move_fields();
+        });
+
+        measure_profile_part(&DefenseSimulatorProfile::move_cache_weight_ns, [&]() {
+            for (const auto &ant : ants) {
+                if (!ant.alive() || ant.too_old() || ant.is_frozen) {
+                    continue;
+                }
+                if (ant.behavior == AntBehavior::Random || ant.behavior == AntBehavior::Bewitched) {
+                    continue;
+                }
+                if (ant.kind == AntKind::Combat) {
+                    has_combat = true;
+                } else {
+                    has_worker = true;
+                }
             }
-            if (ant.kind == AntKind::Combat) {
-                has_combat = true;
-            } else {
-                has_worker = true;
-            }
+        });
+
+        MovePathTargetCells local_target_cells;
+        if (limit_paths_to_current_move_phase_targets && limited_target_cells == nullptr) {
+            build_current_move_phase_target_cells(local_target_cells);
+            limited_target_cells = &local_target_cells;
         }
 
         const auto [base_x, base_y] = kPlayerBases[player];
         float step_damage[kMaxValidCells]{};
         float worker_step_total[kMaxValidCells]{};
         float combat_step_total[kMaxValidCells]{};
-        if (has_worker || has_combat) {
-            const auto &geometry = geometry_cache();
-            for (int index = 0; index < geometry.valid_count; ++index) {
-                const int x = geometry.cell_x[index];
-                const int y = geometry.cell_y[index];
-                const float damage = move_cache.damage_risk_field[x][y] * 25.0f;
-                const float control = move_cache.control_risk_field[x][y];
-                const float traffic = move_cache.traffic_field[x][y];
-                const float effect = move_cache.effect_pull_field[x][y];
-                step_damage[index] = damage;
-                if (has_worker) {
-                    worker_step_total[index] =
-                        std::max(0.15f, 1.0f + 0.20f * damage + 1.80f * control + 0.75f * traffic - 0.35f * effect);
-                }
-                if (has_combat) {
-                    combat_step_total[index] =
-                        std::max(0.15f, 1.0f + 0.08f * damage + 0.45f * control + 0.25f * traffic - 0.20f * effect);
-                }
-            }
-        }
-        if (has_worker) {
-            FixedList<IntPair, 6> sources;
-            sources.push_back(IntPair{base_x, base_y});
-            const ReversePathPlan worker_plan = reverse_weighted_plan(sources, worker_step_total, step_damage);
-            move_cache.worker_costs = worker_plan.total_cost;
-        }
-
-        move_cache.tower_plans.clear();
-        if (has_combat) {
-            for (const auto &tower : towers) {
-                if (!tower.alive()) {
-                    continue;
-                }
-                FixedList<IntPair, 6> sources;
-                for (int direction = 0; direction < 6; ++direction) {
-                    const int nx = tower.x + kOffset[tower.y & 1][direction][0];
-                    const int ny = tower.y + kOffset[tower.y & 1][direction][1];
-                    const int neighbor_index = cell_index_of(nx, ny);
-                    if (neighbor_index >= 0 && move_cache.walkable_cells[neighbor_index] != 0) {
-                        sources.push_back(IntPair{nx, ny});
+        ReversePathCacheKey worker_path_base_key;
+        ReversePathCacheKey combat_path_base_key;
+        measure_profile_part(&DefenseSimulatorProfile::move_cache_weight_ns, [&]() {
+            if (has_worker || has_combat) {
+                const auto &geometry = geometry_cache();
+                for (int index = 0; index < geometry.valid_count; ++index) {
+                    const int x = geometry.cell_x[index];
+                    const int y = geometry.cell_y[index];
+                    const float damage = move_cache.damage_risk_field[x][y] * 25.0f;
+                    const float control = move_cache.control_risk_field[x][y];
+                    const float traffic = move_cache.traffic_field[x][y];
+                    const float effect = move_cache.effect_pull_field[x][y];
+                    step_damage[index] = damage;
+                    if (has_worker) {
+                        worker_step_total[index] =
+                            std::max(0.15f, 1.0f + 0.20f * damage + 1.80f * control + 0.75f * traffic - 0.35f * effect);
+                    }
+                    if (has_combat) {
+                        combat_step_total[index] =
+                            std::max(0.15f, 1.0f + 0.08f * damage + 0.45f * control + 0.25f * traffic - 0.20f * effect);
                     }
                 }
-                if (sources.empty()) {
-                    continue;
+                if (reverse_path_cache != nullptr) {
+                    if (has_worker) {
+                        worker_path_base_key =
+                            reverse_path_base_key(0x574f524b45525054ULL, worker_step_total, step_damage);
+                    }
+                    if (has_combat) {
+                        combat_path_base_key =
+                            reverse_path_base_key(0x434f4d4241545054ULL, combat_step_total, step_damage);
+                    }
                 }
-                move_cache.tower_plans.push_back(
-                    TowerPathCache{tower.tower_id, reverse_weighted_plan(sources, combat_step_total, step_damage)});
             }
-        }
-        if (has_combat && move_cache.tower_plans.empty()) {
-            FixedList<IntPair, 6> sources;
-            sources.push_back(IntPair{base_x, base_y});
-            const ReversePathPlan combat_base_plan = reverse_weighted_plan(sources, combat_step_total, step_damage);
-            move_cache.combat_base_costs = combat_base_plan.total_cost;
+        });
+        measure_profile_part(&DefenseSimulatorProfile::move_cache_worker_path_ns, [&]() {
+            if (has_worker) {
+                FixedList<IntPair, 6> sources;
+                sources.push_back(IntPair{base_x, base_y});
+                const ReversePathPlan worker_plan = reverse_weighted_plan_cached(
+                    sources,
+                    worker_step_total,
+                    step_damage,
+                    worker_path_base_key,
+                    limited_target_cells != nullptr ? limited_target_cells->worker : nullptr,
+                    limited_target_cells != nullptr ? limited_target_cells->worker_count : 0);
+                move_cache.worker_costs = worker_plan.total_cost;
+                if (profile != nullptr) {
+                    ++profile->move_cache_worker_path_calls;
+                }
+            }
+        });
+
+        measure_profile_part(&DefenseSimulatorProfile::move_cache_tower_path_ns, [&]() {
+            move_cache.tower_plans.clear();
+            if (has_combat) {
+                int component_by_cell[kMaxValidCells]{};
+                unsigned char needed_components[kMaxValidCells]{};
+                int needed_component_count = 0;
+                bool has_skipped_fallback = false;
+                int skipped_fallback_tower_id = -1;
+                FixedList<IntPair, 6> skipped_fallback_sources;
+                if (scope_tower_paths_to_current_move_phase) {
+                    compute_walkable_components(component_by_cell);
+                    needed_component_count = mark_needed_combat_path_components(component_by_cell, needed_components);
+                }
+                for (int tower_index = 0; tower_index < towers.size(); ++tower_index) {
+                    const auto &tower = towers[tower_index];
+                    if (!tower.alive()) {
+                        continue;
+                    }
+                    FixedList<IntPair, 6> sources;
+                    bool source_needed = !scope_tower_paths_to_current_move_phase;
+                    for (int direction = 0; direction < 6; ++direction) {
+                        const int nx = tower.x + kOffset[tower.y & 1][direction][0];
+                        const int ny = tower.y + kOffset[tower.y & 1][direction][1];
+                        const int neighbor_index = cell_index_of(nx, ny);
+                        if (neighbor_index >= 0 && move_cache.walkable_cells[neighbor_index] != 0) {
+                            sources.push_back(IntPair{nx, ny});
+                            if (scope_tower_paths_to_current_move_phase) {
+                                const int component = component_by_cell[neighbor_index];
+                                if (component >= 0 && needed_components[component] != 0) {
+                                    source_needed = true;
+                                }
+                            }
+                        }
+                    }
+                    if (sources.empty()) {
+                        continue;
+                    }
+                    if (scope_tower_paths_to_current_move_phase && (needed_component_count <= 0 || !source_needed)) {
+                        if (!has_skipped_fallback) {
+                            has_skipped_fallback = true;
+                            skipped_fallback_tower_id = tower.tower_id;
+                            skipped_fallback_sources = sources;
+                        }
+                        if (profile != nullptr) {
+                            ++profile->move_cache_tower_path_skipped;
+                        }
+                        continue;
+                    }
+                    move_cache.tower_plans.push_back(TowerPathCache{
+                        tower.tower_id,
+                        tower_index,
+                        reverse_weighted_plan_cached(
+                            sources,
+                            combat_step_total,
+                            step_damage,
+                            combat_path_base_key,
+                            limited_target_cells != nullptr ? limited_target_cells->combat : nullptr,
+                            limited_target_cells != nullptr ? limited_target_cells->combat_count : 0)});
+                    if (profile != nullptr) {
+                        ++profile->move_cache_tower_path_calls;
+                    }
+                }
+                if (move_cache.tower_plans.empty() && has_skipped_fallback) {
+                    move_cache.tower_plans.push_back(TowerPathCache{
+                        skipped_fallback_tower_id,
+                        -1,
+                        reverse_weighted_plan_cached(
+                            skipped_fallback_sources,
+                            combat_step_total,
+                            step_damage,
+                            combat_path_base_key,
+                            limited_target_cells != nullptr ? limited_target_cells->combat : nullptr,
+                            limited_target_cells != nullptr ? limited_target_cells->combat_count : 0)});
+                    if (profile != nullptr) {
+                        ++profile->move_cache_tower_path_calls;
+                    }
+                }
+            }
+            if (has_combat && move_cache.tower_plans.empty()) {
+                FixedList<IntPair, 6> sources;
+                sources.push_back(IntPair{base_x, base_y});
+                const ReversePathPlan combat_base_plan = reverse_weighted_plan_cached(
+                    sources,
+                    combat_step_total,
+                    step_damage,
+                    combat_path_base_key,
+                    limited_target_cells != nullptr ? limited_target_cells->combat : nullptr,
+                    limited_target_cells != nullptr ? limited_target_cells->combat_count : 0);
+                move_cache.combat_base_costs = combat_base_plan.total_cost;
+                if (profile != nullptr) {
+                    ++profile->move_cache_tower_path_calls;
+                }
+            }
+        });
+
+        measure_profile_part(&DefenseSimulatorProfile::move_cache_annotation_ns, [&]() {
+            if (reset_reservations) {
+                move_cache.tower_claims.clear();
+                for (int x = 0; x < kMapSize; ++x) {
+                    for (int y = 0; y < kMapSize; ++y) {
+                        move_cache.reservations[x][y] = 0.0;
+                    }
+                }
+            }
+        });
+        move_cache.move_cache_dirty = false;
+    }
+
+    void prepare_move_cache(bool reset_reservations) const {
+        if (move_cache_memo == nullptr) {
+            prepare_move_cache_uncached(reset_reservations);
+            return;
         }
 
-        if (reset_reservations) {
-            move_cache.tower_claims.clear();
-            for (int x = 0; x < kMapSize; ++x) {
-                for (int y = 0; y < kMapSize; ++y) {
-                    move_cache.reservations[x][y] = 0.0;
-                }
-            }
+        MoveCacheMemoKey key;
+        if (profile == nullptr) {
+            key = build_move_cache_memo_key(limit_paths_to_current_move_phase_targets);
+        } else {
+            const std::uint64_t begin_ns = profile_now_ns();
+            key = build_move_cache_memo_key(limit_paths_to_current_move_phase_targets);
+            profile->move_cache_memo_key_ns += profile_now_ns() - begin_ns;
         }
-        move_cache.move_cache_dirty = false;
+        if (profile != nullptr) {
+            ++profile->move_cache_memo_lookups;
+        }
+        const PreparedMoveCacheCore *prepared = nullptr;
+        if (profile == nullptr) {
+            prepared = move_cache_memo->lookup(key);
+        } else {
+            const std::uint64_t begin_ns = profile_now_ns();
+            prepared = move_cache_memo->lookup(key);
+            profile->move_cache_memo_lookup_ns += profile_now_ns() - begin_ns;
+        }
+        if (prepared != nullptr) {
+            if (profile == nullptr) {
+                prepared->restore_to(move_cache);
+            } else {
+                const std::uint64_t begin_ns = profile_now_ns();
+                prepared->restore_to(move_cache);
+                profile->move_cache_memo_restore_ns += profile_now_ns() - begin_ns;
+            }
+            if (reset_reservations) {
+                measure_profile_part(&DefenseSimulatorProfile::move_cache_annotation_ns, [&]() {
+                    clear_move_annotations();
+                });
+            }
+            if (profile != nullptr) {
+                ++profile->move_cache_memo_hits;
+            }
+            return;
+        }
+
+        if (profile != nullptr) {
+            ++profile->move_cache_memo_misses;
+        }
+        prepare_move_cache_uncached(reset_reservations);
+        bool stored = false;
+        if (profile == nullptr) {
+            stored = move_cache_memo->store(key, move_cache);
+        } else {
+            const std::uint64_t begin_ns = profile_now_ns();
+            stored = move_cache_memo->store(key, move_cache);
+            profile->move_cache_memo_store_ns += profile_now_ns() - begin_ns;
+        }
+        if (profile != nullptr && stored) {
+            ++profile->move_cache_memo_stores;
+        }
     }
 
     void clear_move_annotations() const {
@@ -1498,13 +2319,28 @@ class DefenseSimulator {
         }
     }
 
+    TowerPathRange cached_tower_plans() const {
+        if (move_cache.memo_tower_plan_data != nullptr) {
+            return TowerPathRange{move_cache.memo_tower_plan_data, move_cache.memo_tower_plan_count};
+        }
+        return TowerPathRange{move_cache.tower_plans.begin(), move_cache.tower_plans.size()};
+    }
+
     const TowerPathCache *tower_plan_for(int tower_id) const {
-        for (const auto &plan : move_cache.tower_plans) {
+        for (const auto &plan : cached_tower_plans()) {
             if (plan.tower_id == tower_id) {
                 return &plan;
             }
         }
         return nullptr;
+    }
+
+    const SearchTower *tower_for_plan(const TowerPathCache &plan) const {
+        if (plan.tower_index >= 0 && plan.tower_index < towers.size() &&
+            towers[plan.tower_index].tower_id == plan.tower_id) {
+            return &towers[plan.tower_index];
+        }
+        return tower_by_id(plan.tower_id);
     }
 
     int tower_claim_count(int tower_id) const {
@@ -1531,7 +2367,9 @@ class DefenseSimulator {
     ReversePathPlan reverse_weighted_plan(
         const FixedList<IntPair, 6> &sources,
         const float step_total[kMaxValidCells],
-        const float step_damage[kMaxValidCells]) const {
+        const float step_damage[kMaxValidCells],
+        const unsigned char needed_cells[kMaxValidCells] = nullptr,
+        int needed_count = 0) const {
         ReversePathPlan plan;
         const float inf = std::numeric_limits<float>::infinity();
         const auto &geometry = geometry_cache();
@@ -1554,6 +2392,10 @@ class DefenseSimulator {
             heap.push(ReverseHeapNode{index, 0.0f, 0.0f});
         }
 
+        if (needed_cells != nullptr && needed_count <= 0) {
+            return plan;
+        }
+        int remaining_needed = needed_count;
         while (!heap.empty()) {
             const ReverseHeapNode node = heap.pop();
             const int cell_index = node.cell_index;
@@ -1563,6 +2405,12 @@ class DefenseSimulator {
             visited[cell_index] = 1;
             const float best_total = node.total;
             const float best_damage = node.damage;
+            if (needed_cells != nullptr && needed_cells[cell_index] != 0) {
+                --remaining_needed;
+                if (remaining_needed <= 0) {
+                    break;
+                }
+            }
 
             for (int slot = 0; slot < move_cache.walkable_neighbor_count[cell_index]; ++slot) {
                 const int previous_index = move_cache.walkable_neighbors[cell_index][slot];
@@ -1580,9 +2428,62 @@ class DefenseSimulator {
         return plan;
     }
 
+    ReversePathCacheKey reverse_path_base_key(
+        std::uint64_t marker,
+        const float step_total[kMaxValidCells],
+        const float step_damage[kMaxValidCells]) const {
+        ReversePathCacheKey key;
+        key.append(marker);
+        const auto &geometry = geometry_cache();
+        for (int index = 0; index < geometry.valid_count; ++index) {
+            key.append(static_cast<std::uint64_t>(move_cache.walkable_cells[index]));
+            if (move_cache.walkable_cells[index] == 0) {
+                continue;
+            }
+            key.append(cache_float_word(step_total[index]));
+            key.append(cache_float_word(step_damage[index]));
+        }
+        return key;
+    }
+
+    ReversePathPlan reverse_weighted_plan_cached(
+        const FixedList<IntPair, 6> &sources,
+        const float step_total[kMaxValidCells],
+        const float step_damage[kMaxValidCells],
+        const ReversePathCacheKey &base_key,
+        const unsigned char needed_cells[kMaxValidCells] = nullptr,
+        int needed_count = 0) const {
+        if (reverse_path_cache == nullptr || needed_cells != nullptr) {
+            return reverse_weighted_plan(sources, step_total, step_damage, needed_cells, needed_count);
+        }
+        ReversePathCacheKey key = base_key;
+        key.append(0x5352430000000001ULL);
+        key.append(static_cast<std::uint64_t>(sources.size()));
+        for (const auto &[x, y] : sources) {
+            key.append(cache_word(cell_index_of(x, y)));
+        }
+        if (profile != nullptr) {
+            ++profile->reverse_path_cache_lookups;
+        }
+        if (const ReversePathPlan *cached = reverse_path_cache->lookup(key)) {
+            if (profile != nullptr) {
+                ++profile->reverse_path_cache_hits;
+            }
+            return *cached;
+        }
+        if (profile != nullptr) {
+            ++profile->reverse_path_cache_misses;
+        }
+        ReversePathPlan plan = reverse_weighted_plan(sources, step_total, step_damage);
+        if (reverse_path_cache->store(key, plan) && profile != nullptr) {
+            ++profile->reverse_path_cache_stores;
+        }
+        return plan;
+    }
+
     double tower_attack_value(const SearchAnt &ant, const SearchTower &tower, double arrival_hp) const {
         if (arrival_hp <= 0.0) {
-            return -1e18;
+            return -1e9;
         }
         if (ant.kind == AntKind::Combat && arrival_hp * 2.0 < static_cast<double>(ant.max_hp())) {
             double total_damage = 0.0;
@@ -1652,8 +2553,13 @@ class DefenseSimulator {
         return chosen;
     }
 
-    void set_ant_behavior(SearchAnt &ant, AntBehavior behavior, int target_x = -1, int target_y = -1) {
-        if (ant.control_immune() && behavior != AntBehavior::ControlFree) {
+    void set_ant_behavior(
+        SearchAnt &ant,
+        AntBehavior behavior,
+        int target_x = -1,
+        int target_y = -1,
+        bool force = false) {
+        if (!force && ant.control_immune() && behavior != AntBehavior::ControlFree) {
             return;
         }
         ant.behavior = behavior;
@@ -1711,11 +2617,14 @@ class DefenseSimulator {
         }
     }
 
-    const SearchAnt *tower_pick_target(const SearchTower &tower) const {
+    const SearchAnt *tower_pick_target(const SearchTower &tower, int skipped_ant_id = -1) const {
         const SearchAnt *best = nullptr;
         int best_distance = std::numeric_limits<int>::max();
         for (const auto &ant : ants) {
             if (!ant.alive()) {
+                continue;
+            }
+            if (ant.ant_id == skipped_ant_id) {
                 continue;
             }
             const int distance = cell_distance_fast(tower.x, tower.y, ant.x, ant.y);
@@ -1819,7 +2728,7 @@ class DefenseSimulator {
                 const int nx = candidate.nx;
                 const int ny = candidate.ny;
                 const SearchTower *tower_target = tower_at(nx, ny);
-                double score = -1e18;
+                double score = -1e9;
                 if (tower_target != nullptr) {
                     score = std::isfinite(current_cost) ? -current_cost : 0.0;
                     score += 1.2 * static_cast<double>(std::min(ant_tower_attack_damage(ant), tower_target->hp));
@@ -1859,7 +2768,7 @@ class DefenseSimulator {
                 const int nx = candidate.nx;
                 const int ny = candidate.ny;
                 const SearchTower *tower_target = tower_at(nx, ny);
-                double score = -1e18;
+                double score = -1e9;
                 int best_tower_id = -1;
                 if (tower_target != nullptr) {
                     score = tower_attack_value(ant, *tower_target, static_cast<double>(ant.hp)) + 1.5;
@@ -1867,10 +2776,10 @@ class DefenseSimulator {
                     score -= 0.85 * static_cast<double>(tower_claim_count(best_tower_id));
                     score += ant_pheromone_weight(ant) * move_pheromone_score(ant.x, ant.y);
                     annotated_cells.push_back(IntPair{-1, -1});
-                } else if (!move_cache.tower_plans.empty()) {
+                } else if (!cached_tower_plans().empty()) {
                     const int candidate_index = cell_index_of(nx, ny);
-                    for (const auto &entry : move_cache.tower_plans) {
-                        const SearchTower *tower = tower_by_id(entry.tower_id);
+                    for (const auto &entry : cached_tower_plans()) {
+                        const SearchTower *tower = tower_for_plan(entry);
                         if (tower == nullptr) {
                             continue;
                         }
@@ -1914,7 +2823,7 @@ class DefenseSimulator {
 
         const bool has_annotations = annotated_cells.size() == candidate_count && annotated_towers.size() == candidate_count;
 
-        double max_score = -1e18;
+        double max_score = -1e9;
         for (int index = 0; index < candidate_count; ++index) {
             max_score = std::max(max_score, scores[index]);
         }
@@ -1992,8 +2901,9 @@ class DefenseSimulator {
             }
         }
 
-        if (sorted.options.size() > config().move_option_limit) {
-            sorted.options.resize(config().move_option_limit);
+        const int option_limit = std::max(1, move_option_limit);
+        if (sorted.options.size() > option_limit) {
+            sorted.options.resize(option_limit);
             if (sorted.annotated_cells.size() > sorted.options.size()) {
                 sorted.annotated_cells.resize(sorted.options.size());
             }
@@ -2022,14 +2932,22 @@ class DefenseSimulator {
         if (evaluated.options.empty()) {
             return kNoMove;
         }
-        double threshold = rng.next_double();
-        double cumulative = 0.0;
         int chosen_index = evaluated.options.size() - 1;
-        for (int index = 0; index < evaluated.options.size(); ++index) {
-            cumulative += evaluated.options[index].probability;
-            if (threshold <= cumulative) {
-                chosen_index = index;
-                break;
+        if (ant.behavior == AntBehavior::Conservative || ant.behavior == AntBehavior::ControlFree) {
+            for (int index = 0; index < evaluated.options.size(); ++index) {
+                if (evaluated.options[index].probability > evaluated.options[chosen_index].probability) {
+                    chosen_index = index;
+                }
+            }
+        } else {
+            double threshold = rng.next_double();
+            double cumulative = 0.0;
+            for (int index = 0; index < evaluated.options.size(); ++index) {
+                cumulative += evaluated.options[index].probability;
+                if (threshold <= cumulative) {
+                    chosen_index = index;
+                    break;
+                }
             }
         }
         if (record_annotation) {
@@ -2185,7 +3103,7 @@ class DefenseSimulator {
         purge_dead_towers();
 
         for (auto &tower : towers) {
-            if (!tower.alive() || emp_blocks(tower.x, tower.y)) {
+            if (!tower.alive() || is_producer_type(tower.tower_type) || emp_blocks(tower.x, tower.y)) {
                 continue;
             }
             if (tower.cooldown > 0) {
@@ -2208,8 +3126,10 @@ class DefenseSimulator {
                 return nullptr;
             };
 
-            if (tower.tower_type == TowerType::Mortar) {
-                        SearchAnt *center = find_ant(target_id);
+            if (tower.tower_type == TowerType::Mortar ||
+                tower.tower_type == TowerType::MortarPlus ||
+                tower.tower_type == TowerType::Missile) {
+                SearchAnt *center = find_ant(target_id);
                 if (center != nullptr) {
                     const int cx = center->x;
                     const int cy = center->y;
@@ -2217,6 +3137,24 @@ class DefenseSimulator {
                         if (ant.alive() && cell_distance_fast(ant.x, ant.y, cx, cy) <= tower.attack_range()) {
                             apply_tower_hit(tower, ant, rng);
                         }
+                    }
+                }
+            } else if (tower.tower_type == TowerType::Pulse) {
+                for (auto &ant : ants) {
+                    if (ant.alive() && cell_distance_fast(ant.x, ant.y, tower.x, tower.y) <= tower.attack_range()) {
+                        apply_tower_hit(tower, ant, rng);
+                    }
+                }
+            } else if (tower.tower_type == TowerType::Double) {
+                SearchAnt *first = find_ant(target_id);
+                if (first != nullptr) {
+                    apply_tower_hit(tower, *first, rng);
+                }
+                const SearchAnt *next_target = tower_pick_target(tower, target_id);
+                if (next_target != nullptr) {
+                    SearchAnt *second = find_ant(next_target->ant_id);
+                    if (second != nullptr) {
+                        apply_tower_hit(tower, *second, rng);
                     }
                 }
             } else if (tower.tower_type == TowerType::QuickPlus) {
@@ -2257,6 +3195,10 @@ class DefenseSimulator {
                 break;
             }
         }
+        const bool previous_scope_tower_paths = scope_tower_paths_to_current_move_phase;
+        const bool previous_limit_paths = limit_paths_to_current_move_phase_targets;
+        scope_tower_paths_to_current_move_phase = false;
+        limit_paths_to_current_move_phase_targets = limit_move_phase_paths_to_targets;
         if (need_enhanced_cache) {
             if (profile == nullptr) {
                 ensure_move_cache(true);
@@ -2311,14 +3253,22 @@ class DefenseSimulator {
                 ++profile->move_resolve_calls;
             }
         }
-        if (!config().ignore_periodic_random_move &&
+        if (!ignore_periodic_random_move &&
             need_enhanced_cache && kTeleportInterval > 0 && (round_index + 1) % kTeleportInterval == 0) {
             clear_move_cache();
+        }
+        const bool used_limited_paths = limit_paths_to_current_move_phase_targets && !previous_limit_paths;
+        scope_tower_paths_to_current_move_phase = previous_scope_tower_paths;
+        limit_paths_to_current_move_phase_targets = previous_limit_paths;
+        if (used_limited_paths) {
+            move_cache.move_cache_dirty = true;
+            move_cache.memo_tower_plan_data = nullptr;
+            move_cache.memo_tower_plan_count = 0;
         }
     }
 
     void teleport_phase(FastRng &rng) {
-        if (config().ignore_periodic_random_move) {
+        if (ignore_periodic_random_move) {
             return;
         }
         if (kTeleportInterval <= 0 || (round_index + 1) % kTeleportInterval != 0) {
@@ -2362,7 +3312,7 @@ class DefenseSimulator {
         }
     }
 
-    void manage_ants() {
+    bool manage_ants() {
         const auto [base_x, base_y] = kPlayerBases[player];
         auto update_trail = [&](const SearchAnt &ant, float delta) {
             if (profile == nullptr) {
@@ -2382,6 +3332,11 @@ class DefenseSimulator {
                 update_trail(ant, 10.0f);
                 if (base_hp <= 0) {
                     terminal = true;
+                    for (int tail_index = read_index + 1; tail_index < original_count; ++tail_index) {
+                        ants[write_index++] = ants[tail_index];
+                    }
+                    ants.resize(write_index);
+                    return false;
                 }
                 continue;
             }
@@ -2390,6 +3345,17 @@ class DefenseSimulator {
                 update_trail(ant, -5.0f);
                 continue;
             }
+            if (write_index != read_index) {
+                ants[write_index] = ant;
+            }
+            ++write_index;
+        }
+        ants.resize(write_index);
+
+        write_index = 0;
+        const int after_status_count = ants.size();
+        for (int read_index = 0; read_index < after_status_count; ++read_index) {
+            SearchAnt &ant = ants[read_index];
             if (ant.too_old()) {
                 update_trail(ant, -3.0f);
                 continue;
@@ -2400,6 +3366,7 @@ class DefenseSimulator {
             ++write_index;
         }
         ants.resize(write_index);
+        return true;
     }
 
     void spawn_enemy_ant(FastRng &rng) {
@@ -2448,13 +3415,13 @@ class DefenseSimulator {
             ++ant.age;
             ++ant.behavior_rounds;
             if (ant.behavior == AntBehavior::Random && ant.behavior_rounds >= kBehaviorDecayTurns) {
-                set_ant_behavior(ant, AntBehavior::Default);
+                set_ant_behavior(ant, AntBehavior::Default, -1, -1, true);
             } else if (ant.behavior == AntBehavior::Bewitched && ant.reached_target()) {
-                set_ant_behavior(ant, AntBehavior::Default);
+                set_ant_behavior(ant, AntBehavior::Default, -1, -1, true);
             } else if (ant.behavior_expiry > 0) {
                 --ant.behavior_expiry;
                 if (ant.behavior != AntBehavior::Default && ant.behavior != AntBehavior::Random && ant.behavior_expiry <= 0) {
-                    set_ant_behavior(ant, AntBehavior::Default);
+                    set_ant_behavior(ant, AntBehavior::Default, -1, -1, true);
                 }
             }
         }
@@ -2475,7 +3442,7 @@ class DefenseSimulator {
             for (int direction = 0; direction < 6; ++direction) {
                 const int nx = effect.x + kOffset[effect.y & 1][direction][0];
                 const int ny = effect.y + kOffset[effect.y & 1][direction][1];
-                if (is_valid_pos(nx, ny)) {
+                if (is_ant_walkable_cell(nx, ny)) {
                     cells[cell_count++] = IntPair{nx, ny};
                 }
             }
@@ -2566,13 +3533,15 @@ class DefenseSimulator {
             move_phase(rng, forced_moves);
             teleport_phase(rng);
             decay_pheromone();
-            manage_ants();
-            if (!ignore_enemy_spawns) {
-                spawn_enemy_ant(rng);
+            const bool should_continue = manage_ants();
+            if (should_continue) {
+                if (!ignore_enemy_spawns) {
+                    spawn_enemy_ant(rng);
+                }
+                increase_ant_age();
+                update_income();
+                update_effects(rng);
             }
-            increase_ant_age();
-            update_income();
-            update_effects(rng);
         } else {
             auto measure = [&](std::uint64_t &accumulator, auto &&fn) {
                 const std::uint64_t begin_ns = profile_now_ns();
@@ -2583,13 +3552,16 @@ class DefenseSimulator {
             measure(profile->move_ns, [&]() { move_phase(rng, forced_moves); });
             measure(profile->teleport_ns, [&]() { teleport_phase(rng); });
             measure(profile->pheromone_ns, [&]() { decay_pheromone(); });
-            measure(profile->manage_ns, [&]() { manage_ants(); });
-            if (!ignore_enemy_spawns) {
-                measure(profile->spawn_ns, [&]() { spawn_enemy_ant(rng); });
+            bool should_continue = true;
+            measure(profile->manage_ns, [&]() { should_continue = manage_ants(); });
+            if (should_continue) {
+                if (!ignore_enemy_spawns) {
+                    measure(profile->spawn_ns, [&]() { spawn_enemy_ant(rng); });
+                }
+                measure(profile->age_ns, [&]() { increase_ant_age(); });
+                measure(profile->income_ns, [&]() { update_income(); });
+                measure(profile->effects_ns, [&]() { update_effects(rng); });
             }
-            measure(profile->age_ns, [&]() { increase_ant_age(); });
-            measure(profile->income_ns, [&]() { update_income(); });
-            measure(profile->effects_ns, [&]() { update_effects(rng); });
             ++profile->rounds;
         }
         ++round_index;

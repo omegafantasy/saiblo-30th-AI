@@ -26,6 +26,18 @@ constexpr int kSpecialBehaviorDecayTurns = 5;
 constexpr std::uint64_t kRngMask = (1ULL << 48) - 1;
 constexpr std::uint64_t kRngMultiplier = 25214903917ULL;
 constexpr double kSpawnBehaviorProbs[4] = {0.4, 0.35, 0.10, 0.15};
+constexpr double DEFAULT_MOVE_TEMPERATURE = 1.75;
+constexpr double BEWITCH_MOVE_TEMPERATURE = 1.5;
+constexpr double WORKER_RESERVATION_WEIGHT = 1.40;
+constexpr double WORKER_TOWER_CLAIM_WEIGHT = 1.00;
+constexpr double WORKER_BLOCKED_ATTACK_BONUS = 6.00;
+constexpr double WORKER_ROUTE_IMPROVEMENT_EPS = 0.50;
+constexpr double COMBAT_RESERVATION_WEIGHT = 0.45;
+constexpr double COMBAT_TOWER_CLAIM_WEIGHT = 0.85;
+constexpr double COMBAT_TRAVEL_COST_WEIGHT = 0.90;
+constexpr double ATTACK_FINISH_BONUS = 3.00;
+constexpr double ENHANCED_COMBAT_ATTACK_EXECUTION_BONUS = 1.50;
+constexpr double WORKER_REROUTE_ATTACK_PENALTY_WEIGHT = 1.0;
 
 struct NativeSpawnProfile {
     ::Ant::Kind kind;
@@ -350,6 +362,300 @@ struct sdk::NativeSimulator::Impl {
         return out;
     }
 
+    std::vector<sdk::NativeAntMoveDebug> move_debug_for_player(int player_id) const {
+        Impl scratch(*this);
+        Game &game = scratch.game;
+        game.ensure_enhanced_move_cache();
+        std::vector<sdk::NativeAntMoveDebug> out;
+        for (const auto &ant : game.ants) {
+            if (ant.get_player() != player_id || ant.get_status() != ::Ant::Status::Alive) {
+                continue;
+            }
+            std::vector<std::tuple<int, int, int>> candidates = game.legal_move_candidates(ant);
+            sdk::NativeAntMoveDebug row;
+            row.ant_id = ant.get_id();
+            row.x = ant.get_x();
+            row.y = ant.get_y();
+            row.hp = ant.get_hp();
+            row.last_move = ant.get_last_move();
+            row.behavior = static_cast<sdk::AntBehavior>(static_cast<int>(ant.get_behavior()));
+            row.kind = static_cast<sdk::AntKind>(static_cast<int>(ant.get_kind()));
+            if (candidates.empty()) {
+                out.push_back(std::move(row));
+                continue;
+            }
+            if (ant.get_behavior() == ::Ant::Behavior::Randomized) {
+                const double probability = 1.0 / static_cast<double>(std::max(1, static_cast<int>(candidates.size())));
+                for (const auto &candidate : candidates) {
+                    row.options.push_back(sdk::NativeMoveOptionDebug{
+                        std::get<0>(candidate),
+                        std::get<1>(candidate),
+                        std::get<2>(candidate),
+                        0.0,
+                        0.0,
+                        probability,
+                        std::get<1>(candidate),
+                        std::get<2>(candidate),
+                        -1,
+                    });
+                }
+                out.push_back(std::move(row));
+                continue;
+            }
+
+            if (ant.get_behavior() == ::Ant::Behavior::Bewitched) {
+                Pos target = ant.target_x >= 0 && ant.target_y >= 0
+                                 ? Pos(ant.target_x, ant.target_y)
+                                 : (ant.get_player() ? Pos(PLAYER_0_BASE_CAMP_X, PLAYER_0_BASE_CAMP_Y)
+                                                     : Pos(PLAYER_1_BASE_CAMP_X, PLAYER_1_BASE_CAMP_Y));
+                std::vector<double> damage_scores =
+                    game.directional_field_scores(ant, candidates, game.damage_risk_field);
+                std::vector<double> control_scores =
+                    game.directional_field_scores(ant, candidates, game.control_risk_field);
+                std::vector<double> effect_scores =
+                    game.directional_field_scores(ant, candidates, game.effect_pull_field);
+                if (ant.is_control_immune()) {
+                    std::fill(control_scores.begin(), control_scores.end(), 0.0);
+                }
+                std::vector<double> scores(candidates.size(), 0.0);
+                std::vector<double> raw_scores(candidates.size(), 0.0);
+                for (int index = 0; index < static_cast<int>(candidates.size()); ++index) {
+                    const int direction = std::get<0>(candidates[index]);
+                    const int nx = std::get<1>(candidates[index]);
+                    const int ny = std::get<2>(candidates[index]);
+                    const DefenseTower *tower_target = game.enemy_tower_at(ant.get_player(), nx, ny);
+                    const int eval_x = tower_target != nullptr ? ant.get_x() : nx;
+                    const int eval_y = tower_target != nullptr ? ant.get_y() : ny;
+                    const double progress = game.move_progress_score(ant, eval_x, eval_y, target);
+                    const double pheromone = game.move_pheromone_score(ant, eval_x, eval_y);
+                    const double tower_pull = game.tower_pull_score(ant, eval_x, eval_y, tower_target);
+                    const double score = ant.move_weights.progress * progress +
+                                         ant.move_weights.pheromone * pheromone -
+                                         ant.move_weights.crowding * game.crowding_penalty(ant, eval_x, eval_y) -
+                                         ant.move_weights.expected_damage * damage_scores[index] -
+                                         ant.move_weights.control_risk * control_scores[index] +
+                                         ant.move_weights.tower_pull * tower_pull +
+                                         ant.move_weights.effect_pull * effect_scores[index] +
+                                         (tower_target != nullptr ? 4.0 : 0.0);
+                    scores[index] = score;
+                    raw_scores[index] = score + effect_scores[index];
+                    row.options.push_back(sdk::NativeMoveOptionDebug{
+                        direction,
+                        nx,
+                        ny,
+                        score,
+                        raw_scores[index],
+                        0.0,
+                        tower_target != nullptr ? -1 : nx,
+                        tower_target != nullptr ? -1 : ny,
+                        tower_target != nullptr ? tower_target->get_id() : -1,
+                    });
+                }
+                if (ant.get_behavior() == ::Ant::Behavior::Conservative ||
+                    ant.get_behavior() == ::Ant::Behavior::ControlFree) {
+                    int best = 0;
+                    for (int index = 1; index < static_cast<int>(scores.size()); ++index) {
+                        if (scores[index] > scores[best] ||
+                            (scores[index] == scores[best] && raw_scores[index] > raw_scores[best])) {
+                            best = index;
+                        }
+                    }
+                    for (int index = 0; index < static_cast<int>(row.options.size()); ++index) {
+                        row.options[static_cast<std::size_t>(index)].probability = index == best ? 1.0 : 0.0;
+                    }
+                } else {
+                    const double temperature = BEWITCH_MOVE_TEMPERATURE;
+                    const double max_score = *std::max_element(scores.begin(), scores.end());
+                    double total = 0.0;
+                    for (double score : scores) {
+                        total += std::exp((score - max_score) / temperature);
+                    }
+                    for (int index = 0; index < static_cast<int>(row.options.size()); ++index) {
+                        row.options[static_cast<std::size_t>(index)].probability =
+                            total > 0.0 ? std::exp((scores[index] - max_score) / temperature) / total : 0.0;
+                    }
+                }
+                out.push_back(std::move(row));
+                continue;
+            }
+
+            std::vector<double> scores;
+            std::vector<double> raw_scores;
+            std::vector<std::pair<int, int>> annotated_cells;
+            std::vector<int> annotated_towers;
+            scores.reserve(candidates.size());
+            raw_scores.reserve(candidates.size());
+            annotated_cells.reserve(candidates.size());
+            annotated_towers.reserve(candidates.size());
+
+            if (!ant.is_combat_ant()) {
+                const double current_cost =
+                    game.enhanced_worker_costs[ant.get_player()][ant.get_x()][ant.get_y()];
+                double best_walk_remaining = std::numeric_limits<double>::infinity();
+                for (const auto &candidate : candidates) {
+                    const int nx = std::get<1>(candidate);
+                    const int ny = std::get<2>(candidate);
+                    if (game.enemy_tower_at(ant.get_player(), nx, ny) != nullptr) {
+                        continue;
+                    }
+                    best_walk_remaining = std::min(best_walk_remaining, game.enhanced_worker_costs[ant.get_player()][nx][ny]);
+                }
+                const double reroute_gain =
+                    (std::isfinite(current_cost) && std::isfinite(best_walk_remaining))
+                        ? std::max(0.0, current_cost - best_walk_remaining)
+                        : 0.0;
+                const bool blocked = !std::isfinite(best_walk_remaining) || !std::isfinite(current_cost) ||
+                                     (current_cost - best_walk_remaining <= WORKER_ROUTE_IMPROVEMENT_EPS);
+                for (const auto &candidate : candidates) {
+                    const int nx = std::get<1>(candidate);
+                    const int ny = std::get<2>(candidate);
+                    const DefenseTower *tower_target = game.enemy_tower_at(ant.get_player(), nx, ny);
+                    double score = -1e9;
+                    if (tower_target != nullptr) {
+                        score = std::isfinite(current_cost) ? -current_cost : 0.0;
+                        score += 1.2 * std::min(ant.get_tower_attack_damage(), tower_target->get_hp());
+                        if (tower_target->get_hp() <= ant.get_tower_attack_damage()) {
+                            score += ATTACK_FINISH_BONUS;
+                        }
+                        if (blocked) {
+                            score += WORKER_BLOCKED_ATTACK_BONUS;
+                        } else {
+                            score -= WORKER_REROUTE_ATTACK_PENALTY_WEIGHT * reroute_gain;
+                        }
+                        auto claim_it = game.enhanced_tower_claims[ant.get_player()].find(tower_target->get_id());
+                        if (claim_it != game.enhanced_tower_claims[ant.get_player()].end()) {
+                            score -= WORKER_TOWER_CLAIM_WEIGHT * claim_it->second;
+                        }
+                        score += ant.move_weights.pheromone * game.move_pheromone_score(ant, ant.get_x(), ant.get_y());
+                        annotated_cells.emplace_back(-1, -1);
+                        annotated_towers.push_back(tower_target->get_id());
+                    } else {
+                        const double remaining = game.enhanced_worker_costs[ant.get_player()][nx][ny];
+                        if (std::isfinite(remaining)) {
+                            score = -remaining;
+                            score -= WORKER_RESERVATION_WEIGHT * game.enhanced_reservations[ant.get_player()][nx][ny];
+                            score -= 0.25 * game.crowding_penalty(ant, nx, ny);
+                            score += ant.move_weights.pheromone * game.move_pheromone_score(ant, nx, ny);
+                        }
+                        annotated_cells.emplace_back(nx, ny);
+                        annotated_towers.push_back(-1);
+                    }
+                    scores.push_back(score);
+                    raw_scores.push_back(score);
+                }
+            } else {
+                std::vector<const DefenseTower *> enemy_towers;
+                for (const auto &tower : game.defensive_towers) {
+                    if (!tower.destroy() && tower.get_player() != ant.get_player()) {
+                        enemy_towers.push_back(&tower);
+                    }
+                }
+                for (const auto &candidate : candidates) {
+                    const int nx = std::get<1>(candidate);
+                    const int ny = std::get<2>(candidate);
+                    const DefenseTower *tower_target = game.enemy_tower_at(ant.get_player(), nx, ny);
+                    double score = -1e9;
+                    int best_tower_id = -1;
+                    if (tower_target != nullptr) {
+                        score = game.tower_attack_value(ant, *tower_target, ant.get_hp());
+                        score += ENHANCED_COMBAT_ATTACK_EXECUTION_BONUS;
+                        auto claim_it = game.enhanced_tower_claims[ant.get_player()].find(tower_target->get_id());
+                        if (claim_it != game.enhanced_tower_claims[ant.get_player()].end()) {
+                            score -= COMBAT_TOWER_CLAIM_WEIGHT * claim_it->second;
+                        }
+                        score += ant.move_weights.pheromone * game.move_pheromone_score(ant, ant.get_x(), ant.get_y());
+                        best_tower_id = tower_target->get_id();
+                        annotated_cells.emplace_back(-1, -1);
+                    } else if (!enemy_towers.empty()) {
+                        for (const DefenseTower *tower : enemy_towers) {
+                            const Game::TowerPathPlan *plan = game.tower_plan_for(ant.get_player(), tower->get_id());
+                            if (plan == nullptr) {
+                                continue;
+                            }
+                            const double travel_cost = plan->plan.total_cost[nx][ny];
+                            if (!std::isfinite(travel_cost)) {
+                                continue;
+                            }
+                            const double travel_damage = plan->plan.damage_cost[nx][ny];
+                            const double arrival_hp = ant.get_hp() - travel_damage;
+                            double utility = game.tower_attack_value(ant, *tower, arrival_hp);
+                            utility -= COMBAT_TRAVEL_COST_WEIGHT * travel_cost;
+                            auto claim_it = game.enhanced_tower_claims[ant.get_player()].find(tower->get_id());
+                            if (claim_it != game.enhanced_tower_claims[ant.get_player()].end()) {
+                                utility -= COMBAT_TOWER_CLAIM_WEIGHT * claim_it->second;
+                            }
+                            if (utility > score) {
+                                score = utility;
+                                best_tower_id = tower->get_id();
+                            }
+                        }
+                        if (std::isfinite(score)) {
+                            score -= COMBAT_RESERVATION_WEIGHT * game.enhanced_reservations[ant.get_player()][nx][ny];
+                            score += ant.move_weights.pheromone * game.move_pheromone_score(ant, nx, ny);
+                        }
+                        annotated_cells.emplace_back(nx, ny);
+                    } else {
+                        const double remaining = game.enhanced_combat_base_costs[ant.get_player()][nx][ny];
+                        if (std::isfinite(remaining)) {
+                            score = -remaining;
+                            score -= COMBAT_RESERVATION_WEIGHT * game.enhanced_reservations[ant.get_player()][nx][ny];
+                            score += ant.move_weights.pheromone * game.move_pheromone_score(ant, nx, ny);
+                        }
+                        annotated_cells.emplace_back(nx, ny);
+                    }
+                    annotated_towers.push_back(best_tower_id);
+                    scores.push_back(score);
+                    raw_scores.push_back(score);
+                }
+            }
+
+            if (ant.get_behavior() == ::Ant::Behavior::Conservative ||
+                ant.get_behavior() == ::Ant::Behavior::ControlFree) {
+                int best = 0;
+                for (int index = 1; index < static_cast<int>(scores.size()); ++index) {
+                    if (scores[index] > scores[best] ||
+                        (scores[index] == scores[best] && raw_scores[index] > raw_scores[best])) {
+                        best = index;
+                    }
+                }
+                for (int index = 0; index < static_cast<int>(candidates.size()); ++index) {
+                    row.options.push_back(sdk::NativeMoveOptionDebug{
+                        std::get<0>(candidates[index]),
+                        std::get<1>(candidates[index]),
+                        std::get<2>(candidates[index]),
+                        scores[index],
+                        raw_scores[index],
+                        index == best ? 1.0 : 0.0,
+                        annotated_cells[index].first,
+                        annotated_cells[index].second,
+                        annotated_towers[index],
+                    });
+                }
+            } else {
+                const double max_score = *std::max_element(scores.begin(), scores.end());
+                double total = 0.0;
+                for (double score : scores) {
+                    total += std::exp((score - max_score) / DEFAULT_MOVE_TEMPERATURE);
+                }
+                for (int index = 0; index < static_cast<int>(candidates.size()); ++index) {
+                    row.options.push_back(sdk::NativeMoveOptionDebug{
+                        std::get<0>(candidates[index]),
+                        std::get<1>(candidates[index]),
+                        std::get<2>(candidates[index]),
+                        scores[index],
+                        raw_scores[index],
+                        total > 0.0 ? std::exp((scores[index] - max_score) / DEFAULT_MOVE_TEMPERATURE) / total : 0.0,
+                        annotated_cells[index].first,
+                        annotated_cells[index].second,
+                        annotated_towers[index],
+                    });
+                }
+            }
+            out.push_back(std::move(row));
+        }
+        return out;
+    }
+
     std::vector<sdk::Operation> apply_operation_list(int player_id, const std::vector<sdk::Operation> &operations) {
         std::vector<sdk::Operation> illegal;
         illegal.reserve(operations.size());
@@ -549,11 +855,13 @@ struct sdk::NativeSimulator::Impl {
         }
     }
 
-    sdk::ResolveResult advance_round_without_base_spawns() {
+    sdk::ResolveResult advance_round_without_base_spawns_impl(bool apply_periodic_teleport) {
         if (!game.is_end) {
             game.attack_ants();
             game.move_ants();
-            game.teleport_ants();
+            if (apply_periodic_teleport) {
+                game.teleport_ants();
+            }
             game.update_pheromone();
             const bool should_continue = game.manage_ants();
             if (!should_continue) {
@@ -579,6 +887,14 @@ struct sdk::NativeSimulator::Impl {
         return out;
     }
 
+    sdk::ResolveResult advance_round_without_base_spawns() {
+        return advance_round_without_base_spawns_impl(true);
+    }
+
+    sdk::ResolveResult advance_round_without_base_spawns_no_teleport() {
+        return advance_round_without_base_spawns_impl(false);
+    }
+
     void sync_public_round_state(const sdk::PublicRoundState &state) {
         const std::unordered_map<int, ::Ant> previous_ants = [&]() {
             std::unordered_map<int, ::Ant> ants_by_id;
@@ -598,12 +914,26 @@ struct sdk::NativeSimulator::Impl {
         game.base_camp0.ant_level = state.anthp_lv[0];
         game.base_camp1.ant_level = state.anthp_lv[1];
 
-        game.defensive_towers.clear();
-        std::array<int, 2> tower_counts = {0, 0};
         int max_tower_id = 0;
         for (const auto &row : state.towers) {
-            game.defensive_towers.emplace_back(row.x, row.y, row.player, row.tower_id, 0);
-            auto &tower = game.defensive_towers.back();
+            if (row.tower_id >= 0) {
+                max_tower_id = std::max(max_tower_id, row.tower_id + 1);
+            }
+        }
+
+        game.defensive_towers.clear();
+        for (int tower_id = 0; tower_id < max_tower_id; ++tower_id) {
+            game.defensive_towers.emplace_back(0, 0, 0, tower_id, 0);
+            game.defensive_towers.back().set_destroy();
+        }
+
+        std::array<int, 2> tower_counts = {0, 0};
+        for (const auto &row : state.towers) {
+            if (row.tower_id < 0 || row.tower_id >= static_cast<int>(game.defensive_towers.size())) {
+                continue;
+            }
+            game.defensive_towers[row.tower_id] = DefenseTower(row.x, row.y, row.player, row.tower_id, 0);
+            auto &tower = game.defensive_towers[row.tower_id];
             const auto native_type = static_cast<::TowerType>(static_cast<int>(row.tower_type));
             if (native_type != ::TowerType::Basic) {
                 tower.upgrade(native_type);
@@ -616,7 +946,6 @@ struct sdk::NativeSimulator::Impl {
             if (row.player >= 0 && row.player < 2) {
                 ++tower_counts[row.player];
             }
-            max_tower_id = std::max(max_tower_id, row.tower_id + 1);
         }
         game.tower_id = max_tower_id;
         game.player0.coin.tower_building_price = tower_build_cost_for_count(tower_counts[0]);
@@ -789,6 +1118,10 @@ std::vector<sdk::NativeAntHiddenState> sdk::NativeSimulator::ant_hidden_states()
     return impl_->ant_hidden_states();
 }
 
+std::vector<sdk::NativeAntMoveDebug> sdk::NativeSimulator::move_debug_for_player(int player) const {
+    return impl_->move_debug_for_player(player);
+}
+
 std::array<std::array<double, sdk::kMapSize>, sdk::kMapSize> sdk::NativeSimulator::pheromone_for_player(int player) const {
     std::array<std::array<double, sdk::kMapSize>, sdk::kMapSize> out{};
     if (player < 0 || player >= 2) {
@@ -834,6 +1167,10 @@ sdk::ResolveResult sdk::NativeSimulator::advance_round() {
 
 sdk::ResolveResult sdk::NativeSimulator::advance_round_without_base_spawns() {
     return impl_->advance_round_without_base_spawns();
+}
+
+sdk::ResolveResult sdk::NativeSimulator::advance_round_without_base_spawns_no_teleport() {
+    return impl_->advance_round_without_base_spawns_no_teleport();
 }
 
 sdk::ResolveResult sdk::NativeSimulator::resolve_turn(const std::vector<sdk::Operation> &ops0,

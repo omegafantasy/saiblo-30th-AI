@@ -10,7 +10,7 @@ struct RandomSearchTuning {
     int defense_plan_rollout_step = 20;
     int defense_horizon = 8;
     int important_ant_limit = 3;
-    int move_option_limit = 3;
+    int move_option_limit = 6;
     int lightning_center_limit = 10;
     int lightning_rollouts_per_center = 20;
     int lightning_horizon = 10;

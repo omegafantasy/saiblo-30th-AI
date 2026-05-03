@@ -65,8 +65,18 @@ void log_operations(ProtocolIO &io, const std::string &prefix, const std::vector
 bool receive_and_apply_opponent(AiRuntime &runtime, ProtocolIO &io) {
     try {
         const auto operations = io.recv_operations();
+        PublicState public_before = runtime.public_state.clone();
         const auto native_illegal = runtime.simulator.apply_operation_list(runtime.opponent, operations);
         log_operations(io, "opponent operations rejected by native mirror", native_illegal);
+        if (!native_illegal.empty()) {
+            auto public_fallback = public_before.clone();
+            const auto public_illegal = public_fallback.apply_operation_list(runtime.opponent, operations);
+            log_operations(io, "opponent operations rejected by public fallback", public_illegal);
+            if (public_illegal.empty()) {
+                io.log("opponent native mirror rejected operations; resyncing from public fallback");
+                runtime.simulator.sync_public_round_state(public_fallback.to_public_round_state());
+            }
+        }
         runtime.public_state.sync_public_round_state(runtime.simulator.to_public_round_state());
         runtime.opponent_ops_already_applied = true;
         return true;
@@ -112,9 +122,20 @@ void perform_self_turn(AiRuntime &runtime, ProtocolIO &io) {
         }
     }
     log_operations(io, "self proposed operations rejected by public mirror", rejected_by_public);
+    PublicState public_after = runtime.public_state.clone();
+    const auto public_illegal = public_after.apply_operation_list(runtime.player, accepted);
+    log_operations(io, "self accepted operations rejected by public replay", public_illegal);
     const auto native_illegal = runtime.simulator.apply_operation_list(runtime.player, accepted);
     log_operations(io, "self accepted operations rejected by native mirror", native_illegal);
-    runtime.public_state.sync_public_round_state(runtime.simulator.to_public_round_state());
+    if (!native_illegal.empty() && public_illegal.empty()) {
+        io.log("self native mirror rejected public-accepted operations; resyncing from public accepted state");
+        runtime.simulator.sync_public_round_state(public_after.to_public_round_state());
+    }
+    if (public_illegal.empty()) {
+        runtime.public_state.sync_public_round_state(public_after.to_public_round_state());
+    } else {
+        runtime.public_state.sync_public_round_state(runtime.simulator.to_public_round_state());
+    }
     io.send_operations(accepted);
 }
 

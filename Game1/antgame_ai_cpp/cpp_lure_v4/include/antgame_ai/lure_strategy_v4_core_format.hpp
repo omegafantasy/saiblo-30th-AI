@@ -171,9 +171,10 @@ inline std::string own_tower_state_text(const PublicState &state, int player) {
 
 inline std::string sim_enemy_ant_state_text(const rs::DefenseSimulator &simulator) {
     std::ostringstream oss;
+    const auto [base_x, base_y] = kPlayerBases[simulator.player];
     bool first = true;
     for (const auto &ant : simulator.ants) {
-        if (!ant.alive()) {
+        if (!ant.alive() || ant.too_old() || (ant.x == base_x && ant.y == base_y)) {
             continue;
         }
         if (!first) {

@@ -18,6 +18,31 @@ inline std::vector<Operation> strip_lightning_operations(const std::vector<Opera
     return out;
 }
 
+inline void mark_rollout_max_round_terminal(rs::DefenseSimulator &simulator) {
+    if (simulator.round_index >= kMaxRound) {
+        simulator.terminal = true;
+    }
+}
+
+inline void simulate_rollout_round(
+    rs::DefenseSimulator &simulator,
+    rs::FastRng &rng,
+    const rs::FixedList<rs::ForcedMove, rs::kMaxImportantAnts> *forced_moves = nullptr) {
+    if (simulator.terminal) {
+        return;
+    }
+    mark_rollout_max_round_terminal(simulator);
+    if (simulator.terminal) {
+        return;
+    }
+    if (forced_moves != nullptr) {
+        simulator.simulate_round(rng, *forced_moves);
+    } else {
+        simulator.simulate_round(rng);
+    }
+    mark_rollout_max_round_terminal(simulator);
+}
+
 inline double lightning_counterfactual_bonus(
     const rs::DefenseSimulator &with_lightning,
     const rs::DefenseSimulator &without_lightning) {
@@ -84,11 +109,7 @@ inline RolloutEvaluation rollout_plan_score_from_applied_root(
     const rs::FixedList<rs::ForcedMove, rs::kMaxImportantAnts> *first_round_forced_moves) {
     rs::DefenseSimulator simulator = post_plan_root.clone();
     rs::FastRng rng(rollout_seed);
-    if (first_round_forced_moves != nullptr) {
-        simulator.simulate_round(rng, *first_round_forced_moves);
-    } else {
-        simulator.simulate_round(rng);
-    }
+    simulate_rollout_round(simulator, rng, first_round_forced_moves);
     RolloutEvaluation out;
     if (plan.has_lightning) {
         rs::DefenseSimulator control = pre_plan_root.clone();
@@ -96,11 +117,7 @@ inline RolloutEvaluation rollout_plan_score_from_applied_root(
             apply_operations(control, strip_lightning_operations(plan.ops));
         }
         rs::FastRng control_rng(rollout_seed);
-        if (first_round_forced_moves != nullptr) {
-            control.simulate_round(control_rng, *first_round_forced_moves);
-        } else {
-            control.simulate_round(control_rng);
-        }
+        simulate_rollout_round(control, control_rng, first_round_forced_moves);
         out.lightning_bonus_raw = lightning_counterfactual_bonus(simulator, control) + plan.lightning_static_bonus;
         out.lightning_bonus_score = out.lightning_bonus_raw;
     }
@@ -126,7 +143,7 @@ inline RolloutEvaluation rollout_plan_score_from_applied_root(
         } else {
             reactive_penalty += apply_reactive_turn_operations_with_penalty(simulator, player);
         }
-        simulator.simulate_round(rng);
+        simulate_rollout_round(simulator, rng);
         ++step;
         capture_mid_eval();
     }

@@ -26,6 +26,29 @@ struct NativeAntHiddenState {
     std::array<std::uint64_t, kTrailMaskWords> trail_mask{};
 };
 
+struct NativeMoveOptionDebug {
+    int direction = -1;
+    int x = -1;
+    int y = -1;
+    double score = 0.0;
+    double raw_score = 0.0;
+    double probability = 0.0;
+    int annotated_x = -1;
+    int annotated_y = -1;
+    int annotated_tower_id = -1;
+};
+
+struct NativeAntMoveDebug {
+    int ant_id = -1;
+    int x = -1;
+    int y = -1;
+    int hp = 0;
+    int last_move = -1;
+    AntBehavior behavior = AntBehavior::Default;
+    AntKind kind = AntKind::Worker;
+    std::vector<NativeMoveOptionDebug> options;
+};
+
 struct ResolveResult {
     bool terminal = false;
     int winner = -1;
@@ -61,6 +84,7 @@ class NativeSimulator {
     bool terminal() const;
     int winner() const;
     std::vector<NativeAntHiddenState> ant_hidden_states() const;
+    std::vector<NativeAntMoveDebug> move_debug_for_player(int player) const;
     std::array<std::array<double, kMapSize>, kMapSize> pheromone_for_player(int player) const;
     const std::string &movement_policy() const;
     uint64_t seed() const;
@@ -71,6 +95,7 @@ class NativeSimulator {
     std::vector<Operation> apply_operation_list(int player, const std::vector<Operation> &operations);
     ResolveResult advance_round();
     ResolveResult advance_round_without_base_spawns();
+    ResolveResult advance_round_without_base_spawns_no_teleport();
     ResolveResult resolve_turn(const std::vector<Operation> &ops0, const std::vector<Operation> &ops1);
     void sync_public_round_state(const PublicRoundState &state);
 

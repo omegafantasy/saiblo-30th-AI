@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -95,6 +96,12 @@ json v4_tuning_to_json() {
         {"action_target_rollouts_per_action", tuning.action_target_rollouts_per_action},
         {"action_max_rollouts_per_batch", tuning.action_max_rollouts_per_batch},
         {"action_time_budget_ms", tuning.action_time_budget_ms},
+        {"rollout_static_risk_cache_enabled", tuning.rollout_static_risk_cache_enabled},
+        {"rollout_static_risk_cache_entries", tuning.rollout_static_risk_cache_entries},
+        {"rollout_reverse_path_cache_enabled", tuning.rollout_reverse_path_cache_enabled},
+        {"rollout_reverse_path_cache_entries", tuning.rollout_reverse_path_cache_entries},
+        {"rollout_move_cache_memo_enabled", tuning.rollout_move_cache_memo_enabled},
+        {"rollout_move_cache_memo_entries", tuning.rollout_move_cache_memo_entries},
         {"lightning_ucb_total_rollouts", tuning.lightning_ucb_total_rollouts},
         {"lightning_ucb_batch_rollouts", tuning.lightning_ucb_batch_rollouts},
         {"lightning_ucb_exploration", tuning.lightning_ucb_exploration},
@@ -178,6 +185,27 @@ void apply_bool_override(const json &overrides, const char *name, bool &target) 
     target = parse_bool_override(overrides.at(name), target);
 }
 
+int parse_int_override(const json &value, int fallback) {
+    if (value.is_number_integer()) {
+        return value.get<int>();
+    }
+    if (value.is_string()) {
+        try {
+            return std::stoi(value.get<std::string>());
+        } catch (const std::exception &) {
+            return fallback;
+        }
+    }
+    return fallback;
+}
+
+void apply_int_override(const json &overrides, const char *name, int &target) {
+    if (!overrides.contains(name)) {
+        return;
+    }
+    target = parse_int_override(overrides.at(name), target);
+}
+
 void apply_strategy_overrides(const json &request) {
     reset_v4_lure_config();
     if (!request.contains("strategy_overrides") || !request.at("strategy_overrides").is_object()) {
@@ -187,6 +215,19 @@ void apply_strategy_overrides(const json &request) {
     const json &overrides = request.at("strategy_overrides");
     apply_bool_override(overrides, "future_threat_eval_enabled", tuning.future_threat_eval_enabled);
     apply_bool_override(overrides, "hold_followup_enabled", tuning.hold_followup_enabled);
+    apply_bool_override(overrides, "rollout_static_risk_cache_enabled", tuning.rollout_static_risk_cache_enabled);
+    apply_int_override(overrides, "rollout_static_risk_cache_entries", tuning.rollout_static_risk_cache_entries);
+    apply_bool_override(overrides, "rollout_reverse_path_cache_enabled", tuning.rollout_reverse_path_cache_enabled);
+    apply_int_override(overrides, "rollout_reverse_path_cache_entries", tuning.rollout_reverse_path_cache_entries);
+    apply_bool_override(overrides, "rollout_move_cache_memo_enabled", tuning.rollout_move_cache_memo_enabled);
+    apply_int_override(overrides, "rollout_move_cache_memo_entries", tuning.rollout_move_cache_memo_entries);
+    apply_int_override(overrides, "action_target_time_ms", tuning.action_target_time_ms);
+    apply_int_override(overrides, "action_time_budget_ms", tuning.action_time_budget_ms);
+    apply_int_override(overrides, "action_probe_min_samples", tuning.action_probe_min_samples);
+    apply_int_override(overrides, "action_target_rollouts_per_action", tuning.action_target_rollouts_per_action);
+    apply_int_override(overrides, "action_max_rollouts_per_batch", tuning.action_max_rollouts_per_batch);
+    apply_int_override(overrides, "lightning_ucb_total_rollouts", tuning.lightning_ucb_total_rollouts);
+    apply_int_override(overrides, "lightning_ucb_batch_rollouts", tuning.lightning_ucb_batch_rollouts);
 }
 
 const char *tower_type_name(TowerType type) {
@@ -435,6 +476,205 @@ json defense_sim_to_json(const rs::DefenseSimulator &simulator) {
     return out;
 }
 
+json native_move_debug_to_json(const NativeAntMoveDebug &row) {
+    json out;
+    out["ant_id"] = row.ant_id;
+    out["x"] = row.x;
+    out["y"] = row.y;
+    out["hp"] = row.hp;
+    out["last_move"] = row.last_move;
+    out["behavior"] = static_cast<int>(row.behavior);
+    out["behavior_name"] = behavior_name(row.behavior);
+    out["kind"] = static_cast<int>(row.kind);
+    out["kind_name"] = kind_name(row.kind);
+    out["options"] = json::array();
+    for (const auto &option : row.options) {
+        out["options"].push_back({
+            {"direction", option.direction},
+            {"nx", option.x},
+            {"ny", option.y},
+            {"score", option.score},
+            {"raw_score", option.raw_score},
+            {"probability", option.probability},
+            {"annotated_x", option.annotated_x},
+            {"annotated_y", option.annotated_y},
+            {"annotated_tower_id", option.annotated_tower_id},
+        });
+    }
+    return out;
+}
+
+json simulator_move_debug_to_json(rs::DefenseSimulator &simulator) {
+    json rows = json::array();
+    simulator.ensure_move_cache(true);
+    for (const auto &ant : simulator.ants) {
+        if (!ant.alive() || ant.too_old() || ant.is_frozen) {
+            continue;
+        }
+        const auto evaluated = simulator.evaluate_move_options(ant);
+        json row = search_ant_to_json(ant);
+        row["options"] = json::array();
+        for (int index = 0; index < evaluated.options.size(); ++index) {
+            const auto &option = evaluated.options[index];
+            row["options"].push_back({
+                {"direction", option.direction},
+                {"nx", option.nx},
+                {"ny", option.ny},
+                {"probability", option.probability},
+                {"danger", option.danger},
+                {"annotated_x", index < evaluated.annotated_cells.size() ? evaluated.annotated_cells[index].first : -1},
+                {"annotated_y", index < evaluated.annotated_cells.size() ? evaluated.annotated_cells[index].second : -1},
+                {"annotated_tower_id", index < evaluated.annotated_towers.size() ? evaluated.annotated_towers[index] : -1},
+            });
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+json move_probability_delta_json(const json &sim_rows, const json &native_rows) {
+    json out = json::array();
+    for (const auto &sim_row : sim_rows) {
+        const int ant_id = sim_row.value("id", -1);
+        const json *native_row = nullptr;
+        for (const auto &candidate : native_rows) {
+            if (candidate.value("ant_id", -2) == ant_id) {
+                native_row = &candidate;
+                break;
+            }
+        }
+        if (native_row == nullptr) {
+            continue;
+        }
+        json row;
+        row["ant_id"] = ant_id;
+        row["sim"] = sim_row;
+        row["native"] = *native_row;
+        row["option_delta"] = json::array();
+        for (const auto &native_option : (*native_row)["options"]) {
+            const int direction = native_option.value("direction", -99);
+            double sim_probability = 0.0;
+            for (const auto &sim_option : sim_row["options"]) {
+                if (sim_option.value("direction", -98) == direction) {
+                    sim_probability = sim_option.value("probability", 0.0);
+                    break;
+                }
+            }
+            const double native_probability = native_option.value("probability", 0.0);
+            row["option_delta"].push_back({
+                {"direction", direction},
+                {"native_probability", native_probability},
+                {"sim_probability", sim_probability},
+                {"sim_minus_native", sim_probability - native_probability},
+            });
+        }
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+json public_defense_projection_summary(const PublicRoundState &state, int player) {
+    const int enemy = 1 - player;
+    json out;
+    out["round_index"] = state.round_index;
+    out["player"] = player;
+    out["coins"] = state.coins[player];
+    out["base_hp"] = state.camps_hp[player];
+    out["enemy_generation_level"] = state.speed_lv[enemy];
+    out["enemy_ant_level"] = state.anthp_lv[enemy];
+    int tower_count = 0;
+    int tower_hp = 0;
+    int worker_count = 0;
+    int combat_count = 0;
+    int ant_hp = 0;
+    for (const auto &tower : state.towers) {
+        if (tower.player != player || tower.hp <= 0) {
+            continue;
+        }
+        ++tower_count;
+        tower_hp += tower.hp;
+    }
+    for (const auto &ant : state.ants) {
+        if (ant.player != enemy || !ant.is_alive()) {
+            continue;
+        }
+        if (ant.kind == AntKind::Combat) {
+            ++combat_count;
+        } else {
+            ++worker_count;
+        }
+        ant_hp += ant.hp;
+    }
+    out["tower_count"] = tower_count;
+    out["tower_hp"] = tower_hp;
+    out["worker_count"] = worker_count;
+    out["combat_count"] = combat_count;
+    out["ant_count"] = worker_count + combat_count;
+    out["ant_hp"] = ant_hp;
+    return out;
+}
+
+json defense_projection_summary(const rs::DefenseSimulator &simulator, int player) {
+    const auto [base_x, base_y] = kPlayerBases[player];
+    json out;
+    out["round_index"] = simulator.round_index;
+    out["player"] = player;
+    out["coins"] = simulator.coins;
+    out["base_hp"] = simulator.base_hp;
+    out["enemy_generation_level"] = simulator.enemy_generation_level;
+    out["enemy_ant_level"] = simulator.enemy_ant_level;
+    int tower_hp = 0;
+    int worker_count = 0;
+    int combat_count = 0;
+    int ant_hp = 0;
+    for (const auto &tower : simulator.towers) {
+        if (!tower.alive()) {
+            continue;
+        }
+        tower_hp += tower.hp;
+    }
+    for (const auto &ant : simulator.ants) {
+        if (!ant.alive() || ant.too_old() || (ant.x == base_x && ant.y == base_y)) {
+            continue;
+        }
+        if (ant.kind == AntKind::Combat) {
+            ++combat_count;
+        } else {
+            ++worker_count;
+        }
+        ant_hp += ant.hp;
+    }
+    out["tower_count"] = simulator.towers.size();
+    out["tower_hp"] = tower_hp;
+    out["worker_count"] = worker_count;
+    out["combat_count"] = combat_count;
+    out["ant_count"] = worker_count + combat_count;
+    out["ant_hp"] = ant_hp;
+    return out;
+}
+
+json projection_delta_summary(const json &sim, const json &standard) {
+    json out;
+    const std::vector<std::string> fields = {
+        "base_hp",
+        "coins",
+        "tower_count",
+        "tower_hp",
+        "worker_count",
+        "combat_count",
+        "ant_count",
+        "ant_hp",
+        "enemy_generation_level",
+        "enemy_ant_level",
+    };
+    for (const auto &field : fields) {
+        const double lhs = sim.value(field, 0.0);
+        const double rhs = standard.value(field, 0.0);
+        out[field] = lhs - rhs;
+    }
+    return out;
+}
+
 json eval_breakdown_to_json(const ls::EvalBreakdown &value) {
     json out;
     out["base_hp_raw"] = value.base_hp_raw;
@@ -457,6 +697,298 @@ json eval_breakdown_to_json(const ls::EvalBreakdown &value) {
     out["future_adjusted_threat_raw"] = value.future_adjusted_threat_raw;
     out["future_threat_adjustment_score"] = value.future_threat_adjustment_score;
     out["total_score"] = value.total_score;
+    return out;
+}
+
+struct RunningStat {
+    std::vector<double> values;
+
+    void add(double value) { values.push_back(value); }
+};
+
+double quantile_from_sorted(const std::vector<double> &sorted, double q) {
+    if (sorted.empty()) {
+        return 0.0;
+    }
+    if (sorted.size() == 1) {
+        return sorted.front();
+    }
+    const double position = std::clamp(q, 0.0, 1.0) * static_cast<double>(sorted.size() - 1);
+    const auto lower = static_cast<std::size_t>(std::floor(position));
+    const auto upper = static_cast<std::size_t>(std::ceil(position));
+    const double fraction = position - static_cast<double>(lower);
+    return sorted[lower] * (1.0 - fraction) + sorted[upper] * fraction;
+}
+
+json running_stat_to_json(const RunningStat &stat) {
+    json out;
+    const int count = static_cast<int>(stat.values.size());
+    out["count"] = count;
+    if (count <= 0) {
+        out["mean"] = 0.0;
+        out["sd"] = 0.0;
+        out["se"] = 0.0;
+        out["min"] = 0.0;
+        out["p05"] = 0.0;
+        out["p50"] = 0.0;
+        out["p95"] = 0.0;
+        out["max"] = 0.0;
+        return out;
+    }
+    double sum = 0.0;
+    for (double value : stat.values) {
+        sum += value;
+    }
+    const double mean = sum / static_cast<double>(count);
+    double variance_sum = 0.0;
+    for (double value : stat.values) {
+        const double delta = value - mean;
+        variance_sum += delta * delta;
+    }
+    const double sd = count > 1 ? std::sqrt(variance_sum / static_cast<double>(count - 1)) : 0.0;
+    std::vector<double> sorted = stat.values;
+    std::sort(sorted.begin(), sorted.end());
+    out["mean"] = mean;
+    out["sd"] = sd;
+    out["se"] = sd / std::sqrt(static_cast<double>(std::max(1, count)));
+    out["min"] = sorted.front();
+    out["p05"] = quantile_from_sorted(sorted, 0.05);
+    out["p50"] = quantile_from_sorted(sorted, 0.50);
+    out["p95"] = quantile_from_sorted(sorted, 0.95);
+    out["max"] = sorted.back();
+    return out;
+}
+
+struct RolloutMetricSet {
+    double base_hp = 0.0;
+    double coins = 0.0;
+    double tower_value = 0.0;
+    double worker_threat = 0.0;
+    double combat_threat = 0.0;
+    double total_threat = 0.0;
+    double total_score = 0.0;
+    double tower_count = 0.0;
+    double tower_hp = 0.0;
+    double worker_count = 0.0;
+    double combat_count = 0.0;
+    double ant_hp = 0.0;
+};
+
+std::vector<std::pair<std::string, double>> rollout_metric_values(const RolloutMetricSet &metrics) {
+    return {
+        {"base_hp", metrics.base_hp},
+        {"coins", metrics.coins},
+        {"tower_value", metrics.tower_value},
+        {"worker_threat", metrics.worker_threat},
+        {"combat_threat", metrics.combat_threat},
+        {"total_threat", metrics.total_threat},
+        {"total_score", metrics.total_score},
+        {"tower_count", metrics.tower_count},
+        {"tower_hp", metrics.tower_hp},
+        {"worker_count", metrics.worker_count},
+        {"combat_count", metrics.combat_count},
+        {"ant_hp", metrics.ant_hp},
+    };
+}
+
+RolloutMetricSet rollout_metrics_from_defense(const rs::DefenseSimulator &simulator, int player) {
+    const auto [base_x, base_y] = kPlayerBases[player];
+    RolloutMetricSet out;
+    const ls::EvalBreakdown eval = ls::evaluate_terminal(simulator, player, false);
+    out.base_hp = eval.base_hp_raw;
+    out.coins = eval.money_raw;
+    out.tower_value = eval.tower_value_raw;
+    out.worker_threat = eval.worker_threat_raw;
+    out.combat_threat = eval.combat_threat_raw;
+    out.total_threat = eval.worker_threat_raw + eval.combat_threat_raw;
+    out.total_score = eval.total_score;
+    for (const auto &tower : simulator.towers) {
+        if (!tower.alive()) {
+            continue;
+        }
+        out.tower_count += 1.0;
+        out.tower_hp += static_cast<double>(tower.hp);
+    }
+    for (const auto &ant : simulator.ants) {
+        if (!ant.alive() || ant.too_old() || (ant.x == base_x && ant.y == base_y)) {
+            continue;
+        }
+        if (ant.kind == AntKind::Combat) {
+            out.combat_count += 1.0;
+        } else {
+            out.worker_count += 1.0;
+        }
+        out.ant_hp += static_cast<double>(ant.hp);
+    }
+    return out;
+}
+
+PublicRoundState defense_only_round_state(const PublicRoundState &state, int player) {
+    const int enemy = 1 - player;
+    PublicRoundState out = state;
+    out.towers.clear();
+    for (const auto &tower : state.towers) {
+        if (tower.player == player) {
+            out.towers.push_back(tower);
+        }
+    }
+    out.ants.clear();
+    for (const auto &ant : state.ants) {
+        if (ant.player == enemy && ant.is_alive()) {
+            out.ants.push_back(ant);
+        }
+    }
+    return out;
+}
+
+RolloutMetricSet rollout_metrics_from_native(NativeSimulator &native, int player) {
+    PublicState final_state(native.seed(), native.movement_policy(), native.cold_handle_rule_illegal());
+    final_state.sync_public_round_state(native.to_public_round_state());
+    rs::DefenseSimulator projected = rs::make_defense_simulator(final_state, &native, player);
+    projected.ignore_enemy_spawns = true;
+    return rollout_metrics_from_defense(projected, player);
+}
+
+json compare_metric_stats(
+    const std::vector<std::pair<std::string, RunningStat>> &standard_stats,
+    const std::vector<std::pair<std::string, RunningStat>> &simulator_stats,
+    const std::vector<std::pair<std::string, RunningStat>> &delta_stats) {
+    json out;
+    for (std::size_t index = 0; index < standard_stats.size(); ++index) {
+        const std::string &name = standard_stats[index].first;
+        const json standard = running_stat_to_json(standard_stats[index].second);
+        const json simulator = running_stat_to_json(simulator_stats[index].second);
+        json delta = running_stat_to_json(delta_stats[index].second);
+        const double standard_se = standard.value("se", 0.0);
+        const double simulator_se = simulator.value("se", 0.0);
+        const double two_sample_se = std::sqrt(standard_se * standard_se + simulator_se * simulator_se);
+        delta["two_sample_se"] = two_sample_se;
+        delta["mean_abs_over_two_sample_se"] =
+            two_sample_se > 0.0 ? std::fabs(delta.value("mean", 0.0)) / two_sample_se : 0.0;
+        out[name] = {
+            {"standard", standard},
+            {"simulator", simulator},
+            {"sim_minus_standard", delta},
+        };
+    }
+    return out;
+}
+
+struct EntityAlignmentStats {
+    RunningStat standard_alive;
+    RunningStat simulator_alive;
+    RunningStat delta_alive;
+    RunningStat standard_hp;
+    RunningStat simulator_hp;
+    RunningStat delta_hp;
+    std::map<std::string, int> standard_positions;
+    std::map<std::string, int> simulator_positions;
+};
+
+std::string entity_position_key(int x, int y, bool alive) {
+    if (!alive) {
+        return "dead";
+    }
+    return std::to_string(x) + "," + std::to_string(y);
+}
+
+void add_entity_sample(EntityAlignmentStats &stats, bool standard_alive, int standard_x, int standard_y, int standard_hp,
+                       bool simulator_alive, int simulator_x, int simulator_y, int simulator_hp) {
+    stats.standard_alive.add(standard_alive ? 1.0 : 0.0);
+    stats.simulator_alive.add(simulator_alive ? 1.0 : 0.0);
+    stats.delta_alive.add((simulator_alive ? 1.0 : 0.0) - (standard_alive ? 1.0 : 0.0));
+    stats.standard_hp.add(standard_alive ? static_cast<double>(standard_hp) : 0.0);
+    stats.simulator_hp.add(simulator_alive ? static_cast<double>(simulator_hp) : 0.0);
+    stats.delta_hp.add((simulator_alive ? static_cast<double>(simulator_hp) : 0.0) -
+                       (standard_alive ? static_cast<double>(standard_hp) : 0.0));
+    ++stats.standard_positions[entity_position_key(standard_x, standard_y, standard_alive)];
+    ++stats.simulator_positions[entity_position_key(simulator_x, simulator_y, simulator_alive)];
+}
+
+json entity_alignment_stats_to_json(const EntityAlignmentStats &stats, int samples) {
+    json out;
+    const json standard_alive = running_stat_to_json(stats.standard_alive);
+    const json simulator_alive = running_stat_to_json(stats.simulator_alive);
+    json delta_alive = running_stat_to_json(stats.delta_alive);
+    const double alive_two_sample_se =
+        std::sqrt(std::pow(standard_alive.value("se", 0.0), 2.0) + std::pow(simulator_alive.value("se", 0.0), 2.0));
+    delta_alive["two_sample_se"] = alive_two_sample_se;
+    delta_alive["mean_abs_over_two_sample_se"] =
+        alive_two_sample_se > 0.0 ? std::fabs(delta_alive.value("mean", 0.0)) / alive_two_sample_se : 0.0;
+
+    const json standard_hp = running_stat_to_json(stats.standard_hp);
+    const json simulator_hp = running_stat_to_json(stats.simulator_hp);
+    json delta_hp = running_stat_to_json(stats.delta_hp);
+    const double hp_two_sample_se =
+        std::sqrt(std::pow(standard_hp.value("se", 0.0), 2.0) + std::pow(simulator_hp.value("se", 0.0), 2.0));
+    delta_hp["two_sample_se"] = hp_two_sample_se;
+    delta_hp["mean_abs_over_two_sample_se"] =
+        hp_two_sample_se > 0.0 ? std::fabs(delta_hp.value("mean", 0.0)) / hp_two_sample_se : 0.0;
+
+    out["alive"] = {
+        {"standard", standard_alive},
+        {"simulator", simulator_alive},
+        {"sim_minus_standard", delta_alive},
+    };
+    out["hp"] = {
+        {"standard", standard_hp},
+        {"simulator", simulator_hp},
+        {"sim_minus_standard", delta_hp},
+    };
+
+    struct PositionDelta {
+        std::string key;
+        int standard_count = 0;
+        int simulator_count = 0;
+        int delta = 0;
+    };
+    std::vector<PositionDelta> positions;
+    std::map<std::string, int> keys = stats.standard_positions;
+    for (const auto &item : stats.simulator_positions) {
+        keys.emplace(item.first, 0);
+    }
+    positions.reserve(keys.size());
+    for (const auto &item : keys) {
+        const int standard_count =
+            stats.standard_positions.count(item.first) ? stats.standard_positions.at(item.first) : 0;
+        const int simulator_count =
+            stats.simulator_positions.count(item.first) ? stats.simulator_positions.at(item.first) : 0;
+        positions.push_back(PositionDelta{item.first, standard_count, simulator_count, simulator_count - standard_count});
+    }
+    std::sort(positions.begin(), positions.end(), [](const PositionDelta &lhs, const PositionDelta &rhs) {
+        const int lhs_abs = std::abs(lhs.delta);
+        const int rhs_abs = std::abs(rhs.delta);
+        if (lhs_abs != rhs_abs) {
+            return lhs_abs > rhs_abs;
+        }
+        return lhs.key < rhs.key;
+    });
+    out["top_position_deltas"] = json::array();
+    const int limit = std::min<int>(8, positions.size());
+    for (int index = 0; index < limit; ++index) {
+        const auto &item = positions[index];
+        out["top_position_deltas"].push_back({
+            {"position", item.key},
+            {"standard_count", item.standard_count},
+            {"simulator_count", item.simulator_count},
+            {"delta_count", item.delta},
+            {"standard_rate", samples > 0 ? static_cast<double>(item.standard_count) / static_cast<double>(samples) : 0.0},
+            {"simulator_rate", samples > 0 ? static_cast<double>(item.simulator_count) / static_cast<double>(samples) : 0.0},
+        });
+    }
+    return out;
+}
+
+json eval_delta_summary(const ls::EvalBreakdown &lhs, const ls::EvalBreakdown &rhs) {
+    json out;
+    out["base_hp_raw"] = lhs.base_hp_raw - rhs.base_hp_raw;
+    out["tower_value_raw"] = lhs.tower_value_raw - rhs.tower_value_raw;
+    out["money_raw"] = lhs.money_raw - rhs.money_raw;
+    out["worker_threat_raw"] = lhs.worker_threat_raw - rhs.worker_threat_raw;
+    out["combat_threat_raw"] = lhs.combat_threat_raw - rhs.combat_threat_raw;
+    out["future_base_damage_raw"] = lhs.future_base_damage_raw - rhs.future_base_damage_raw;
+    out["future_projected_threat_raw"] = lhs.future_projected_threat_raw - rhs.future_projected_threat_raw;
+    out["total_score"] = lhs.total_score - rhs.total_score;
     return out;
 }
 
@@ -1423,6 +1955,19 @@ json inspect_round_request(const json &request) {
             {"tower_attack_ns", ucb_trace.simulator_profile.tower_attack_ns},
             {"move_ns", ucb_trace.simulator_profile.move_ns},
             {"move_cache_ns", ucb_trace.simulator_profile.move_cache_ns},
+            {"move_cache_static_ns", ucb_trace.simulator_profile.move_cache_static_ns},
+            {"move_cache_dynamic_ns", ucb_trace.simulator_profile.move_cache_dynamic_ns},
+            {"move_cache_weight_ns", ucb_trace.simulator_profile.move_cache_weight_ns},
+            {"move_cache_worker_path_ns", ucb_trace.simulator_profile.move_cache_worker_path_ns},
+            {"move_cache_tower_path_ns", ucb_trace.simulator_profile.move_cache_tower_path_ns},
+            {"move_cache_annotation_ns", ucb_trace.simulator_profile.move_cache_annotation_ns},
+            {"move_cache_worker_path_calls", ucb_trace.simulator_profile.move_cache_worker_path_calls},
+            {"move_cache_tower_path_calls", ucb_trace.simulator_profile.move_cache_tower_path_calls},
+            {"move_cache_tower_path_skipped", ucb_trace.simulator_profile.move_cache_tower_path_skipped},
+            {"reverse_path_cache_lookups", ucb_trace.simulator_profile.reverse_path_cache_lookups},
+            {"reverse_path_cache_hits", ucb_trace.simulator_profile.reverse_path_cache_hits},
+            {"reverse_path_cache_misses", ucb_trace.simulator_profile.reverse_path_cache_misses},
+            {"reverse_path_cache_stores", ucb_trace.simulator_profile.reverse_path_cache_stores},
             {"move_sample_ns", ucb_trace.simulator_profile.move_sample_ns},
             {"move_random_ns", ucb_trace.simulator_profile.move_random_ns},
             {"move_resolve_ns", ucb_trace.simulator_profile.move_resolve_ns},
@@ -1437,6 +1982,18 @@ json inspect_round_request(const json &request) {
             {"move_random_calls", ucb_trace.simulator_profile.move_random_calls},
             {"move_resolve_calls", ucb_trace.simulator_profile.move_resolve_calls},
             {"move_cache_calls", ucb_trace.simulator_profile.move_cache_calls},
+            {"move_cache_memo_key_ns", ucb_trace.simulator_profile.move_cache_memo_key_ns},
+            {"move_cache_memo_lookup_ns", ucb_trace.simulator_profile.move_cache_memo_lookup_ns},
+            {"move_cache_memo_restore_ns", ucb_trace.simulator_profile.move_cache_memo_restore_ns},
+            {"move_cache_memo_store_ns", ucb_trace.simulator_profile.move_cache_memo_store_ns},
+            {"move_cache_memo_lookups", ucb_trace.simulator_profile.move_cache_memo_lookups},
+            {"move_cache_memo_hits", ucb_trace.simulator_profile.move_cache_memo_hits},
+            {"move_cache_memo_misses", ucb_trace.simulator_profile.move_cache_memo_misses},
+            {"move_cache_memo_stores", ucb_trace.simulator_profile.move_cache_memo_stores},
+            {"static_risk_cache_lookups", ucb_trace.simulator_profile.static_risk_cache_lookups},
+            {"static_risk_cache_hits", ucb_trace.simulator_profile.static_risk_cache_hits},
+            {"static_risk_cache_misses", ucb_trace.simulator_profile.static_risk_cache_misses},
+            {"static_risk_cache_stores", ucb_trace.simulator_profile.static_risk_cache_stores},
         }},
         {"reactive_profile", {
             {"forced_sell_calls", ucb_trace.reactive_profile.forced_sell_calls},
@@ -1570,6 +2127,454 @@ json inspect_round_request(const json &request) {
     return out;
 }
 
+json inspect_alignment_check_request(const json &request) {
+    const std::string replay_path = request.at("replay_path").get<std::string>();
+    const int player = request.value("player", 0);
+    const int horizon = request.value("horizon", v4_lure_config().long_eval_horizon);
+    const bool include_ucb = request.value("include_ucb", true);
+
+    std::vector<int> rounds;
+    if (request.contains("rounds") && request.at("rounds").is_array()) {
+        for (const auto &item : request.at("rounds")) {
+            rounds.push_back(item.get<int>());
+        }
+    } else {
+        rounds.push_back(request.at("round").get<int>());
+    }
+
+    json out;
+    out["mode"] = "alignment_check";
+    out["replay_path"] = replay_path;
+    out["player"] = player;
+    out["horizon"] = horizon;
+    out["strategy_params"] = v4_tuning_to_json();
+    out["rounds"] = json::array();
+
+    for (const int round : rounds) {
+        ReplayRoundStart start = load_replay_round_start(replay_path, round);
+        ReplayRoundStart future = load_replay_round_start(replay_path, round + horizon);
+
+        rs::DefenseSimulator root = rs::make_defense_simulator(start.public_state, &start.native, player);
+        root.ignore_enemy_spawns = true;
+        rs::DefenseSimulator actual_future = rs::make_defense_simulator(future.public_state, &future.native, player);
+        actual_future.ignore_enemy_spawns = true;
+
+        const PublicRoundState standard_start = start.native.to_public_round_state();
+        const PublicRoundState standard_future = future.native.to_public_round_state();
+        const json start_standard_summary = public_defense_projection_summary(standard_start, player);
+        const json start_sim_summary = defense_projection_summary(root, player);
+        const json future_standard_summary = public_defense_projection_summary(standard_future, player);
+        const json future_sim_summary = defense_projection_summary(actual_future, player);
+        const ls::EvalBreakdown root_eval = ls::evaluate_terminal(root, player);
+        const ls::EvalBreakdown actual_future_eval = ls::evaluate_terminal(actual_future, player);
+
+        json row;
+        row["round"] = round;
+        row["future_round"] = round + horizon;
+        row["start_standard"] = start_standard_summary;
+        row["start_simulator"] = start_sim_summary;
+        row["start_delta_sim_minus_standard"] = projection_delta_summary(start_sim_summary, start_standard_summary);
+        row["future_standard"] = future_standard_summary;
+        row["future_simulator"] = future_sim_summary;
+        row["future_delta_sim_minus_standard"] = projection_delta_summary(future_sim_summary, future_standard_summary);
+        row["start_eval"] = eval_breakdown_to_json(root_eval);
+        row["actual_future_eval"] = eval_breakdown_to_json(actual_future_eval);
+
+        if (include_ucb) {
+            const std::uint64_t serial = request.value("serial", rollout_serial_for_round(round));
+            ls::UcbEvaluationTrace ucb_trace;
+            const auto evaluated = evaluate_root_plans(start.public_state, &start.native, player, serial, &ucb_trace);
+            row["ucb"] = {
+                {"total_samples", ucb_trace.total_samples},
+                {"total_elapsed_us", ucb_trace.total_elapsed_us},
+                {"action_estimated_us_per_sample", ucb_trace.action_estimated_us_per_sample},
+                {"move_cache_memo_hits", ucb_trace.simulator_profile.move_cache_memo_hits},
+                {"move_cache_memo_stores", ucb_trace.simulator_profile.move_cache_memo_stores},
+                {"move_cache_ns", ucb_trace.simulator_profile.move_cache_ns},
+                {"move_cache_memo_key_ns", ucb_trace.simulator_profile.move_cache_memo_key_ns},
+                {"move_cache_memo_lookup_ns", ucb_trace.simulator_profile.move_cache_memo_lookup_ns},
+                {"move_cache_memo_restore_ns", ucb_trace.simulator_profile.move_cache_memo_restore_ns},
+                {"move_cache_memo_store_ns", ucb_trace.simulator_profile.move_cache_memo_store_ns},
+                {"move_cache_worker_path_ns", ucb_trace.simulator_profile.move_cache_worker_path_ns},
+                {"move_cache_tower_path_ns", ucb_trace.simulator_profile.move_cache_tower_path_ns},
+            };
+            if (!evaluated.empty()) {
+                const auto &best = evaluated.front();
+                row["best_plan"] = {
+                    {"key", best.plan.key},
+                    {"name", best.plan.name},
+                    {"pretty", ls::pretty_ops_text(start.public_state, player, best.plan.ops)},
+                    {"horizon", best.plan.horizon},
+                    {"rollout_count", best.rollout_count},
+                    {"mean_score", best.mean_score},
+                    {"mean_rollout_score", best.mean_rollout.total_score},
+                };
+                row["predicted_terminal"] = eval_breakdown_to_json(best.mean_rollout.terminal);
+                row["predicted_minus_actual_future"] =
+                    eval_delta_summary(best.mean_rollout.terminal, actual_future_eval);
+            }
+        }
+
+        out["rounds"].push_back(row);
+    }
+    return out;
+}
+
+json inspect_rollout_alignment_batch_request(const json &request) {
+    const std::string replay_path = request.at("replay_path").get<std::string>();
+    const int player = request.value("player", 0);
+    const int horizon = request.value("horizon", v4_lure_config().long_eval_horizon);
+    const int samples = request.value("samples", 5000);
+    const std::uint64_t seed_base = request.value("seed_base", 0x9e3779b97f4a7c15ULL);
+    const bool simulator_limit_paths = request.value("simulator_limit_paths", true);
+    const bool ignore_periodic_random_move = request.value("ignore_periodic_random_move", config().ignore_periodic_random_move);
+    const int simulator_move_option_limit =
+        request.value("simulator_move_option_limit", config().move_option_limit);
+    if (horizon <= 0) {
+        throw std::runtime_error("horizon must be positive");
+    }
+    if (samples <= 0) {
+        throw std::runtime_error("samples must be positive");
+    }
+
+    std::vector<int> rounds;
+    if (request.contains("rounds") && request.at("rounds").is_array()) {
+        for (const auto &item : request.at("rounds")) {
+            rounds.push_back(item.get<int>());
+        }
+    } else if (request.contains("round")) {
+        rounds.push_back(request.at("round").get<int>());
+    } else {
+        rounds = {80, 101, 140, 180};
+    }
+    if (rounds.empty()) {
+        throw std::runtime_error("at least one round is required");
+    }
+
+    json out;
+    out["mode"] = "rollout_alignment_batch";
+    out["replay_path"] = replay_path;
+    out["player"] = player;
+    out["horizon"] = horizon;
+    out["samples"] = samples;
+    out["seed_base"] = seed_base;
+    out["simulator_limit_paths"] = simulator_limit_paths;
+    out["simulator_move_option_limit"] = simulator_move_option_limit;
+    out["ignore_periodic_random_move"] = ignore_periodic_random_move;
+    out["strategy_params"] = v4_tuning_to_json();
+    out["standard_logic"] = ignore_periodic_random_move
+                                ? "NativeSimulator defense-only advance_round_without_base_spawns_no_teleport"
+                                : "NativeSimulator defense-only advance_round_without_base_spawns";
+    out["simulator_logic"] =
+        "DefenseSimulator simulate_round with ignore_enemy_spawns=true and matching periodic teleport policy";
+    out["teleport_policy"] =
+        ignore_periodic_random_move ? "periodic random teleport skipped by both standard and simulator"
+                                    : "round windows are rejected if they cross a periodic teleport turn";
+    out["rounds"] = json::array();
+
+    const std::vector<std::pair<std::string, double>> metric_template = rollout_metric_values(RolloutMetricSet{});
+    for (const int round : rounds) {
+        if (!ignore_periodic_random_move) {
+            for (int step = 0; step < horizon; ++step) {
+                if ((round + step + 1) % rs::kTeleportInterval == 0) {
+                    throw std::runtime_error(
+                        "round window crosses a teleport turn; choose rounds whose horizon avoids every 10th turn");
+                }
+            }
+        }
+
+        ReplayRoundStart start = load_replay_round_start(replay_path, round);
+        rs::DefenseSimulator root = rs::make_defense_simulator(start.public_state, &start.native, player);
+        root.ignore_enemy_spawns = true;
+        root.limit_move_phase_paths_to_targets = simulator_limit_paths;
+        root.move_option_limit = simulator_move_option_limit;
+        const PublicRoundState standard_root_state =
+            defense_only_round_state(start.native.to_public_round_state(), player);
+
+        std::vector<std::pair<std::string, RunningStat>> standard_stats;
+        std::vector<std::pair<std::string, RunningStat>> simulator_stats;
+        std::vector<std::pair<std::string, RunningStat>> delta_stats;
+        for (const auto &item : metric_template) {
+            standard_stats.push_back({item.first, RunningStat{}});
+            simulator_stats.push_back({item.first, RunningStat{}});
+            delta_stats.push_back({item.first, RunningStat{}});
+        }
+
+        for (int sample = 0; sample < samples; ++sample) {
+            const std::uint64_t sample_seed = rs::mix_seed(
+                seed_base,
+                static_cast<std::uint64_t>(round) * 0xd1b54a32d192ed03ULL +
+                    static_cast<std::uint64_t>(sample) * 0x94d049bb133111ebULL +
+                    static_cast<std::uint64_t>(player) * 0x2545f4914f6cdd1dULL);
+
+            NativeSimulator standard = start.native.clone();
+            standard.sync_public_round_state(standard_root_state);
+            standard.reseed_future(sample_seed);
+            for (int step = 0; step < horizon && !standard.terminal(); ++step) {
+                if (ignore_periodic_random_move) {
+                    standard.advance_round_without_base_spawns_no_teleport();
+                } else {
+                    standard.advance_round_without_base_spawns();
+                }
+            }
+
+            rs::DefenseSimulator simulator = root.clone();
+            simulator.ignore_periodic_random_move = ignore_periodic_random_move;
+            rs::FastRng rng(sample_seed);
+            for (int step = 0; step < horizon && !simulator.terminal; ++step) {
+                simulator.simulate_round(rng);
+            }
+
+            const auto standard_values = rollout_metric_values(rollout_metrics_from_native(standard, player));
+            const auto simulator_values = rollout_metric_values(rollout_metrics_from_defense(simulator, player));
+            for (std::size_t index = 0; index < standard_values.size(); ++index) {
+                const double standard_value = standard_values[index].second;
+                const double simulator_value = simulator_values[index].second;
+                standard_stats[index].second.add(standard_value);
+                simulator_stats[index].second.add(simulator_value);
+                delta_stats[index].second.add(simulator_value - standard_value);
+            }
+        }
+
+        json row;
+        row["round"] = round;
+        row["future_round"] = round + horizon;
+        row["start_standard"] = public_defense_projection_summary(standard_root_state, player);
+        row["start_simulator"] = defense_projection_summary(root, player);
+        row["start_delta_sim_minus_standard"] =
+            projection_delta_summary(row["start_simulator"], row["start_standard"]);
+        row["metrics"] = compare_metric_stats(standard_stats, simulator_stats, delta_stats);
+        out["rounds"].push_back(std::move(row));
+    }
+    return out;
+}
+
+json inspect_rollout_entity_alignment_request(const json &request) {
+    const std::string replay_path = request.at("replay_path").get<std::string>();
+    const int round = request.at("round").get<int>();
+    const int player = request.value("player", 0);
+    const int horizon = request.value("horizon", v4_lure_config().long_eval_horizon);
+    const int samples = request.value("samples", 5000);
+    const std::uint64_t seed_base = request.value("seed_base", 0x9e3779b97f4a7c15ULL);
+    const bool simulator_limit_paths = request.value("simulator_limit_paths", true);
+    const bool ignore_periodic_random_move = request.value("ignore_periodic_random_move", config().ignore_periodic_random_move);
+    const int simulator_move_option_limit =
+        request.value("simulator_move_option_limit", config().move_option_limit);
+    if (horizon <= 0) {
+        throw std::runtime_error("horizon must be positive");
+    }
+    if (samples <= 0) {
+        throw std::runtime_error("samples must be positive");
+    }
+    if (!ignore_periodic_random_move) {
+        for (int step = 0; step < horizon; ++step) {
+            if ((round + step + 1) % rs::kTeleportInterval == 0) {
+                throw std::runtime_error(
+                    "round window crosses a teleport turn; choose rounds whose horizon avoids every 10th turn");
+            }
+        }
+    }
+
+    ReplayRoundStart start = load_replay_round_start(replay_path, round);
+    rs::DefenseSimulator root = rs::make_defense_simulator(start.public_state, &start.native, player);
+    root.ignore_enemy_spawns = true;
+    root.limit_move_phase_paths_to_targets = simulator_limit_paths;
+    root.move_option_limit = simulator_move_option_limit;
+    const PublicRoundState standard_root_state = defense_only_round_state(start.native.to_public_round_state(), player);
+
+    std::map<int, EntityAlignmentStats> ant_stats;
+    std::map<int, EntityAlignmentStats> tower_stats_by_id;
+    for (const auto &ant : root.ants) {
+        ant_stats.emplace(ant.ant_id, EntityAlignmentStats{});
+    }
+    for (const auto &tower : root.towers) {
+        tower_stats_by_id.emplace(tower.tower_id, EntityAlignmentStats{});
+    }
+    std::map<std::string, int> standard_effect_positions;
+    std::map<std::string, int> simulator_effect_positions;
+
+    for (int sample = 0; sample < samples; ++sample) {
+        const std::uint64_t sample_seed = rs::mix_seed(
+            seed_base,
+            static_cast<std::uint64_t>(round) * 0xd1b54a32d192ed03ULL +
+                static_cast<std::uint64_t>(sample) * 0x94d049bb133111ebULL +
+                static_cast<std::uint64_t>(player) * 0x2545f4914f6cdd1dULL);
+
+        NativeSimulator standard = start.native.clone();
+        standard.sync_public_round_state(standard_root_state);
+        standard.reseed_future(sample_seed);
+        for (int step = 0; step < horizon && !standard.terminal(); ++step) {
+            if (ignore_periodic_random_move) {
+                standard.advance_round_without_base_spawns_no_teleport();
+            } else {
+                standard.advance_round_without_base_spawns();
+            }
+        }
+
+        rs::DefenseSimulator simulator = root.clone();
+        simulator.ignore_periodic_random_move = ignore_periodic_random_move;
+        rs::FastRng rng(sample_seed);
+        for (int step = 0; step < horizon && !simulator.terminal; ++step) {
+            simulator.simulate_round(rng);
+        }
+
+        PublicState standard_state(standard.seed(), standard.movement_policy(), standard.cold_handle_rule_illegal());
+        standard_state.sync_public_round_state(standard.to_public_round_state());
+        auto first_standard_effect_key = [&]() {
+            for (const auto &effect : standard_state.active_effects) {
+                if (effect.player == player && effect.weapon_type == SuperWeaponType::LightningStorm) {
+                    return std::to_string(effect.x) + "," + std::to_string(effect.y) + ":" +
+                           std::to_string(effect.remaining_turns);
+                }
+            }
+            return std::string("none");
+        };
+        auto first_simulator_effect_key = [&]() {
+            for (const auto &effect : simulator.my_effects) {
+                if (effect.weapon_type == SuperWeaponType::LightningStorm && effect.active()) {
+                    return std::to_string(effect.x) + "," + std::to_string(effect.y) + ":" +
+                           std::to_string(effect.remaining_turns);
+                }
+            }
+            return std::string("none");
+        };
+        ++standard_effect_positions[first_standard_effect_key()];
+        ++simulator_effect_positions[first_simulator_effect_key()];
+        auto standard_ant_for = [&](int ant_id) -> const Ant * {
+            for (const auto &ant : standard_state.ants) {
+                if (ant.ant_id == ant_id && ant.player == 1 - player && ant.is_alive()) {
+                    return &ant;
+                }
+            }
+            return nullptr;
+        };
+        auto standard_tower_for = [&](int tower_id) -> const Tower * {
+            for (const auto &tower : standard_state.towers) {
+                if (tower.tower_id == tower_id && tower.player == player && tower.hp > 0) {
+                    return &tower;
+                }
+            }
+            return nullptr;
+        };
+        auto simulator_ant_for = [&](int ant_id) -> const rs::SearchAnt * {
+            const auto [base_x, base_y] = kPlayerBases[player];
+            for (const auto &ant : simulator.ants) {
+                if (ant.ant_id == ant_id && ant.alive() && !ant.too_old() &&
+                    !(ant.x == base_x && ant.y == base_y)) {
+                    return &ant;
+                }
+            }
+            return nullptr;
+        };
+        auto simulator_tower_for = [&](int tower_id) -> const rs::SearchTower * {
+            for (const auto &tower : simulator.towers) {
+                if (tower.tower_id == tower_id && tower.alive()) {
+                    return &tower;
+                }
+            }
+            return nullptr;
+        };
+
+        for (auto &item : ant_stats) {
+            const int ant_id = item.first;
+            const Ant *standard_ant = standard_ant_for(ant_id);
+            const rs::SearchAnt *simulator_ant = simulator_ant_for(ant_id);
+            add_entity_sample(
+                item.second,
+                standard_ant != nullptr,
+                standard_ant != nullptr ? standard_ant->x : -1,
+                standard_ant != nullptr ? standard_ant->y : -1,
+                standard_ant != nullptr ? standard_ant->hp : 0,
+                simulator_ant != nullptr,
+                simulator_ant != nullptr ? simulator_ant->x : -1,
+                simulator_ant != nullptr ? simulator_ant->y : -1,
+                simulator_ant != nullptr ? simulator_ant->hp : 0);
+        }
+
+        for (auto &item : tower_stats_by_id) {
+            const int tower_id = item.first;
+            const Tower *standard_tower = standard_tower_for(tower_id);
+            const rs::SearchTower *simulator_tower = simulator_tower_for(tower_id);
+            add_entity_sample(
+                item.second,
+                standard_tower != nullptr,
+                standard_tower != nullptr ? standard_tower->x : -1,
+                standard_tower != nullptr ? standard_tower->y : -1,
+                standard_tower != nullptr ? standard_tower->hp : 0,
+                simulator_tower != nullptr,
+                simulator_tower != nullptr ? simulator_tower->x : -1,
+                simulator_tower != nullptr ? simulator_tower->y : -1,
+                simulator_tower != nullptr ? simulator_tower->hp : 0);
+        }
+    }
+
+    json out;
+    out["mode"] = "rollout_entity_alignment";
+    out["replay_path"] = replay_path;
+    out["round"] = round;
+    out["player"] = player;
+    out["horizon"] = horizon;
+    out["future_round"] = round + horizon;
+    out["samples"] = samples;
+    out["seed_base"] = seed_base;
+    out["simulator_limit_paths"] = simulator_limit_paths;
+    out["simulator_move_option_limit"] = simulator_move_option_limit;
+    out["ignore_periodic_random_move"] = ignore_periodic_random_move;
+    out["ants"] = json::array();
+    for (const auto &item : ant_stats) {
+        json row = entity_alignment_stats_to_json(item.second, samples);
+        row["id"] = item.first;
+        out["ants"].push_back(std::move(row));
+    }
+    out["towers"] = json::array();
+    for (const auto &item : tower_stats_by_id) {
+        json row = entity_alignment_stats_to_json(item.second, samples);
+        row["id"] = item.first;
+        out["towers"].push_back(std::move(row));
+    }
+    std::map<std::string, int> effect_keys = standard_effect_positions;
+    for (const auto &item : simulator_effect_positions) {
+        effect_keys.emplace(item.first, 0);
+    }
+    struct EffectPositionDelta {
+        std::string key;
+        int standard_count = 0;
+        int simulator_count = 0;
+        int delta = 0;
+    };
+    std::vector<EffectPositionDelta> effect_deltas;
+    effect_deltas.reserve(effect_keys.size());
+    for (const auto &item : effect_keys) {
+        const int standard_count =
+            standard_effect_positions.count(item.first) ? standard_effect_positions.at(item.first) : 0;
+        const int simulator_count =
+            simulator_effect_positions.count(item.first) ? simulator_effect_positions.at(item.first) : 0;
+        effect_deltas.push_back(EffectPositionDelta{item.first, standard_count, simulator_count, simulator_count - standard_count});
+    }
+    std::sort(effect_deltas.begin(), effect_deltas.end(), [](const EffectPositionDelta &lhs, const EffectPositionDelta &rhs) {
+        const int lhs_abs = std::abs(lhs.delta);
+        const int rhs_abs = std::abs(rhs.delta);
+        if (lhs_abs != rhs_abs) {
+            return lhs_abs > rhs_abs;
+        }
+        return lhs.key < rhs.key;
+    });
+    out["my_lightning_position_deltas"] = json::array();
+    const int effect_limit = std::min<int>(16, effect_deltas.size());
+    for (int index = 0; index < effect_limit; ++index) {
+        const auto &item = effect_deltas[index];
+        out["my_lightning_position_deltas"].push_back({
+            {"position", item.key},
+            {"standard_count", item.standard_count},
+            {"simulator_count", item.simulator_count},
+            {"delta_count", item.delta},
+            {"standard_rate", samples > 0 ? static_cast<double>(item.standard_count) / static_cast<double>(samples) : 0.0},
+            {"simulator_rate", samples > 0 ? static_cast<double>(item.simulator_count) / static_cast<double>(samples) : 0.0},
+        });
+    }
+    return out;
+}
+
 json inspect_plan_rollouts_request(const json &request) {
     const std::string replay_path = request.at("replay_path").get<std::string>();
     const int round = request.at("round").get<int>();
@@ -1663,6 +2668,44 @@ json inspect_plan_trace_request(const json &request) {
     return out;
 }
 
+json inspect_move_debug_request(const json &request) {
+    const std::string replay_path = request.at("replay_path").get<std::string>();
+    const int round = request.at("round").get<int>();
+    const int player = request.value("player", 0);
+    const int simulator_move_option_limit =
+        request.value("simulator_move_option_limit", config().move_option_limit);
+
+    ReplayRoundStart start = load_replay_round_start(replay_path, round);
+    const PublicRoundState standard_root_state =
+        defense_only_round_state(start.native.to_public_round_state(), player);
+    NativeSimulator standard = start.native.clone();
+    standard.sync_public_round_state(standard_root_state);
+
+    rs::DefenseSimulator simulator = rs::make_defense_simulator(start.public_state, &start.native, player);
+    simulator.ignore_enemy_spawns = true;
+    simulator.move_option_limit = simulator_move_option_limit;
+
+    json native_rows = json::array();
+    for (const auto &row : standard.move_debug_for_player(1 - player)) {
+        native_rows.push_back(native_move_debug_to_json(row));
+    }
+    json simulator_rows = simulator_move_debug_to_json(simulator);
+
+    json out;
+    out["mode"] = "move_debug";
+    out["replay_path"] = replay_path;
+    out["round"] = round;
+    out["player"] = player;
+    out["simulator_move_option_limit"] = simulator_move_option_limit;
+    out["start_delta_sim_minus_standard"] =
+        projection_delta_summary(defense_projection_summary(simulator, player),
+                                 public_defense_projection_summary(standard_root_state, player));
+    out["native"] = native_rows;
+    out["simulator"] = simulator_rows;
+    out["deltas"] = move_probability_delta_json(simulator_rows, native_rows);
+    return out;
+}
+
 } // namespace antgame::sdk::examples
 
 int main() {
@@ -1676,10 +2719,18 @@ int main() {
         json response;
         if (mode == "round_summary") {
             response = inspect_round_request(request);
+        } else if (mode == "alignment_check") {
+            response = inspect_alignment_check_request(request);
+        } else if (mode == "rollout_alignment_batch") {
+            response = inspect_rollout_alignment_batch_request(request);
+        } else if (mode == "rollout_entity_alignment") {
+            response = inspect_rollout_entity_alignment_request(request);
         } else if (mode == "plan_rollouts") {
             response = inspect_plan_rollouts_request(request);
         } else if (mode == "plan_trace") {
             response = inspect_plan_trace_request(request);
+        } else if (mode == "move_debug") {
+            response = inspect_move_debug_request(request);
         } else {
             throw std::runtime_error("unsupported mode");
         }

@@ -55,18 +55,22 @@ python3 Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py \
 
 ## 当前状态说明
 
-v4 初始状态完全继承 2026-04-30 的阶段性最优 v3；截至 2026-05-02，v4 仍是实验分支，尚未证明强于 v3。当前本地最优解仍按 v3 记录。
+v4 初始状态完全继承 2026-04-30 的阶段性最优 v3；截至 2026-05-03，v4 仍是实验分支，尚未证明强于 v3。当前本地最优解仍按 v3 记录。
 
 当前 v4 参数以 `include/antgame_ai/lure_strategy_v4_params.hpp` 为准，关键口径如下：
 
 - rollout 使用纯随机等权移动采样，不再使用 forced move 概率加权。
 - 闪电组先独立完整计算，再进入普通 action 搜索。
-- 普通 action 使用实时测速卡时：先对每个 normal action 做 `action_probe_min_samples=10` 次可复用 probe，这些样本计入最终 UCB 统计；再按 `action_target_time_ms=3000` 估算本回合等效 base rollout 总数。target 总数为 base 的 `action_target_total_multiplier=1.25`，并继续受 `action_target_rollouts_per_action=125 * action_count` 截断。`action_time_budget_ms=4000` 是后续保底/补样阶段的硬预算停止条件。
+- 普通 action 使用实时测速卡时：先对每个 normal action 做 `action_probe_min_samples=5` 次可复用 probe，这些样本计入最终 UCB 统计；再按 `action_target_time_ms=3000` 估算本回合等效 base rollout 总数。target 总数为 base 的 `action_target_total_multiplier=1.25`，并继续受 `action_target_rollouts_per_action=125 * action_count` 截断。`action_time_budget_ms=4000` 是后续保底/补样阶段的硬预算停止条件。
 - 普通 action UCB 为 `action_ucb_exploration=600`，单批最多 `100`。
+- static-risk cache 默认开启：`rollout_static_risk_cache_enabled=true`，容量参数为 `1024`。
+- 实验性 reverse-path cache 默认关闭：`rollout_reverse_path_cache_enabled=false`，容量参数为 `2048`。
+- 单次决策 move-cache memo 默认开启：`rollout_move_cache_memo_enabled=true`，容量参数为 `2048`。
 - 当前普通 rollout 为 `mid_eval_horizon=4`、`long_eval_horizon=8`，且 `mid_eval_weight=0`，即实际只采用第 8 回合终点评估。闪电 horizon 为 `10`，闪电 UCB 总预算为 `600`、batch 为 `2`、exploration 为 `300`。
+- v4 rollout 在 `round_index >= 512` 时按官方最大回合口径截断，不再让 8/10 回合 horizon 跨过最大回合继续模拟。
 - `c1_quick_transition_coin_threshold` 按行动前己方等效总金币判断。
 - 己方经济估值使用 `400` 阈值阶梯权重：阈值内 `money_weight=10`，阈值以上 `money_weight_above_threshold=6`。
-- `followup_plan_penalty` 当前为 `20`。历史上测试过 `50`，结果不如 v3；当前 `20` 是后续参数试验状态，尚无干净的 post-fix 大样本结论。
+- `followup_plan_penalty` 当前为 `0.0`。历史上测试过 `50` 与 `20`，结果不如 v3 或结论不干净；当前归零后需要重新评测强度。
 - `future_threat_eval_enabled=false`，`hold_followup_enabled=false`。对应代码和 SimViz 开关仍保留，便于单回合审计和后续重开试验。
 - 进攻性 `EMP Blaster` / `Emergency Evasion` 仍作为 best action 之后的后处理。
 
@@ -74,13 +78,22 @@ v4 初始状态完全继承 2026-04-30 的阶段性最优 v3；截至 2026-05-02
 
 2026-05-01 的当前 v4 vs v3 128 局完整评测使用 seed `711001:711064` 分 4 批完成，原始汇总为 v4 `66-62`、总血量差 `+219`、平均 `+1.7109`；v4 平均决策耗时 `2959.19ms`、p95 `3752.04ms`、最大 `4054.85ms`。但该批包含 3 局 IA：2 次 `TowerDestroy: EMPBlaster is active`、1 次 `TowerUpgrade: EMPBlaster is active`，结果目录为 `eval_results/v4_current_vs_v3_128_b{1..4}_{p0,p1}_full512_20260501_1636/`，聚合文件为 `eval_results/v4_current_vs_v3_128_full512_20260501_1636_aggregate.json`。该批应视为被 SDK 状态镜像 bug 污染，不能作为强度结论；修复后尚未重新跑 128 局。
 
+2026-05-03 在 rollout 对齐修复和 `followup_plan_penalty=0.0` 后，用新 seed 重新跑了两组座位平衡 32 局，均为完整 512 回合上限、`--debug-mode none`、每座位批次 `--jobs 16` 并行，无 IA / failure：
+
+- v4 vs v3：seed `734001:734032`，v4 `11-21-0`，总血量差 `+32`、平均 `+1.000`，总金币差 `+1462`、平均 `+45.688`，平均回合 `509.531`。v4 先手 `5-11`，血量差 `-20`，金币差 `+1653`，墙钟 `2552.554s`；v4 后手 `6-10`，血量差 `+52`，金币差 `-191`，墙钟 `2669.005s`。两批并行视角墙钟约 `2669.005s`，批次墙钟和 `5221.559s`。报告：`eval_results/v4_terminalfix_vs_v3_32_20260503_report.md`。
+- v4 vs baseline：seed `735001:735032`，v4 `21-11-0`，总血量差 `+287`、平均 `+8.969`，总金币差 `+6062`、平均 `+189.438`，平均回合 `502.594`。v4 先手 `11-5`，血量差 `+168`，金币差 `+3787`，墙钟 `1917.063s`；v4 后手 `10-6`，血量差 `+119`，金币差 `+2275`，墙钟 `1997.371s`。两批并行视角墙钟约 `1997.371s`，批次墙钟和 `3914.434s`。报告：`eval_results/v4_terminalfix_vs_baseline_32_20260503_report.md`。
+
+由于本轮使用 `--debug-mode none` 以减少测量扰动，markdown 中逐决策 `avg_s / p95_s / max_s` 为 `0`；效率对比应使用上述 bash `time` 墙钟日志，原始文件在 `eval_results/timing_logs/`。
+
+同日又用基础 debug 口径重新跑 v4 vs v3 128 局：seed `736001:736128`，座位平衡，四批各 `32` 局，每批 `--jobs 32`，`--debug-mode summary`，无 IA / failure。总结果 v4 `65-63-0`，总血量差 `+38`、平均 `+0.296875`，总金币差 `+11077`、平均 `+86.5390625`，平均回合 `504.671875`。分批结果：v4 先手 `16-16`、血量差 `+20`、墙钟 `2665.628s`；v4 先手 `18-14`、血量差 `+39`、墙钟 `2568.543s`；v4 后手 `15-17`、血量差 `-25`、墙钟 `2644.592s`；v4 后手 `16-16`、血量差 `+4`、墙钟 `2647.011s`。基础 debug 下 v4 决策耗时平均 `2.365496s`，四批 mean p95 `3.522564s`，最大 `4.043358s`；v4 平均候选数 `154.457`，mean p95 候选数 `230`。批次墙钟和 `10525.774s`，原始聚合：`eval_results/v4_debugsummary_vs_v3_128_20260503_aggregate.json`，markdown 报告：`eval_results/v4_debugsummary_vs_v3_128_20260503_report.md`。
+
 ## 当前 v4 优化假设
 
 2026-04-30 的回放分析显示，v4 的主要潜在提升点不是扩大普通建拆升降的手工奖惩，而是降低 rollout 对后续回合 followup 的过度乐观，并改善终局 threat 估值。
 
 已验证但不保留的窄改动：
 
-- `followup_plan_penalty = 50.0`：只对带有 future-turn followup 的 root plan 扣分，不惩罚普通 build / downgrade / upgrade / lure relocate 本身。该取值结果不如 v3，不作为保留结论。当前参数头中的 `20.0` 只是后续较轻惩罚试验状态。
+- `followup_plan_penalty = 50.0`：只对带有 future-turn followup 的 root plan 扣分，不惩罚普通 build / downgrade / upgrade / lure relocate 本身。该取值结果不如 v3，不作为保留结论。
 
 初步自战结果：
 
@@ -154,6 +167,19 @@ SimViz 的 `sdk_lure_inspector` 当前跟随 v4，并在页面顶部提供 `Futu
 - 移除了之前错误方向的“p0 等效金币可筹 EMP 时 p1 禁止塔操作”防守性补丁；正确语义是 p1 读取 p0 实际已接受操作，而不是预测 p0 可筹钱。
 - 新增回归测试 `test_cpp_sdk_public_state_applies_salvage_funded_emp_before_p1_turn()`，覆盖 seed `711058` 这种 salvage-funded EMP 场景。
 
+v4 runtime 另有两层运行兜底：自方操作先经 public mirror 过滤，再交给 native mirror；若 native mirror 仍拒绝其中某条操作，实际发送给 judger 的列表会退回到首个 native 非法操作之前的前缀，保持发送内容与 native 已应用状态一致。对手操作则先由 native mirror 应用；若 native mirror 拒绝但操作前 public fallback 能完整重放该对手操作，v4 会把 native simulator 重新同步到 public fallback，避免后手在前手操作被本地错拒后的状态上决策。
+
+## 2026-05-03 rollout 对齐修复
+
+后期回合 12 回合 rollout 的标准逻辑对齐检查统一采用“不考虑每 10 回合随机传送、标准逻辑也不做基地产兵”的口径。偏移排查中确认，主要误差来自终局存活统计和 base death 后的回合结算语义：
+
+- `DefenseSimulator::manage_ants()` 调整为先处理 `Success` / `Fail`；若基地血量降到 `0`，立即终局并跳过后续 spawn / age / income / effects；只有继续游戏时才处理 `TooOld`。
+- rollout 终点评估与统计不再把 `too_old()` 的蚂蚁、以及已经站在己方基地格但尚未被终局清理的蚂蚁算作仍活跃威胁。
+- 新增 `NativeSimulator::advance_round_without_base_spawns_no_teleport()` 作为 validation 专用标准逻辑入口，避免标准侧混入周期随机传送或基地产兵。
+- native tower id/index 同步、确定性移动 RNG 消耗、蚂蚁可走格 effect drift 等早先发现的差异已一并修正；v4 native mirror 发送兜底改为使用 public 已接受操作前缀，避免 native 拒绝后误截断。
+
+最终验证目录：`eval_results/v4_rollout_alignment_late_h12_s5000_no_teleport_after_terminal_alive_20260503/summary.json`。16 个后期局面、每个局面 5000 次、horizon 12 的 `sim - standard` 聚合偏差为：`base_hp` 均值 `-0.003162`、最差 `+0.034400`；`coins` 均值 `-0.025838`、最差 `+0.280800`；`worker_count` 均值 `-0.003488`、最差 `-0.039000`；`ant_hp` 均值 `-0.002975`、最差 `-0.775800`；`total_threat` 均值 `-0.537846`、最差 `-7.587876`；`total_score` 均值 `+0.975096`、最差 `-11.285465`。在 5000 次随机抽样尺度下，该结果可视为当前模拟与客观模拟几乎无系统偏差。
+
 ## 2026-05-02 模拟性能分析检查点
 
 本轮分析目标是提高 v4 大量 action / 大量 rollout 下的模拟吞吐，暂不考虑每 10 回合随机传送；`RandomSearchParams::ignore_periodic_random_move` 默认已经为 true。`sdk_lure_inspector` 的单回合 profiling 显示，普通 action UCB 的核心瓶颈集中在 `DefenseSimulator::simulate_round()` 内部的 `move_phase()`，其中 `move_cache_ns` 长期占据 `move_ns` 和总模拟时间的大头，很多样本达到 80% 以上。因此优先优化方向应是减少重复构建移动准备数据，而不是先微调终局估值权重。
@@ -164,7 +190,18 @@ SimViz 的 `sdk_lure_inspector` 当前跟随 v4，并在页面顶部提供 `Futu
 - 终点评估中复用 `terminal_evaluate_state()` 已经算出的塔全额回收价值，避免重复遍历塔。
 - SDK 的风险字段失效从移动缓存失效中拆开，仅在超武效果实际漂移或过期时重新计算静态风险。
 - `resolve_ant_step()` 去掉一次重复的 `tower_at()` 查询。
+- `prepare_move_cache()` 的 traffic / occupied / adjacent 动态场合并为一次清零和一次蚂蚁遍历，减少每次移动准备的固定开销。
+- `prepare_move_cache()` profiling 已拆分为 static / dynamic / weight / worker path / tower path / annotation；`sdk_lure_inspector` 的 `simulator_profile` 会输出这些字段。
+- 单次决策共享 static-risk cache 默认开启，只缓存 walkable / neighbors / damage risk / control risk / effect pull 这些不依赖蚂蚁分布的静态场。seed `707010` round `101` 动态预算样本中，该缓存命中约 `38,896 / 40,834` 次，`move_cache_static_ns` 从约 `85ms` 降到约 `20ms`，总样本数约从 `12,875` 增至 `13,075`。
+- `ReverseHeap` 去掉每次 Dijkstra 前对 `kMaxReverseHeapEntries` 大数组的无用零初始化。该改动不改变路径算法语义，但在 seed `707010` round `101` 固定预算样本中把总耗时从约 `560ms` 降到约 `341ms`；动态预算样本中约 `14,157` samples、`action_estimated_us_per_sample` 约 `256.9us`。
+- `move_phase()` 内的反向路径搜索现在只算本次移动打分会读取的目标格：worker 包含当前格与合法非塔候选格，combat 包含合法非塔候选格。Dijkstra 在这些目标格全部 finalized 后提前停止；`move_phase()` 结束后会把 move cache 标脏，防止部分路径被外部完整 `move_options_for()` 查询复用。该优化只改变准备阶段算到哪里，不改变任一被读取格子的最短路结果。
 
-下一步最可能的性能收益点是为单次决策增加精确缓存：相同局面下，多个 action 的大量 rollout 经常收敛到相同的后续模拟状态，此时 `prepare_move_cache()` 会重复构建反向路径、风险场、邻接拥堵等准备数据。为保证正确性，缓存不应保存最终 `move_options_for()` 的结果，也不应保存 `reservations` / `tower_claims` 这类依赖当前移动顺序的临时标注；较稳妥的做法是只缓存准备阶段的核心字段，并在命中后重新执行当轮的 reservation / attack annotation。
+单次决策 move-cache memo 当前默认开启：`rollout_move_cache_memo_enabled=true`，容量参数为 `rollout_move_cache_memo_entries=2048`。当前实现只缓存准备阶段的核心字段，命中后仍重新执行当轮 reservation / attack annotation，不缓存最终 `move_options_for()` 结果，也不缓存 `reservations` / `tower_claims`。memo key 使用 hash index 查找，缓存的 tower plans 改为紧凑存储，只保存实际有效 plan，避免每个 entry 携带 64 个完整 `ReversePathPlan` slot。move-phase 部分路径模式下，memo key 额外记录参与路径的蚂蚁 role(worker/combat) 与 `last_move`，使部分路径只在同一候选目标集合语义下命中；外部完整路径查询不带该 key 后缀。seed `707010` round `101` 固定预算样本中，部分路径 + memo 的代表性 run 可把 `move_cache_ns` 从此前约 `271ms` 降到约 `167ms`，`action_estimated_us_per_sample` 从约 `240us` 降到约 `158us`；动态预算样本中仍能达到约 `16,100` samples，`action_estimated_us_per_sample` 约 `208us`。同一 replay 的 round `80` / `140` 抽样中，2048 entries 相对 512 entries 对 samples 也更有利。
 
-候选缓存键必须保守覆盖所有会影响准备字段的输入：当前移动玩家、塔的位置 / 类型 / 等级 / 血量 / 冷却、仍存活且未冻结且未 too_old 的蚂蚁位置与种类、超武效果的位置 / 类型 / 剩余回合，以及地图和玩家静态配置。当前反向路径不依赖信息素，但最终移动打分会依赖信息素，因此信息素不应作为“准备核心缓存”命中后可跳过的最终决策输入；若未来缓存范围扩大，必须重新审计这一点。
+`sdk_lure_inspector` 新增 `alignment_check` 模式，用于抽样对比 replay 标准状态与 DefenseSimulator 投影状态，并把当前 best rollout 均值和 replay 未来 `long_eval_horizon` 回合的实际标准状态估值放在同一输出中。seed `707010` 的 round `80/101/140/180`、player `0`、horizon `8` 检查中，起点状态和未来标准状态投影到 DefenseSimulator 的 `base_hp / coins / tower_count / tower_hp / worker_count / combat_count / ant_hp / enemy level` 差异均为 `0`；预测均值和实际未来估值的差异主要来自当前 best action 与 replay 实际 action 不一致，不是状态镜像硬偏差。
+
+实验性 reverse-path cache 也默认关闭：`rollout_reverse_path_cache_enabled=false`。它以 walkable / step_total / step_damage / sources 为 key 缓存单次 Dijkstra 的 `ReversePathPlan`，语义上精确；但 seed `707010` round `101` 固定预算中命中率偏低，hash 与 lookup 成本超过节省的 Dijkstra 时间。当前只保留为 inspector 调试开关。
+
+当前 full move memo key 覆盖当前移动玩家、存活塔的 id / 位置 / 类型、存活蚂蚁的位置序列、是否需要 worker/combat 路径的全局 mask、超武效果的位置 / 类型 / 剩余回合。它不再逐个记录与准备字段无关的蚂蚁 HP / level / frozen / too_old 细节；这些只通过“是否实际需要某类路径”的 mask 影响准备字段。static-risk cache key 只覆盖当前移动玩家、存活塔的位置 / 类型、会影响静态场的己方 LightningStorm 与敌方 Deflector / EmergencyEvasion。塔 HP 和 cooldown 当前不参与准备字段，只在后续移动打分或攻击阶段使用，因此不放进 static-risk cache key；若未来 `prepare_move_cache()` 使用这些字段，必须同步更新 key。当前反向路径不依赖信息素，但最终移动打分会依赖信息素，因此信息素不应作为“准备核心缓存”命中后可跳过的最终决策输入。
+
+分段 profile 当前显示，static-risk 已不是主要瓶颈；seed `707010` round `101` 中 `worker_path` 与 `tower_path` 仍合计占据绝大多数 `move_cache_ns`。下一轮主要方向应转向反向路径算法本身或精确 lazy combat tower path；当前连通分量裁剪在该样本中 `tower_path_skipped=0`，不作为默认优化。
