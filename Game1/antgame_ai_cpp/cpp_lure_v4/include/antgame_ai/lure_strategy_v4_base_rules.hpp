@@ -38,8 +38,16 @@ inline void append_downgrade_candidate(
     }
 }
 
+inline bool base_code_enabled(int code) {
+    return is_base_slot_code(code) && code != C2;
+}
+
 inline bool base_build_enabled(int code) {
-    return is_base_slot_code(code);
+    return base_code_enabled(code);
+}
+
+inline bool base_upgrade_enabled(int code) {
+    return base_code_enabled(code);
 }
 
 inline bool c1_quick_route_enabled(int code) {
@@ -47,8 +55,9 @@ inline bool c1_quick_route_enabled(int code) {
 }
 
 inline bool quick_sniper_route_enabled(int code) {
-    return code == C1 || code == C2 || code == C3 || code == L1 || code == L2 || code == L3 || code == R1 ||
-           code == R2 || code == R3;
+    return base_upgrade_enabled(code) &&
+           (code == C1 || code == C3 || code == L1 || code == L2 || code == L3 || code == R1 ||
+            code == R2 || code == R3);
 }
 
 inline bool sniper_route_allowed(int code, bool c1_sniper_ready) {
@@ -130,6 +139,9 @@ inline FollowupAction producer_medic_followup(int code) {
 }
 
 inline std::vector<TowerType> base_build_upgrade_targets(int code, bool c1_sniper_ready, bool producer_medic_enabled) {
+    if (!base_upgrade_enabled(code)) {
+        return {};
+    }
     if (code == C1) {
         return {TowerType::Heavy};
     }
@@ -154,6 +166,9 @@ inline FollowupAction quick_sniper_followup(int code) {
 }
 
 inline std::vector<TowerType> base_existing_upgrade_targets(int code, bool c1_sniper_ready, bool producer_medic_enabled) {
+    if (!base_upgrade_enabled(code)) {
+        return {};
+    }
     if (code == C1) {
         return {TowerType::Heavy};
     }

@@ -7,6 +7,221 @@
 
 namespace antgame::sdk::lure_strategy_detail {
 
+struct BaseUpgradeChoice {
+    Operation upgrade;
+    TowerType target_type = TowerType::Basic;
+    bool allow_single_upgrade = true;
+    FollowupAction next_upgrade;
+};
+
+inline std::vector<BaseUpgradeChoice> base_upgrade_choices_for_existing(
+    int tower_id,
+    TowerType current_type,
+    int code,
+    bool c1_sniper_ready,
+    bool producer_medic_enabled) {
+    std::vector<BaseUpgradeChoice> choices;
+    if (!base_upgrade_enabled(code)) {
+        return choices;
+    }
+
+    auto add_choice = [&](TowerType target_type, bool allow_single_upgrade, FollowupAction next_upgrade = {}) {
+        choices.push_back(BaseUpgradeChoice{
+            Operation(OperationType::UpgradeTower, tower_id, static_cast<int>(target_type)),
+            target_type,
+            allow_single_upgrade,
+            next_upgrade,
+        });
+    };
+
+    if (current_type == TowerType::Basic) {
+        bool added_quick = false;
+        for (TowerType target_type : base_existing_upgrade_targets(code, c1_sniper_ready, producer_medic_enabled)) {
+            FollowupAction next_upgrade;
+            if (target_type == TowerType::Producer) {
+                next_upgrade = upgrade_followup(code, TowerType::ProducerMedic);
+            } else if (target_type == TowerType::Quick && sniper_route_allowed(code, c1_sniper_ready)) {
+                next_upgrade = upgrade_followup(code, TowerType::Sniper);
+            }
+            add_choice(target_type, true, next_upgrade);
+            added_quick = added_quick || target_type == TowerType::Quick;
+        }
+        if (!added_quick && can_build_quick_sniper_chain(code, c1_sniper_ready)) {
+            add_choice(TowerType::Quick, false, upgrade_followup(code, TowerType::Sniper));
+        }
+    } else if (current_type == TowerType::Quick && sniper_route_allowed(code, c1_sniper_ready)) {
+        add_choice(TowerType::Sniper, true);
+    } else if (current_type == TowerType::Producer && producer_medic_enabled) {
+        add_choice(TowerType::ProducerMedic, true);
+    }
+    return choices;
+}
+
+inline FollowupAction base_recycle_then_upgrade_followup(int source_code, int target_code, TowerType target_type) {
+    return followup_sequence({downgrade_step(source_code), upgrade_step(target_code, target_type)});
+}
+
+inline FollowupAction base_recycle_then_next_upgrade_followup(int source_code, const FollowupAction &next_upgrade) {
+    FollowupAction followup;
+    followup.push(downgrade_step(source_code));
+    for (int index = 0; index < next_upgrade.count; ++index) {
+        followup.push(next_upgrade.steps[static_cast<std::size_t>(index)]);
+    }
+    return followup;
+}
+
+inline void append_base_recycle_upgrade_candidates(
+    const PublicState &state,
+    int player,
+    bool c1_sniper_ready,
+    bool producer_medic_enabled,
+    std::vector<SinglePlan> &plans) {
+    for (int source_code : base_codes()) {
+        const Tower *source = tower_at_code(state, player, source_code);
+        if (source == nullptr || source->player != player) {
+            continue;
+        }
+
+        const Operation recycle(OperationType::DowngradeTower, source->tower_id);
+        if (legalize_operations(state, player, {recycle}).empty()) {
+            continue;
+        }
+        const bool can_followup_recycle = source->tower_type != TowerType::Basic;
+
+        for (int target_code : base_codes()) {
+            if (target_code == source_code) {
+                continue;
+            }
+            const Tower *target = tower_at_code(state, player, target_code);
+            if (target == nullptr || target->player != player) {
+                continue;
+            }
+
+            const auto choices = base_upgrade_choices_for_existing(
+                target->tower_id,
+                target->tower_type,
+                target_code,
+                c1_sniper_ready,
+                producer_medic_enabled);
+            for (const BaseUpgradeChoice &choice : choices) {
+                std::vector<Operation> root_ops{recycle, choice.upgrade};
+                const bool root_recycle_and_upgrade_legal =
+                    !legalize_operations(state, player, root_ops).empty();
+                const std::string base_name =
+                    std::string("base_recycle_") + code_name(source_code) + "_and_" + code_name(target_code) +
+                    "_to_" + tower_type_name(choice.target_type);
+
+                if (choice.allow_single_upgrade && root_recycle_and_upgrade_legal) {
+                    plans.push_back(SinglePlan{
+                        base_name,
+                        root_ops,
+                        producer_medic_upgrade_heuristic(choice.target_type),
+                    });
+                }
+
+                if (choice.allow_single_upgrade && can_followup_recycle) {
+                    const FollowupAction followup =
+                        base_recycle_then_upgrade_followup(source_code, target_code, choice.target_type);
+                    plans.push_back(SinglePlan{
+                        std::string("base_recycle_") + code_name(source_code) + "_then_recycle_and_" +
+                            code_name(target_code) + "_to_" + tower_type_name(choice.target_type),
+                        {recycle},
+                        followup_upgrade_heuristic(followup),
+                        followup,
+                    });
+                }
+
+                if (can_followup_recycle && !choice.next_upgrade.empty() && root_recycle_and_upgrade_legal) {
+                    const FollowupAction followup =
+                        base_recycle_then_next_upgrade_followup(source_code, choice.next_upgrade);
+                    plans.push_back(SinglePlan{
+                        base_name + "_then_recycle_and_" + followup_name(choice.next_upgrade),
+                        root_ops,
+                        producer_medic_upgrade_heuristic(choice.target_type) + followup_upgrade_heuristic(followup),
+                        followup,
+                    });
+                }
+            }
+        }
+    }
+}
+
+inline void append_base_recycle_upgrade_candidates(
+    const rs::DefenseSimulator &simulator,
+    int player,
+    bool c1_sniper_ready,
+    bool producer_medic_enabled,
+    std::vector<SinglePlan> &plans) {
+    for (int source_code : base_codes()) {
+        const rs::SearchTower *source = tower_at_code(simulator, player, source_code);
+        if (source == nullptr || !source->alive()) {
+            continue;
+        }
+
+        const Operation recycle(OperationType::DowngradeTower, source->tower_id);
+        if (legalize_operations(simulator, {recycle}).empty()) {
+            continue;
+        }
+        const bool can_followup_recycle = source->tower_type != TowerType::Basic;
+
+        for (int target_code : base_codes()) {
+            if (target_code == source_code) {
+                continue;
+            }
+            const rs::SearchTower *target = tower_at_code(simulator, player, target_code);
+            if (target == nullptr || !target->alive()) {
+                continue;
+            }
+
+            const auto choices = base_upgrade_choices_for_existing(
+                target->tower_id,
+                target->tower_type,
+                target_code,
+                c1_sniper_ready,
+                producer_medic_enabled);
+            for (const BaseUpgradeChoice &choice : choices) {
+                std::vector<Operation> root_ops{recycle, choice.upgrade};
+                const bool root_recycle_and_upgrade_legal =
+                    !legalize_operations(simulator, root_ops).empty();
+                const std::string base_name =
+                    std::string("base_recycle_") + code_name(source_code) + "_and_" + code_name(target_code) +
+                    "_to_" + tower_type_name(choice.target_type);
+
+                if (choice.allow_single_upgrade && root_recycle_and_upgrade_legal) {
+                    plans.push_back(SinglePlan{
+                        base_name,
+                        root_ops,
+                        producer_medic_upgrade_heuristic(choice.target_type),
+                    });
+                }
+
+                if (choice.allow_single_upgrade && can_followup_recycle) {
+                    const FollowupAction followup =
+                        base_recycle_then_upgrade_followup(source_code, target_code, choice.target_type);
+                    plans.push_back(SinglePlan{
+                        std::string("base_recycle_") + code_name(source_code) + "_then_recycle_and_" +
+                            code_name(target_code) + "_to_" + tower_type_name(choice.target_type),
+                        {recycle},
+                        followup_upgrade_heuristic(followup),
+                        followup,
+                    });
+                }
+
+                if (can_followup_recycle && !choice.next_upgrade.empty() && root_recycle_and_upgrade_legal) {
+                    const FollowupAction followup =
+                        base_recycle_then_next_upgrade_followup(source_code, choice.next_upgrade);
+                    plans.push_back(SinglePlan{
+                        base_name + "_then_recycle_and_" + followup_name(choice.next_upgrade),
+                        root_ops,
+                        producer_medic_upgrade_heuristic(choice.target_type) + followup_upgrade_heuristic(followup),
+                        followup,
+                    });
+                }
+            }
+        }
+    }
+}
+
 inline std::vector<SinglePlan> generate_base_candidates(const PublicState &state, int player) {
     std::vector<SinglePlan> plans;
     plans.push_back(SinglePlan{"base_hold", {}, 0.0});
@@ -163,7 +378,7 @@ inline std::vector<SinglePlan> generate_base_candidates(const PublicState &state
             if (sniper_route_allowed(code, c1_sniper_ready) && !legalize_operations(state, player, {sniper}).empty()) {
                 plans.push_back(SinglePlan{"base_" + code_name(code) + "_to_Sniper", {sniper}, 0.0});
             }
-        } else if (tower->tower_type == TowerType::Producer && producer_medic_enabled) {
+        } else if (tower->tower_type == TowerType::Producer && base_upgrade_enabled(code) && producer_medic_enabled) {
             const Operation medic(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(TowerType::ProducerMedic));
             if (!legalize_operations(state, player, {medic}).empty()) {
                 plans.push_back(SinglePlan{
@@ -174,6 +389,8 @@ inline std::vector<SinglePlan> generate_base_candidates(const PublicState &state
             }
         }
     }
+
+    append_base_recycle_upgrade_candidates(state, player, c1_sniper_ready, producer_medic_enabled, plans);
 
     return plans;
 }
@@ -331,7 +548,7 @@ inline std::vector<SinglePlan> generate_base_candidates(const rs::DefenseSimulat
             if (sniper_route_allowed(code, c1_sniper_ready) && !legalize_operations(simulator, {sniper}).empty()) {
                 plans.push_back(SinglePlan{"base_" + code_name(code) + "_to_Sniper", {sniper}, 0.0});
             }
-        } else if (tower->tower_type == TowerType::Producer && producer_medic_enabled) {
+        } else if (tower->tower_type == TowerType::Producer && base_upgrade_enabled(code) && producer_medic_enabled) {
             const Operation medic(OperationType::UpgradeTower, tower->tower_id, static_cast<int>(TowerType::ProducerMedic));
             if (!legalize_operations(simulator, {medic}).empty()) {
                 plans.push_back(SinglePlan{
@@ -342,6 +559,8 @@ inline std::vector<SinglePlan> generate_base_candidates(const rs::DefenseSimulat
             }
         }
     }
+
+    append_base_recycle_upgrade_candidates(simulator, player, c1_sniper_ready, producer_medic_enabled, plans);
 
     return plans;
 }

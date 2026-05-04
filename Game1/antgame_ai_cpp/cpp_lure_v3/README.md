@@ -1,6 +1,6 @@
 # cpp_lure_v3
 
-这是 Game1 当前 v3 C++ AI，也是当前本地最优解。2026-04-27 之后，`cpp_heavy_baseline` 已被当前 v2 完全覆盖，因此 v2 与 baseline 当前是同一策略冻结点。`cpp_lure_v2` 源码目录和打包目标已经删除。后续实验应保持 v3 与 baseline 解耦，不直接改 baseline。
+这是 Game1 的 v3 C++ AI，也是 2026-04-30 的阶段性最优基准。2026-05-04 后，当前本地最强记录转为 `cpp_lure_v4` 的 `currentparams` checkpoint；v3 仍作为主要强度对照。2026-04-27 之后，`cpp_heavy_baseline` 已被当前 v2 完全覆盖，因此 v2 与 baseline 当前是同一策略冻结点。`cpp_lure_v2` 源码目录和打包目标已经删除。后续实验应保持 v3 与 baseline 解耦，不直接改 baseline。
 
 ## 入口
 

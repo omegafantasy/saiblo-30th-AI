@@ -31,22 +31,22 @@ struct V4LureStrategyTuning {
     int forced_lure_sell_distance = 1;
     int max_non_lure_towers = 2;
     int rich_max_non_lure_towers = 2;
-    int c1_quick_transition_coin_threshold = 290;
+    int c1_quick_transition_coin_threshold = 250;
 
     // root_score(plan) = mean_rollout_score(plan) + plan_heuristic(plan).
     // plan_heuristic =
     //   base_heuristic + lure_heuristic + lightning_heuristic
     // - operation_penalty - followup_plan_penalty(if the plan depends on future-turn followup).
-    double hold_bonus = 80.0;
-    double followup_plan_penalty = 20.0;
+    double hold_bonus = 60.0;
+    double followup_plan_penalty = 0.0;
 
     double c1_build_bonus = 50.0;
     double c1_heavy_bonus = 60.0;
-    double c1_heavy_side_trans_bonus = -300.0;
+    double c1_heavy_side_trans_bonus = 0.0;
     double c1_quick_trans_bonus = 100.0;
     double c1_sniper_trans_bonus = 400.0;
 
-    double sniper_downgrade_penalty = 300.0;
+    double sniper_downgrade_penalty = 400.0;
     bool enable_producer_medic_branch = false;
     double producer_medic_equivalent_money_threshold = 300.0;
     double producer_upgrade_bonus = 200.0;
@@ -101,7 +101,7 @@ struct V4LureStrategyTuning {
     double lightning_no_enemy_super_penalty = -200.0;
     double lightning_shield_break_bonus = 25.0;
     double lightning_damage_bonus_per_hp = 1.5;
-    double lightning_tower_value_ratio = 0.4;
+    double lightning_tower_value_ratio = 0.5;
 
     int offensive_evasion_min_enemy_lightning_cd = 5;
     int offensive_evasion_min_post_action_coins = 30;

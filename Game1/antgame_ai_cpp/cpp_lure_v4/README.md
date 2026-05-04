@@ -55,7 +55,7 @@ python3 Game1/antgame_ai_cpp/tools/eval_cpp_selfplay.py \
 
 ## 当前状态说明
 
-v4 初始状态完全继承 2026-04-30 的阶段性最优 v3；截至 2026-05-03，v4 仍是实验分支，尚未证明强于 v3。当前本地最优解仍按 v3 记录。
+v4 初始状态完全继承 2026-04-30 的阶段性最优 v3。2026-05-04 的 `currentparams` 版本已记录为当前最强 v4 checkpoint，并在新 seed 的 128 局座位平衡测试中显著领先 v3 与 baseline。
 
 当前 v4 参数以 `include/antgame_ai/lure_strategy_v4_params.hpp` 为准，关键口径如下：
 
@@ -70,9 +70,16 @@ v4 初始状态完全继承 2026-04-30 的阶段性最优 v3；截至 2026-05-03
 - v4 rollout 在 `round_index >= 512` 时按官方最大回合口径截断，不再让 8/10 回合 horizon 跨过最大回合继续模拟。
 - `c1_quick_transition_coin_threshold` 按行动前己方等效总金币判断。
 - 己方经济估值使用 `400` 阈值阶梯权重：阈值内 `money_weight=10`，阈值以上 `money_weight_above_threshold=6`。
-- `followup_plan_penalty` 当前为 `0.0`。历史上测试过 `50` 与 `20`，结果不如 v3 或结论不干净；当前归零后需要重新评测强度。
+- `hold_bonus=60.0`，`followup_plan_penalty=0.0`，`c1_quick_transition_coin_threshold=250`，`sniper_downgrade_penalty=400.0`，`lightning_tower_value_ratio=0.5`。
+- base 系列当前禁用 `C2` 作为新建、升级、quick-sniper 路径目标；已有 `C2` 仍可降级、拆除或被其它清理候选处理。
+- base 系列允许“一座 base 塔降/拆 + 另一座 base 塔升级”的小规模组合候选，包括同回合 `recycle A + upgrade B`、先 `recycle A` 后 followup `recycle A + upgrade B`，以及同回合 `recycle A + upgrade B` 后 followup `recycle A + next upgrade B`。由于 base 非 lure 塔上限仍为 `2`，该变体只额外增加少量 action。
 - `future_threat_eval_enabled=false`，`hold_followup_enabled=false`。对应代码和 SimViz 开关仍保留，便于单回合审计和后续重开试验。
 - 进攻性 `EMP Blaster` / `Emergency Evasion` 仍作为 best action 之后的后处理。
+
+2026-05-04 记录的当前最强 v4 使用上述参数和 base 系列规则，评测均为完整 512 回合上限、座位平衡、新 seed、基础 debug 口径，无 IA / failure：
+
+- v4 vs v3：seed `741001:741128`，v4 `86-42-0`，总血量差 `+1121`、平均 `+8.758`，总金币差 `+14219`、平均 `+111.086`，Lgt/EMP/Eva `780/18/92`，v4 决策耗时 `avg_s=2.024`、mean `p95_s=3.277`、`max_s=4.029`。报告：`eval_results/v4_currentparams_vs_v3_128_20260504_1506_report.md`。
+- v4 vs baseline：seed `742001:742128`，v4 `80-48-0`，总血量差 `+758`、平均 `+5.922`，总金币差 `+4767`、平均 `+37.242`，Lgt/EMP/Eva `793/11/106`，v4 决策耗时 `avg_s=2.045`、mean `p95_s=3.281`、`max_s=4.044`。报告：`eval_results/v4_currentparams_vs_baseline_128_20260504_1602_report.md`。
 
 2026-04-30 的 v3 vs baseline 128 局显示，v3 相对 baseline 为正收益，但存在明显 p1 侧效应：v3 as p0 为 `35-29`、血量差 `-39`；v3 as p1 为 `40-24`、血量差 `+430`。当前判断可能来自本地协议当前回合信息差和连续 seed 的随机相关性；后续 v4 调参应优先使用打散 seed，并同时观察 v4 vs v3 与 v4 vs baseline。
 
