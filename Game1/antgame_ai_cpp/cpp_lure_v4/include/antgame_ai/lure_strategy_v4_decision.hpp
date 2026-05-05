@@ -110,124 +110,30 @@ inline std::vector<Operation> decide_lure_strategy(
             }
         }
 
-        int enemy_ant_count = 0;
-        int enemy_combat_ring1 = 0;
-        int enemy_combat_ring2 = 0;
-        double combat_pressure = 0.0;
-        double tower_pressure = 0.0;
-        const auto [base_x, base_y] = kPlayerBases[context.player];
-        for (const auto &ant : state.ants) {
-            if (ant.player == context.player || !ant.is_alive()) {
-                continue;
-            }
-            ++enemy_ant_count;
-            if (ant.kind == AntKind::Combat) {
-                const int d = hex_distance(ant.x, ant.y, base_x, base_y);
-                if (d <= 1) {
-                    ++enemy_combat_ring1;
-                }
-                if (d <= 2) {
-                    ++enemy_combat_ring2;
-                }
-                combat_pressure += 1.0 / std::max(1, d);
-            }
-        }
-        for (const auto &tower : state.towers) {
-            if (tower.player != context.player || !is_base_slot_code(code_at(tower, context.player))) {
-                continue;
-            }
-            for (const auto &ant : state.ants) {
-                if (ant.player == context.player || ant.kind != AntKind::Combat || !ant.is_alive()) {
-                    continue;
-                }
-                tower_pressure += 1.0 / std::max(1, hex_distance(ant.x, ant.y, tower.x, tower.y));
-            }
-        }
-
         const auto &best = evaluated.empty() ? CombinedPlan{} : evaluated.front().plan;
-        const auto &best_eval = evaluated.empty() ? EvaluatedPlan{} : evaluated.front();
+        int total_rollouts = 0;
+        for (const auto &item : evaluated) {
+            total_rollouts += item.rollout_count;
+        }
         std::cerr
             << "{\"kind\":\"decision\""
             << ",\"round\":" << state.round_index
             << ",\"player\":" << context.player
             << ",\"serial\":" << serial
-            << ",\"base_candidates\":" << root_plans.base_count
-            << ",\"lure_candidates\":" << root_plans.lure_count
-            << ",\"lightning_candidates\":" << root_plans.lightning_count
-            << ",\"raw_combo_count\":" << root_plans.raw_combo_count
-            << ",\"raw_plan_count\":" << root_plans.raw_plan_count
             << ",\"plans_total\":" << root_plans.plans.size()
             << ",\"plans_unique\":" << root_plans.plans.size()
-            << ",\"best_key\":\"" << debug_json_escape(best.key.empty() ? "hold" : best.key) << '"'
+            << ",\"total_rollouts\":" << total_rollouts
+            << ",\"action_count\":" << final_ops.size()
             << ",\"best_name\":\"" << debug_json_escape(best.name.empty() ? "hold" : best.name) << '"'
-            << ",\"best_base_name\":\"" << debug_json_escape(best.base_name.empty() ? "none" : best.base_name) << '"'
-            << ",\"best_lure_name\":\"" << debug_json_escape(best.lure_name.empty() ? "none" : best.lure_name) << '"'
-            << ",\"best_lightning_name\":\"" << debug_json_escape(best.lightning_name.empty() ? "none" : best.lightning_name) << '"'
-            << ",\"best_first\":\"" << debug_json_escape(ops_text(best.ops)) << '"'
-            << ",\"best_pretty\":\"" << debug_json_escape(pretty_ops_text(state, context.player, best.ops)) << '"'
-            << ",\"best_second\":\"" << debug_json_escape(followup_text(best.followup)) << '"'
-            << ",\"final_first\":\"" << debug_json_escape(ops_text(final_ops)) << '"'
             << ",\"final_pretty\":\"" << debug_json_escape(pretty_ops_text(state, context.player, final_ops)) << '"'
             << ",\"v4_emp_used\":" << (offensive_emp.use ? "true" : "false")
             << ",\"v4_emp_reason\":\"" << debug_json_escape(offensive_emp.reason) << '"'
             << ",\"v4_emp_x\":" << offensive_emp.x
             << ",\"v4_emp_y\":" << offensive_emp.y
-            << ",\"v4_emp_tower_id\":" << offensive_emp.tower_id
-            << ",\"v4_emp_tower_type\":" << offensive_emp.tower_type
-            << ",\"v4_emp_combat_ant_id\":" << offensive_emp.combat_ant_id
-            << ",\"v4_emp_distance\":" << offensive_emp.distance
-            << ",\"v4_emp_post_action_coins\":" << offensive_emp.post_action_coins
             << ",\"v4_evasion_used\":" << (offensive_evasion.use ? "true" : "false")
             << ",\"v4_evasion_reason\":\"" << debug_json_escape(offensive_evasion.reason) << '"'
             << ",\"v4_evasion_x\":" << offensive_evasion.x
             << ",\"v4_evasion_y\":" << offensive_evasion.y
-            << ",\"v4_evasion_worker_count\":" << offensive_evasion.worker_count
-            << ",\"v4_evasion_combat_count\":" << offensive_evasion.combat_count
-            << ",\"v4_evasion_post_action_coins\":" << offensive_evasion.post_action_coins
-            << ",\"v4_enemy_lightning_cd\":" << offensive_evasion.enemy_lightning_cooldown
-            << ",\"action_legend\":\"" << action_legend_text() << '"'
-            << ",\"best_base_heuristic\":" << best.base_heuristic
-            << ",\"best_lure_heuristic\":" << best.lure_heuristic
-            << ",\"best_lightning_heuristic\":" << best.lightning_heuristic
-            << ",\"best_operation_penalty\":" << best.operation_penalty
-            << ",\"best_followup_penalty\":" << best.followup_penalty
-            << ",\"best_heuristic\":" << best.heuristic
-            << ",\"best_score_before_heuristic\":" << best_eval.mean_rollout_score
-            << ",\"best_mean_base_hp_raw\":" << best_eval.mean_rollout.terminal.base_hp_raw
-            << ",\"best_mean_base_hp_score\":" << best_eval.mean_rollout.terminal.base_hp_score
-            << ",\"best_mean_tower_value_raw\":" << best_eval.mean_rollout.terminal.tower_value_raw
-            << ",\"best_mean_tower_value_score\":" << best_eval.mean_rollout.terminal.tower_value_score
-            << ",\"best_mean_money_raw\":" << best_eval.mean_rollout.terminal.money_raw
-            << ",\"best_mean_money_score\":" << best_eval.mean_rollout.terminal.money_score
-            << ",\"best_mean_c1_bonus_raw\":" << best_eval.mean_rollout.terminal.c1_bonus_raw
-            << ",\"best_mean_c1_bonus_score\":" << best_eval.mean_rollout.terminal.c1_bonus_score
-            << ",\"best_mean_worker_threat_raw\":" << best_eval.mean_rollout.terminal.worker_threat_raw
-            << ",\"best_mean_worker_threat_score\":" << best_eval.mean_rollout.terminal.worker_threat_score
-            << ",\"best_mean_combat_threat_raw\":" << best_eval.mean_rollout.terminal.combat_threat_raw
-            << ",\"best_mean_combat_threat_score\":" << best_eval.mean_rollout.terminal.combat_threat_score
-            << ",\"best_mean_future_base_damage_raw\":" << best_eval.mean_rollout.terminal.future_base_damage_raw
-            << ",\"best_mean_future_base_damage_score\":" << best_eval.mean_rollout.terminal.future_base_damage_score
-            << ",\"best_mean_future_worker_threat_raw\":" << best_eval.mean_rollout.terminal.future_worker_threat_raw
-            << ",\"best_mean_future_combat_threat_raw\":" << best_eval.mean_rollout.terminal.future_combat_threat_raw
-            << ",\"best_mean_future_projected_threat_raw\":" << best_eval.mean_rollout.terminal.future_projected_threat_raw
-            << ",\"best_mean_future_adjusted_threat_raw\":" << best_eval.mean_rollout.terminal.future_adjusted_threat_raw
-            << ",\"best_mean_future_threat_adjustment_score\":"
-            << best_eval.mean_rollout.terminal.future_threat_adjustment_score
-            << ",\"best_mean_terminal_score\":" << best_eval.mean_rollout.terminal.total_score
-            << ",\"best_mean_lightning_bonus_raw\":" << best_eval.mean_rollout.lightning_bonus_raw
-            << ",\"best_mean_lightning_bonus_score\":" << best_eval.mean_rollout.lightning_bonus_score
-            << ",\"best_mean_reactive_operation_penalty\":" << best_eval.mean_rollout.reactive_operation_penalty
-            << ",\"coins\":" << state.coins[context.player]
-            << ",\"base_hp\":" << state.bases[context.player].hp
-            << ",\"tower_count\":" << state.tower_count(context.player)
-            << ",\"root_enemy_ants\":\"" << debug_json_escape(enemy_ant_state_text(state, context.player)) << '"'
-            << ",\"sim_enemy_ants\":\"" << debug_json_escape(sim_enemy_ant_state_text(defense_root)) << '"'
-            << ",\"root_own_towers\":\"" << debug_json_escape(own_tower_state_text(state, context.player)) << '"'
-            << ",\"enemy_ant_count\":" << enemy_ant_count
-            << ",\"enemy_combat_ring1\":" << enemy_combat_ring1
-            << ",\"enemy_combat_ring2\":" << enemy_combat_ring2
-            << ",\"combat_pressure\":" << combat_pressure
-            << ",\"tower_pressure\":" << tower_pressure
             << ",\"best_score\":" << (evaluated.empty() ? 0.0 : evaluated.front().mean_score)
             << ",\"elapsed_us\":" << elapsed_us
             << "}\n";

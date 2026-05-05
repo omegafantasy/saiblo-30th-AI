@@ -39,6 +39,7 @@ struct OffensiveEmpChoice {
     int tower_type = -1;
     int combat_ant_id = -1;
     int distance = 1000;
+    int frontline_ant_count = 0;
 };
 
 inline bool enemy_lightning_active(const PublicState &state, int player) {
@@ -159,7 +160,63 @@ inline OffensiveEmpChoice choose_offensive_emp(
     }
 
     if (!out.use) {
-        out.reason = "no_combat_near_top_tower";
+        const int emp_cost = weapon_stats(SuperWeaponType::EmpBlaster).cost;
+        const int min_remaining_coins = v4_lure_config().offensive_surplus_emp_min_remaining_coins;
+        if (gate.post_action_coins < emp_cost + min_remaining_coins) {
+            out.reason = "surplus_emp_coins_too_low";
+            return out;
+        }
+
+        const int min_frontline_ants = v4_lure_config().offensive_surplus_emp_min_frontline_ants;
+        const int frontline_distance = v4_lure_config().offensive_surplus_emp_frontline_base_distance;
+        for (const auto &ant : gate.post_action.ants) {
+            if (ant.player != player || !ant.is_alive()) {
+                continue;
+            }
+            if (hex_distance(ant.x, ant.y, enemy_base_x, enemy_base_y) <= frontline_distance) {
+                ++out.frontline_ant_count;
+            }
+        }
+        if (out.frontline_ant_count < min_frontline_ants) {
+            out.reason = "surplus_emp_insufficient_frontline_ants";
+            return out;
+        }
+
+        double surplus_best_tower_value = -1.0;
+        for (int code : {C1, C2, C3, L1, L2, L3, R1, R2, R3}) {
+            const Tower *tower = tower_at_code(gate.post_action, enemy, code);
+            if (tower == nullptr || tower->player != enemy ||
+                (tower->tower_type != TowerType::Sniper && tower_level(tower->tower_type) < 2)) {
+                continue;
+            }
+
+            const Operation operation(OperationType::UseEmpBlaster, tower->x, tower->y);
+            if (!gate.post_action.can_apply_operation(player, operation)) {
+                continue;
+            }
+            const int tower_distance_to_base = hex_distance(tower->x, tower->y, enemy_base_x, enemy_base_y);
+            const double tower_value = tower_salvage_value(gate.post_action, *tower, enemy_tower_count);
+            if (!out.use || tower_distance_to_base < best_tower_distance_to_base ||
+                (tower_distance_to_base == best_tower_distance_to_base && tower_value > surplus_best_tower_value) ||
+                (tower_distance_to_base == best_tower_distance_to_base && tower_value == surplus_best_tower_value &&
+                 tower->tower_id < out.tower_id)) {
+                out.use = true;
+                out.operation = operation;
+                out.reason = "surplus_use";
+                out.x = tower->x;
+                out.y = tower->y;
+                out.tower_id = tower->tower_id;
+                out.tower_type = static_cast<int>(tower->tower_type);
+                out.combat_ant_id = -1;
+                out.distance = tower_distance_to_base;
+                best_tower_distance_to_base = tower_distance_to_base;
+                surplus_best_tower_value = tower_value;
+            }
+        }
+
+        if (!out.use) {
+            out.reason = "surplus_emp_no_core_level3_tower";
+        }
     }
     return out;
 }

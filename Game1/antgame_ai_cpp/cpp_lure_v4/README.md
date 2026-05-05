@@ -61,7 +61,7 @@ v4 初始状态完全继承 2026-04-30 的阶段性最优 v3。2026-05-04 的 `c
 
 - rollout 使用纯随机等权移动采样，不再使用 forced move 概率加权。
 - 闪电组先独立完整计算，再进入普通 action 搜索。
-- 普通 action 使用实时测速卡时：先对每个 normal action 做 `action_probe_min_samples=5` 次可复用 probe，这些样本计入最终 UCB 统计；再按 `action_target_time_ms=3000` 估算本回合等效 base rollout 总数。target 总数为 base 的 `action_target_total_multiplier=1.25`，并继续受 `action_target_rollouts_per_action=125 * action_count` 截断。`action_time_budget_ms=4000` 是后续保底/补样阶段的硬预算停止条件。
+- 普通 action 使用实时测速卡时：先对每个 normal action 做 `action_probe_min_samples=5` 次可复用 probe，这些样本计入最终 UCB 统计；再按 `action_target_time_ms=5000` 估算本回合等效 base rollout 总数。target 总数为 base 的 `action_target_total_multiplier=1.25`，并继续受 `action_target_rollouts_per_action=200 * action_count` 截断。`action_max_rollouts_per_batch=160`，`action_time_budget_ms=7000` 是后续保底/补样阶段的硬预算停止条件。
 - 普通 action UCB 为 `action_ucb_exploration=600`，单批最多 `100`。
 - static-risk cache 默认开启：`rollout_static_risk_cache_enabled=true`，容量参数为 `1024`。
 - 实验性 reverse-path cache 默认关闭：`rollout_reverse_path_cache_enabled=false`，容量参数为 `2048`。
@@ -74,7 +74,9 @@ v4 初始状态完全继承 2026-04-30 的阶段性最优 v3。2026-05-04 的 `c
 - base 系列当前禁用 `C2` 作为新建、升级、quick-sniper 路径目标；已有 `C2` 仍可降级、拆除或被其它清理候选处理。
 - base 系列允许“一座 base 塔降/拆 + 另一座 base 塔升级”的小规模组合候选，包括同回合 `recycle A + upgrade B`、先 `recycle A` 后 followup `recycle A + upgrade B`，以及同回合 `recycle A + upgrade B` 后 followup `recycle A + next upgrade B`。由于 base 非 lure 塔上限仍为 `2`，该变体只额外增加少量 action。
 - `future_threat_eval_enabled=false`，`hold_followup_enabled=false`。对应代码和 SimViz 开关仍保留，便于单回合审计和后续重开试验。
-- 进攻性 `EMP Blaster` / `Emergency Evasion` 仍作为 best action 之后的后处理。
+- 进攻性 `EMP Blaster` / `Emergency Evasion` 仍作为 best action 之后的后处理。`EMP Blaster` 先检查战斗蚁贴近敌方高级塔的 tactical EMP；若未触发，再检查富余金币 EMP：post-action 后存在己方 `C1 Sniper`、EMP 后仍剩 `100` 金币、敌方闪电 CD 至少 `5`、己方至少 `4` 只存活蚂蚁距离敌方基地 `<=6`，且敌方 C/L/R 系列存在 `Sniper` 或其它三级塔时，对其中距离敌方基地最近的目标释放。
+
+2026-05-05 Saiblo 打包口径将当前参数视为最终 v4：普通 action 预算为 `5000ms / 7000ms`，富余金币 EMP 前线距离为 `<=6`，打包入口默认启用每回合简要 summary log，字段只保留 action 数、候选数、总 rollout、总耗时、best/final 操作及 EMP/Evasion 概况。该口径已完成 128 局验证：v4 vs v3 `77-51-0`、总血量差 `+858`、总金币差 `+9985`，报告为 `eval_results/v4_surplus_emp_d6_vs_v3_128_20260505_report.md`；v4 vs baseline `87-41-0`、总血量差 `+1094`、总金币差 `+6552`，报告为 `eval_results/v4_surplus_emp_d6_vs_baseline_128_20260505_report.md`。
 
 2026-05-04 记录的当前最强 v4 使用上述参数和 base 系列规则，评测均为完整 512 回合上限、座位平衡、新 seed、基础 debug 口径，无 IA / failure：
 

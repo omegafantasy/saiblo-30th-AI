@@ -172,7 +172,7 @@ def launch_ai(ai_dir: Path, stderr_path: Path, debug_mode: str | None) -> tuple[
     if debug_mode:
         env["ANTGAME_CPP_BASELINE_DEBUG"] = debug_mode
     else:
-        env.pop("ANTGAME_CPP_BASELINE_DEBUG", None)
+        env["ANTGAME_CPP_BASELINE_DEBUG"] = "0"
     proc = subprocess.Popen(
         [sys.executable, "main.py"],
         cwd=ai_dir,

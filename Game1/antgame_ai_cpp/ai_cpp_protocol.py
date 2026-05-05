@@ -34,11 +34,17 @@ class CppProtocolSession(MatchSession):
             raise RuntimeError("invalid init line") from exc
         self._debug(f"init player={self._player} line={init_line!r}")
 
+        child_env = os.environ.copy()
+        default_debug_flag = self.exe_path.parent / "default_summary_debug"
+        if "ANTGAME_CPP_BASELINE_DEBUG" not in child_env and default_debug_flag.exists():
+            child_env["ANTGAME_CPP_BASELINE_DEBUG"] = "summary"
+
         self.proc = subprocess.Popen(
             [str(self.exe_path)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self.stderr,
+            env=child_env,
         )
         self._write_child(init_line)
 

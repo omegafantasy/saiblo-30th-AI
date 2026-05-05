@@ -105,6 +105,7 @@ case "$TARGET" in
     FILE_MAPPINGS=(
       "${SCRIPT_DIR}/ai_cpp_protocol.py:ai.py"
       "${CPP_AI_ROOT}/build/ai_cpp_lure_v4:cpp_ai/ai"
+      "${CPP_AI_ROOT}/default_summary_debug:cpp_ai/default_summary_debug"
     )
     ;;
   cpp_lure_v3a)
