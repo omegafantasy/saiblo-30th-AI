@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 10:35 UTC`
+更新时间：`2026-05-07 10:39 UTC`
 
 ## 约束
 
@@ -50,6 +50,7 @@ python3 Game2/tools/run_room_eval.py \
 | P2 | `n515c` | `Game2/deepclue_ai/n515c/ai.py` | 现场证据问 + 接待者旧轨迹两问：异常发现、证词破绽。 |
 | P3 | `n514f` | `Game2/deepclue_ai/n514f/ai.py` | 袁案低成本 704 探针：只遍历初始 `marks=True` NPC 问“谁在说谎”，命中投票关键词即停止。 |
 | P3 | `n516d` | `Game2/deepclue_ai/n516d/ai.py` | 袁案省聊天 704 探针：只问初始 `marks=True` NPC 课程展示投票是否异常，命中投票关键词即停止。 |
+| P3 | `n516e` | `Game2/deepclue_ai/n516e/ai.py` | 袁案极省聊天 704 探针：优先只问第二个 `marks=True` NPC 课程展示投票异常，验证老师顺序假设。 |
 | P3 | `n514i` | `Game2/deepclue_ai/n514i/ai.py` | 袁案短动机替换，不新增袁案聊天。 |
 | P3 | `n515d` | `Game2/deepclue_ai/n515d/ai.py` | 袁案基础问定位老师，再问“谁在说谎”。 |
 | P3 | `n515e` | `Game2/deepclue_ai/n515e/ai.py` | `n515d` 加 `703` 手机照片追问。 |
@@ -101,16 +102,16 @@ python3 Game2/tools/run_room_eval.py \
 - 十二个候选文件均已通过 `python3 -m py_compile`。
 - `2026-05-07 10:14 UTC` 恢复探针仍卡在 `begin_match` 500，`n513a` 仍有两个长期 `未编译` code；不要上传新候选，避免继续制造长期 `未编译` code。
 
-## 2026-05-07 10:29-10:35 UTC 队列修订
+## 2026-05-07 10:29-10:39 UTC 队列修订
 
 - `2026-05-07 10:26 UTC` 再跑 `n511a` 恢复探针，`room 918439` 仍表现为 `join` 500 但已坐入，`begin_match` 500。
 - 当前 token 仍解析为 `thebeginning`；如果需要使用 `theend` 实体，必须先切 token 并重新核验。
 - 新增 `n516a/b/c`，用于把 Poker stage2 后接待者路线拆成更细的净收益实验。它们都从 `n515b` 派生，只改变接待者追问，不改变 Poker 提交答案。
-- 新增 `n516d`，用于 Yuan `704` 的省聊天对照。它保留 `marks=False` 凶手，只问 `marks=True` NPC 关于课程展示投票是否异常。
-- 候选安全修订：`n514c-i/n515a-e/n516a-d` 已统一关闭 stderr 调试日志，避免上传后通过对局 API 泄露 hint、marks、问句和路线。
+- 新增 `n516d/e`，用于 Yuan `704` 的省聊天对照。`n516d` 遍历初始 `marks=True` NPC，`n516e` 优先只问第二个 `marks=True` NPC 以验证老师顺序假设。
+- 候选安全修订：`n514c-i/n515a-e/n516a-e` 已统一关闭 stderr 调试日志，避免上传后通过对局 API 泄露 hint、marks、问句和路线。
 - 候选鲁棒性修订：Poker 信息源姓名优先从当前 `npcs` 中文名集合精确匹配 hint，fallback 正则不再覆盖已验证 `info_id`；Yuan 相关追问版会在聊天后刷新 `marks` 再确认 `marks=False` 凶手。
-- `n514c-i/n515a-e/n516a-d` 已通过 `python3 -m py_compile`，但未上传、未开房间。
-- 平台恢复后的执行顺序建议：先上传并测安全版 `n514d/e`，再测 `n514g` 与 `n515b/a`，随后测 `n516a/b/c`，最后再测 `n514c/h/n515c` 和袁案 P3 候选。旧 `n512a` 保留为历史 3 样本，不再作为默认扩样目标。
+- `n514c-i/n515a-e/n516a-e` 已通过 `python3 -m py_compile`，但未上传、未开房间。
+- 平台恢复后的执行顺序建议：先上传并测安全版 `n514d/e`，再测 `n514g` 与 `n515b/a`，随后测 `n516a/b/c`，最后再测 `n514c/h/n515c` 和袁案 P3 候选。Yuan P3 内部优先 `n514f/n516d/n516e`，再测 `n514i/n515d/n515e`。旧 `n512a` 保留为历史 3 样本，不再作为默认扩样目标。
 
 ## 判定口径
 
