@@ -349,6 +349,7 @@ Saiblo 状态：
 - Rose stage5->6 由 `某某喜欢你？` 触发时常落到 `2617/2667`，由 `某某态度怪？` 触发时也可能落到 `2457/2507/2657/2707`。因此它是弱相关信号，不适合作为下一轮主线；此前 `n508u/v/w/n509/n510` 系列也未消除低尾。
 - 更细分数档解释：`2707` 通常是 Rose TTT、Z stage7+两次 hidden probe、Poker stage2、Yuan stage1 直接答；`2667` 通常仍有 Poker stage2，但 Rose stage5->6 由 `喜欢你？` 触发，形成约 `-40`；`2617` 常见为 Poker 未 stage2 再叠加这个 `-40`；`2507` 有两类，一类是 Rose motivation false，另一类是 `n512a` 的隐藏后案波动；`2457` 不是 Yuan 703/704 缺失能解释，因为相关样本 Yuan 均 stage1 且无额外聊天。
 - 已新增只读差分工具 `Game2/tools/analyze_room_score_factors.py`，输出到被忽略的 `docs/generated/game2_room_score_factors.{md,json}`，用于后续自动核对 score、Rose answer、Rose stage6 问句、Poker stage 和隐藏 probe 之间的关系。
+- `n512a` 三个样本的 Poker 回复差异值得保留：两个 `2507` 虽然都到 stage2，但第一条信息源回复分别是“线索指向人口贩卖集团”和“证据？时机未到”；唯一 `2707` 第一条回复明确出现“聊天记录有问题”。这支持后续接待者/聊天记录/证据刷新方向，但当前不改 `n514e/n518b`，先保留最低扰动 A/B。
 - 结论维持：恢复后优先验证 `n514d/e` 安全对照与 `n518a/b` evidence-refresh，再测接待者路线；Rose/Z 大改继续降优先级。
 
 evidence-refresh 复核：
