@@ -514,13 +514,14 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                         break
                 follow_hint = g.hint()
                 follow_marks = g.marks()
+                follow_npcs = g.npcs() or npcs
                 reception_id = ''
-                for npc in npcs:
+                for npc in follow_npcs:
                     if npc != info_id and cn_name(npc) in follow_hint:
                         reception_id = npc
                         break
                 if not reception_id:
-                    marked_true_now = [npc for npc in npcs if npc != info_id and follow_marks.get(npc) is True]
+                    marked_true_now = [npc for npc in follow_npcs if npc != info_id and follow_marks.get(npc) is True]
                     if len(marked_true_now) == 1:
                         reception_id = marked_true_now[0]
                 if reception_id:
