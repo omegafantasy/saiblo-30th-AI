@@ -44,7 +44,7 @@ python3 Game2/tools/run_room_eval.py \
 | P1 | `n515a` | `Game2/deepclue_ai/n515a/ai.py` | `n515b` 加条件短动机，只有 Poker stage2 成功后改 motivation。 |
 | P2 | `n514c` | `Game2/deepclue_ai/n514c/ai.py` | stage2 后携带 `102/104/103` 现场证据问。 |
 | P2 | `n514h` | `Game2/deepclue_ai/n514h/ai.py` | `n514c` 加扑克短动机。 |
-| P2 | `n515c` | `Game2/deepclue_ai/n515c/ai.py` | 现场证据问 + 接待者合并 hint 单问叠加。 |
+| P2 | `n515c` | `Game2/deepclue_ai/n515c/ai.py` | 现场证据问 + 接待者旧轨迹两问：异常发现、证词破绽。 |
 | P3 | `n514f` | `Game2/deepclue_ai/n514f/ai.py` | 袁案只加全员基础问，保留 `marks=False` 凶手。 |
 | P3 | `n514i` | `Game2/deepclue_ai/n514i/ai.py` | 袁案短动机替换，不新增袁案聊天。 |
 | P3 | `n515d` | `Game2/deepclue_ai/n515d/ai.py` | 袁案基础问定位老师，再问“谁在说谎”。 |
@@ -92,6 +92,7 @@ python3 Game2/tools/run_room_eval.py \
 - 修订原因：旧 `v52` match `8065213` 的 stage2 hint 明确要求这三类信息；只问异常可能无法稳定复现 `203/204/205` 证据解锁。
 - `n514c-i/n515a-e` 的 Poker 名字解析已扩展为多模式：`X是个好的信息来源`、`X会是...好的信息来源`、`问问X关于...`、`接待者X知道...`。样例 `陆亦初/林晚舟/张子韩` 均能正确解析，避免中文姓名边界吞掉后续字。
 - `n514e` 已改为纯 `n512a` 问法隔离版；`n514g` 已改为 stage2 成功才启用短动机。
+- `n515c` 已改成 P2 高风险对照：保留现场证据问，接待者部分从合并 hint 单问改为旧 `v52` 中最贴近 `203/204/205` 刷新的两问，即“异常发现”和“证词破绽”。
 - 十二个候选文件均已通过 `python3 -m py_compile`。
 - `2026-05-07 10:14 UTC` 恢复探针仍卡在 `begin_match` 500，`n513a` 仍有两个长期 `未编译` code；不要上传新候选，避免继续制造长期 `未编译` code。
 

@@ -545,7 +545,8 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                     if len(marked_true_now) == 1:
                         reception_id = marked_true_now[0]
                 if reception_id:
-                    g.chat(reception_id, '请说说聊天记录、宾客到达时间表，以及公馆内的异常发现。')
+                    g.chat(reception_id, '公馆内有什么异常发现？厨房刀具、门窗、血迹和面具哪里不对？')
+                    g.chat(reception_id, '你的证词有什么破绽？案发时你到底在哪里？')
         method = '凶手利用扑克公馆全员戴面具、身份混淆和场馆密室条件，在衣帽间用刀杀害并伪装死者。'
     elif '袁樱瞳' in text or '碎尸案' in text:
         current_marks = g.marks()
