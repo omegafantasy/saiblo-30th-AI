@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 11:10 UTC`
+更新时间：`2026-05-07 11:25 UTC`
 
 ## 约束
 
@@ -25,6 +25,24 @@ python3 Game2/tools/run_room_eval.py \
   --poll-interval 2 \
   --request-timeout 90
 ```
+
+低频 watcher：
+
+```bash
+python3 Game2/tools/watch_saiblo_recovery.py \
+  --initial-delay 900 \
+  --interval 900 \
+  --probe-code-id a2b68a7ec9b84a59a8dfd836defd930c \
+  --callback 'python3 Game2/tools/run_room_eval.py --code-id a2b68a7ec9b84a59a8dfd836defd930c --label n511a_recovered_once --count 1 --timeout 420 --poll-interval 2 --request-timeout 90'
+```
+
+说明：
+
+- 默认 `--interval 900` 即 15 分钟检查一次，避免高频打扰服务器。
+- 后台运行建议加 `--initial-delay 900`，避免刚手动探测后立即重复探测。
+- watcher 会记录 `Game2/runtime/recovery_watch/status.jsonl`。
+- 历史 `未编译` code 默认只记日志，不作为恢复阻塞；真正恢复标准是单人房间 `begin_match` 成功。
+- 如果要把历史 pending compile 也作为阻塞条件，再加 `--require-compile-clear`。
 
 恢复标准：
 
@@ -137,6 +155,15 @@ python3 Game2/tools/run_room_eval.py \
 - Poker 复盘确认：旧 `v52` 中 `102/103/104` 是在 stage2 后显式 `others()` 才可见；`203/204/205` 也是接待者回答后再次 `others()` 才可见。当前高分候选多在聊天后直接 answer，可能没有把已满足的证据刷新成可计分进度。
 - 新增 `n518a/b/c/d` 作为低扰动 evidence-refresh 候选：`n518a/b` 不新增聊天，只在 stage2 后刷新 `others()`；`n518c/d` 在接待者追问后再刷新 `others()`，用于隔离 `203/204/205` 是否需要显式取证据才计分。
 - 四个候选均 `DEBUG = False`，通过 `python3 -m py_compile`；未上传、未开房。
+
+## 2026-05-07 11:25 UTC 恢复探针补充
+
+- `n511a` 恢复探针继续失败：`room 918519` 已坐入但 `begin_match` 返回 500。
+- 旧稳定 `n506e` code_id `a63c0344959c4189beba83019bdc4c2b` 也失败：`room 918537` 已坐入但 `begin_match` 返回 500。
+- 这确认当前不是单个 code 的问题，而是 Game53 单人房间启动链路仍未恢复。不要上传新候选，避免继续制造长期 `未编译` code。
+- 本地差分进一步支持 `n518a/b` 前排验证：Poker stage2 只是约 `+50` 的叠加层，stage2 后显式 `others()` 是否额外计入 `102/103/104` 仍无 A/B 证据。
+- 本地差分也说明 `n514e/n518b` 不能只看 stage2 触发率：`n512a` 历史 3/3 stage2 仍有两个 `2507`，其中低尾更可能来自 Rose/隐藏后案答案波动。
+- 恢复后的实际执行顺序微调为：`n514d/e` 安全对照各 5 个有效样本，然后立即测 `n518a/b` 各 5 个有效样本，再进入 `n514g`、`n515b/a`、`n517a/c` 与后续接待者路线。
 
 ## 判定口径
 

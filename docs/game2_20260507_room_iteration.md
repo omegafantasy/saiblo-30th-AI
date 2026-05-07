@@ -1,6 +1,6 @@
 # Game2 2026-05-07 Room Iteration
 
-更新时间：`2026-05-07 11:10 UTC`
+更新时间：`2026-05-07 11:25 UTC`
 
 ## 当前口径
 
@@ -329,3 +329,30 @@ Saiblo 状态：
 - 新增 `n518a/b/c/d` 作为低扰动 `others()` 刷新候选：`n518a` = `n514d` + stage2 后刷新证据，`n518b` = `n514e` + stage2 后刷新证据，`n518c` = `n517a` + stage2/接待者后各刷新一次证据，`n518d` = `n517e` + stage2/三证据问后各刷新一次证据。
 - 这组候选不改变 Rose/Z/Yuan 主路径，不新增 `n518a/b` 的聊天，也不改 Poker 答案文本；目标是隔离“显式取证据”是否能把 `102/103/104` 或 `203/204/205` 转化为净分。
 - `n518a/b/c/d` 均 `DEBUG = False`，并通过 `python3 -m py_compile`。恢复后应在 `n514d/e` 后优先小样本测试 `n518a/b`；若不退化，再测 `n518c/d`。
+
+## 2026-05-07 11:16-11:25 UTC 平台探针与低尾差分补充
+
+Saiblo 状态：
+
+- `2026-05-07 11:16 UTC` 再测 `n511a` 恢复探针，`room 918519` 仍表现为 `join` 500 但 code 已坐入，`begin_match` 500。
+- `2026-05-07 11:22 UTC` 换旧稳定 `n506e` code_id `a63c0344959c4189beba83019bdc4c2b` 再测，`room 918537` 同样 `join` 500 后已坐入，`begin_match` 500。
+- 因此当前阻塞不是 `n511a` 代码特异问题，而是 Game53 单人房间开赛链路级问题。继续不上传新候选、不跑 batch、不上天梯。
+- 已新增低频恢复 watcher：`Game2/tools/watch_saiblo_recovery.py`。默认 15 分钟检查一次，历史 `未编译` code 只记录日志，不作为默认恢复阻塞；真正恢复信号是单人房间 `begin_match` 成功。恢复后可通过 `--callback` 自动启动下一步评测。
+
+本地低尾差分补充：
+
+- 合并 `n511a/n512a/n512d` 当前有效房间样本后，Poker stage2 基本表现为一个约 `+50` 的叠加层：低基底 `2457/2617/2657` 对应 stage2 后常见 `2507/2667/2707`。
+- 这说明 `2707` 不是全局上限，只是“旧高基底 + Poker stage2”的当前最高组合；低尾根因仍在 stage2 之外。
+- `n512a` 的 `请说说案发现场情况，以及你手中的证据。` 问法在 3 个样本中 3/3 到 Poker stage2，但仍有两个 `2507`，所以它提高 stage2 触发率，不等于解决低尾。
+- `n511a` 的 19 局中 Z/F 均有两次 `Internal Server Error: '8'` 隐藏 probe，说明低尾不是隐藏 probe 完全失效。
+- Rose 可见提交除 match `8079935` 外基本三项全对；`8079935` 的 Rose motivation false 可以解释一个 `2507`，但不能解释其他 `2457/2617/2507`。
+- Rose stage5->6 由 `某某喜欢你？` 触发时常落到 `2617/2667`，由 `某某态度怪？` 触发时也可能落到 `2457/2507/2657/2707`。因此它是弱相关信号，不适合作为下一轮主线；此前 `n508u/v/w/n509/n510` 系列也未消除低尾。
+- 更细分数档解释：`2707` 通常是 Rose TTT、Z stage7+两次 hidden probe、Poker stage2、Yuan stage1 直接答；`2667` 通常仍有 Poker stage2，但 Rose stage5->6 由 `喜欢你？` 触发，形成约 `-40`；`2617` 常见为 Poker 未 stage2 再叠加这个 `-40`；`2507` 有两类，一类是 Rose motivation false，另一类是 `n512a` 的隐藏后案波动；`2457` 不是 Yuan 703/704 缺失能解释，因为相关样本 Yuan 均 stage1 且无额外聊天。
+- 已新增只读差分工具 `Game2/tools/analyze_room_score_factors.py`，输出到被忽略的 `docs/generated/game2_room_score_factors.{md,json}`，用于后续自动核对 score、Rose answer、Rose stage6 问句、Poker stage 和隐藏 probe 之间的关系。
+- 结论维持：恢复后优先验证 `n514d/e` 安全对照与 `n518a/b` evidence-refresh，再测接待者路线；Rose/Z 大改继续降优先级。
+
+evidence-refresh 复核：
+
+- 子任务复核确认：`g.evidences()` 实际调用 `others()`，旧 `v52` 在 Poker 信息源两问后显式 `others()` 才看到 `102/103/104`，接待者回答后再次 `others()` 才看到 `203/204/205`。
+- 当前 `n511a/n512a/n512d` 高分房间样本到 stage2 后直接 answer，没有 stage2 后刷新证据，因此没有严格 A/B 证明这些证据已被计入 raw score。
+- 置信度判断：`others()` 能刷新可见证据为高置信；刷新是否独立加分为中等置信，必须等单人房间恢复后用 `n518a/b/c/d` 验证。
