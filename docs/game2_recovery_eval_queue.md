@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 11:49 UTC`
+更新时间：`2026-05-07 11:56 UTC`
 
 ## 约束
 
@@ -177,6 +177,7 @@ python3 Game2/tools/run_room_eval.py \
 - 新增恢复评测脚本 `Game2/tools/run_recovery_eval_queue.py`，默认队列为 `n514d n514e n518a n518b n519a n519b`。dry-run 已验证只调用 `upload-ai --remark r --wait-compile` 和 `Game2/tools/run_room_eval.py`，不使用 batch，不带 `--activate`。
 - `2026-05-07 11:43 UTC` 非开赛检查显示 `entity 21072 / n513a` 两个 code 仍为 `未编译`；当前 token 仍解析为 `thebeginning`。继续不上传新候选，等待低频 watcher 的房间恢复信号。
 - `2026-05-07 11:48 UTC` watcher 的有效房间探针仍失败；这次 `POST /api/rooms/` 创建房间即返回 500。平台仍未恢复，下一次检查按 900s 间隔等待。
+- `2026-05-07 11:56 UTC` 暂停前复核：watcher PID `677676` 仍在后台低频运行，当前命令不带 `--skip-room-probe` 或 `--require-compile-clear`；因此不会因为历史 `未编译` code 自行误判恢复，真正触发条件是 `create_single_player_match()` 成功。恢复后 callback 只运行一次 `run_room_eval.py --code-id a2b68a7ec9b84a59a8dfd836defd930c --label n511a_recovered_once --count 1`，不上传候选、不使用 batch、不上天梯。
 
 ## 判定口径
 
