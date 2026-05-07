@@ -154,6 +154,7 @@ Saiblo 状态：
 
 - `codes --entity-id 21072` 仍显示 `n513a` 两个 code 卡在 `未编译`，未自动恢复。
 - 对 `n511a` code_id `a2b68a7ec9b84a59a8dfd836defd930c` 再跑两次单人房间探针，`POST /api/rooms/918242/join/` 与 `POST /api/rooms/918262/join/` 均返回 500。
+- 进一步手动诊断显示：`GET /api/rooms/918262/` 能看到 `n511a` 已坐入单人房间，但 `POST /api/rooms/918262/begin_match/` 仍返回 500；因此阻塞仍在平台开赛链路。`918242` 后续查询已 404。
 - 当前仍不应高频重试上传/开房间；可低频探测恢复，恢复后只用单人房间扩样。
 
 本地并行复盘的新结论：
