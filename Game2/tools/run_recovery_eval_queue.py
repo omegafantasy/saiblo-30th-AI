@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -11,6 +12,11 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from saiblo_tools import get_profile, require_token
+
 DEFAULT_LABELS = ['n514d', 'n514e', 'n518a', 'n518b', 'n519a', 'n519b']
 OUT_DIR = ROOT / 'Game2' / 'runtime' / 'recovery_eval_queue'
 
@@ -44,6 +50,20 @@ def parse_json_stdout(completed: subprocess.CompletedProcess[str]) -> dict[str, 
     except json.JSONDecodeError as exc:
         raise RuntimeError(f'cannot parse JSON stdout: {exc}\n{text[-1000:]}') from exc
     return data if isinstance(data, dict) else {}
+
+
+def verify_expected_username(expected_username: str) -> dict[str, Any]:
+    expected = str(expected_username or '').strip()
+    if not expected:
+        return {'checked': False}
+    token = require_token('', 'game2-recovery-eval-queue username check')
+    profile = get_profile(token)
+    user = profile.get('user', {}) if isinstance(profile.get('user'), dict) else {}
+    username = str(user.get('username', '')).strip()
+    row = {'checked': True, 'expected_username': expected, 'username': username}
+    if username != expected:
+        raise RuntimeError(f'current token username is {username!r}, expected {expected!r}; aborting before upload')
+    return row
 
 
 def upload_label(label: str, args: argparse.Namespace) -> dict[str, Any]:
@@ -120,9 +140,15 @@ def main() -> int:
     parser.add_argument('--upload-poll-max', type=int, default=30)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--continue-on-error', action='store_true')
+    parser.add_argument(
+        '--expected-username',
+        default=os.environ.get('SAIBLO_EXPECTED_USERNAME', ''),
+        help='optional safety guard; abort before upload unless the current token resolves to this username',
+    )
     args = parser.parse_args()
 
     out_dir = OUT_DIR / utc_stamp()
+    username_check = verify_expected_username(args.expected_username)
     rows: list[dict[str, Any]] = []
     for label in args.labels:
         row: dict[str, Any] = {'label': label}
@@ -146,7 +172,13 @@ def main() -> int:
             continue
         rows.append(row)
 
-    summary = {'labels': args.labels, 'dry_run': bool(args.dry_run), 'rows': rows, 'out_dir': str(out_dir)}
+    summary = {
+        'labels': args.labels,
+        'dry_run': bool(args.dry_run),
+        'username_check': username_check,
+        'rows': rows,
+        'out_dir': str(out_dir),
+    }
     write_json(out_dir / 'summary.json', summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if all(row.get('ok') for row in rows) else 1

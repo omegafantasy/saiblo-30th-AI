@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 11:56 UTC`
+更新时间：`2026-05-07 11:59 UTC`
 
 ## 约束
 
@@ -116,6 +116,24 @@ python3 Game2/tools/run_room_eval.py \
   --request-timeout 90
 ```
 
+## 恢复队列脚本模板
+
+如果目标账号是 `theend`，必须先确认 token 已切回该账号，再运行队列：
+
+```bash
+python3 Game2/tools/run_recovery_eval_queue.py \
+  --expected-username theend \
+  --labels n514d n514e n518a n518b n519a n519b \
+  --count 5
+```
+
+说明：
+
+- `--expected-username <username>` 会在任何上传前校验当前 token；也可以用环境变量 `SAIBLO_EXPECTED_USERNAME=<username>`。
+- 当前本地 token 实测仍是 `thebeginning`，因此不能在目标为 `theend` 时直接跑恢复队列。
+- 脚本只做中性上传和单人房间评测，不使用 batch，不上天梯，不带 `--activate`。
+- 默认遇到第一个失败就停止；若只想收集恢复后的多候选故障信息，可加 `--continue-on-error`。
+
 扩样规则：
 
 - P0 先上传并评测安全版 `n514d/n514e`，各跑 `5` 个有效样本；若 `n514e` 复现 `n512a` 的 stage2 触发优势，再扩到 `12-16`。
@@ -178,6 +196,7 @@ python3 Game2/tools/run_room_eval.py \
 - `2026-05-07 11:43 UTC` 非开赛检查显示 `entity 21072 / n513a` 两个 code 仍为 `未编译`；当前 token 仍解析为 `thebeginning`。继续不上传新候选，等待低频 watcher 的房间恢复信号。
 - `2026-05-07 11:48 UTC` watcher 的有效房间探针仍失败；这次 `POST /api/rooms/` 创建房间即返回 500。平台仍未恢复，下一次检查按 900s 间隔等待。
 - `2026-05-07 11:56 UTC` 暂停前复核：watcher PID `677676` 仍在后台低频运行，当前命令不带 `--skip-room-probe` 或 `--require-compile-clear`；因此不会因为历史 `未编译` code 自行误判恢复，真正触发条件是 `create_single_player_match()` 成功。恢复后 callback 只运行一次 `run_room_eval.py --code-id a2b68a7ec9b84a59a8dfd836defd930c --label n511a_recovered_once --count 1`，不上传候选、不使用 batch、不上天梯。
+- `2026-05-07 11:59 UTC` 加固 `run_recovery_eval_queue.py`：新增 `--expected-username` / `SAIBLO_EXPECTED_USERNAME` 账号守卫，在任何上传前调用 profile 校验当前 token。已验证 `--expected-username thebeginning` dry-run 成功，而 `--expected-username theend` 会在上传前失败退出；这可避免恢复后因 token 未切回目标账号而误上传候选。
 
 ## 判定口径
 
