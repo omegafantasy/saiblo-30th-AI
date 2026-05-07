@@ -512,7 +512,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
             replies[npc] = str(resp.get('reply') or resp.get('content') or resp.get('npc_reply') or '')
         teacher_id = ''
         for npc, reply in replies.items():
-            if any(key in reply for key in ('我的学生', '出国交流项目名额', '课程展示', '投票')):
+            if any(key in reply for key in ('我的学生', '我手里', '作为老师', '作为教师', '副教授', '负责教学')):
                 teacher_id = npc
                 break
         if teacher_id:
