@@ -1,6 +1,6 @@
 # Game2 Saiblo 当前状态
 
-更新时间：`2026-05-07 11:59 UTC`
+更新时间：`2026-05-07 12:05 UTC`
 
 ## 0. 2026-05-07 线上更新后的最新口径
 
@@ -61,6 +61,7 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - `2026-05-07 11:48 UTC` 低频 watcher 的房间探针仍失败；`POST /api/rooms/` 创建房间返回 500。平台仍未恢复，继续等待 900s 间隔检查。
 - `2026-05-07 11:56 UTC` 暂停前核查：低频 watcher 仍在运行，PID `677676`，启动参数为 `--initial-delay 900 --interval 900 --probe-code-id a2b68a7ec9b84a59a8dfd836defd930c`；恢复判定依赖实际单人房间创建/开赛探针成功。回调只执行一次 `n511a_recovered_once` 单人房间评测，不上传、不 batch、不 activate；回调执行后 watcher 进程会退出。
 - `2026-05-07 11:59 UTC` 当前 token 复核仍为 `thebeginning`。已给恢复队列脚本新增 `--expected-username` 账号守卫；若目标是 `theend`，必须先切 token 并用 `--expected-username theend` 校验通过，才能上传恢复队列。
+- `2026-05-07 12:03 UTC` watcher 第 2 次实际房间探针仍失败；`POST /api/rooms/` 创建房间返回 500。PID `677676` 继续按 900s 间隔等待下一次恢复检查。
 
 ## 1. 当前必须先统一的口径
 

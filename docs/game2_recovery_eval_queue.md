@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 11:59 UTC`
+更新时间：`2026-05-07 12:05 UTC`
 
 ## 约束
 
@@ -197,6 +197,7 @@ python3 Game2/tools/run_recovery_eval_queue.py \
 - `2026-05-07 11:48 UTC` watcher 的有效房间探针仍失败；这次 `POST /api/rooms/` 创建房间即返回 500。平台仍未恢复，下一次检查按 900s 间隔等待。
 - `2026-05-07 11:56 UTC` 暂停前复核：watcher PID `677676` 仍在后台低频运行，当前命令不带 `--skip-room-probe` 或 `--require-compile-clear`；因此不会因为历史 `未编译` code 自行误判恢复，真正触发条件是 `create_single_player_match()` 成功。恢复后 callback 只运行一次 `run_room_eval.py --code-id a2b68a7ec9b84a59a8dfd836defd930c --label n511a_recovered_once --count 1`，不上传候选、不使用 batch、不上天梯。
 - `2026-05-07 11:59 UTC` 加固 `run_recovery_eval_queue.py`：新增 `--expected-username` / `SAIBLO_EXPECTED_USERNAME` 账号守卫，在任何上传前调用 profile 校验当前 token。已验证 `--expected-username thebeginning` dry-run 成功，而 `--expected-username theend` 会在上传前失败退出；这可避免恢复后因 token 未切回目标账号而误上传候选。
+- `2026-05-07 12:03 UTC` watcher 第 2 次实际房间探针仍失败：`POST /api/rooms/` 创建房间返回 500。继续等待低频恢复信号，不上传新候选。
 
 ## 判定口径
 
