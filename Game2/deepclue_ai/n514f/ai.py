@@ -529,8 +529,11 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
             if marks.get(npc) is False:
                 suspect = cn_name(npc)
                 break
-        for npc in npcs:
-            g.chat(npc, '你对死者袁樱瞳和这起碎尸案了解多少？请说最关键的线索。')
+        for npc in [item for item in npcs if marks.get(item) is True] or npcs:
+            resp = g.chat(npc, '你觉得谁在说谎？为什么？')
+            reply = str(resp.get('reply') or resp.get('content') or resp.get('npc_reply') or '')
+            if any(key in reply for key in ('49人', '48票', '笔迹', '24票', '24:23', '二十四')):
+                break
         method = f'{suspect}利用自己与袁樱瞳长相相似及黄色行李箱制造混淆，取得并清空袁樱瞳手机，围绕凌晨1点女性尸体照片、假发和行李转移视线，随后分尸抛尸。'
         motivation = f'{suspect}因与袁樱瞳竞争出国交流名额，且投票多出一票、袁樱瞳准备等到周五揭穿真相，担心作弊和相关秘密暴露而杀害袁樱瞳。'
         log(f'[v56] unknown hint={compact(hint, 50)} suspect={suspect}')
