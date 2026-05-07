@@ -199,6 +199,7 @@ Saiblo 状态：
 - `n514c/d/e/f/g/h/i` 与 `n515a/b/c/d/e` 均已用 Python `compile()` 检查语法通过；此前 `n514c/d/e/f/g/h/i` 的 `py_compile` 也通过。
 - `Game2/tools/run_room_eval.py` 已加一处容错：如果 `join` 返回 500 但房间详情显示 code 已坐入，会继续尝试 `begin_match`，避免平台半恢复时被 `join` 假失败挡住。
 - `Game2/tools/run_room_eval.py` 继续补强：`begin_match` 失败时会把已创建的 `room_id` 写入 summary，便于后续手动诊断平台房间状态。
+- 新增 `Game2/tools/summarize_room_evals.py`：扫描 `Game2/runtime/room_matches/`，按 label 汇总所有单人房间有效样本、均值、最低/最高分和分布。输出到被 git 忽略的 `docs/generated/game2_room_eval_summary.{md,json}`，用于本地快速查看当前最高上界。
 
 恢复后的测试顺序建议调整为：
 
