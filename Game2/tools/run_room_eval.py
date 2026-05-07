@@ -42,6 +42,12 @@ def normalized_code_id(value: Any) -> str:
     return str(value or '').replace('-', '').strip().lower()
 
 
+class RoomStartError(RuntimeError):
+    def __init__(self, room_id: int, message: str) -> None:
+        super().__init__(message)
+        self.room_id = room_id
+
+
 def create_single_player_match(game_id: int, code_id: str, token: str, timeout: float) -> dict[str, Any]:
     room = api_request(
         'POST',
@@ -68,10 +74,13 @@ def create_single_player_match(game_id: int, code_id: str, token: str, timeout: 
         if not seated:
             raise
         log(f'room {room_id}: join raised {type(exc).__name__}, but room detail shows a seated code; continuing to begin_match')
-    begin = api_request('POST', f'/api/rooms/{room_id}/begin_match/', token=token, payload={}, timeout=timeout)
+    try:
+        begin = api_request('POST', f'/api/rooms/{room_id}/begin_match/', token=token, payload={}, timeout=timeout)
+    except Exception as exc:
+        raise RoomStartError(room_id, f'{type(exc).__name__}: {exc}') from exc
     match_id = int(begin.get('match_id', 0) or 0)
     if not match_id:
-        raise RuntimeError(f'cannot begin match for room {room_id}: {begin!r}')
+        raise RoomStartError(room_id, f'cannot begin match for room {room_id}: {begin!r}')
     return {'room_id': room_id, 'match_id': match_id, 'code_id': code_id}
 
 
@@ -208,9 +217,10 @@ def main() -> int:
             }
         except Exception as exc:
             analysis = {'error': f'{type(exc).__name__}: {exc}'}
+            failed_room_id = started.get('room_id') or getattr(exc, 'room_id', None)
             row = {
                 'index': index,
-                'room_id': started.get('room_id'),
+                'room_id': failed_room_id,
                 'match_id': match_id or None,
                 'state': detail.get('state'),
                 'score': None,
