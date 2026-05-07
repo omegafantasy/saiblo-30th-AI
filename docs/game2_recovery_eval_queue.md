@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 10:39 UTC`
+更新时间：`2026-05-07 11:00 UTC`
 
 ## 约束
 
@@ -42,9 +42,17 @@ python3 Game2/tools/run_room_eval.py \
 | P1 | `n514g` | `Game2/deepclue_ai/n514g/ai.py` | `n514d` 的条件短动机版：只有 Poker stage2 成功后才把 motivation 从 `未知` 改成短动机。 |
 | P1 | `n515b` | `Game2/deepclue_ai/n515b/ai.py` | `n514d` 加 stage2 后接待者合并 hint 单问，不加扑克短动机。 |
 | P1 | `n515a` | `Game2/deepclue_ai/n515a/ai.py` | `n515b` 加条件短动机，只有 Poker stage2 成功后改 motivation。 |
+| P1 | `n517a` | `Game2/deepclue_ai/n517a/ai.py` | `n514e` 问法 + stage2 后接待者合并 hint 单问；补齐 `n512a` 高 stage2 触发问法与接待者路线的组合缺口。 |
+| P1 | `n517c` | `Game2/deepclue_ai/n517c/ai.py` | `n514e` 问法 + 条件短动机，不加接待者问，用于隔离 `n514e` 触发 stage2 后答案文本是否有净收益。 |
 | P2 | `n516a` | `Game2/deepclue_ai/n516a/ai.py` | `n515b` 的接待者更短问法：stage2 后只问“公馆内有什么异常发现？”。 |
 | P2 | `n516b` | `Game2/deepclue_ai/n516b/ai.py` | `n515b` 的接待者关键词问法：异常发现 + 电脑/塑料盒/厨房少刀。 |
 | P2 | `n516c` | `Game2/deepclue_ai/n516c/ai.py` | 按旧 hint 分拆接待者三问：聊天记录、到达时间表、异常发现；不问证词破绽。 |
+| P2 | `n517b` | `Game2/deepclue_ai/n517b/ai.py` | `n514e` 问法 + stage2 后接待者异常关键词问。 |
+| P2 | `n517d` | `Game2/deepclue_ai/n517d/ai.py` | `n514e` 问法 + stage2 后接待者分拆旧 hint 三问。 |
+| P2 | `n517e` | `Game2/deepclue_ai/n517e/ai.py` | `n514e` 问法 + stage2 后接待者三证据精确问：电脑、塑料盒、少三把刀。 |
+| P2 | `n517f` | `Game2/deepclue_ai/n517f/ai.py` | `n514e` 问法 + stage2 后接待者低泄露关键词问：电脑、冰柜、刀具异常。 |
+| P2 | `n517h` | `Game2/deepclue_ai/n517h/ai.py` | `n514e` 问法 + 条件 Poker 手法文本，不加接待者问，用于隔离答案文本本身。 |
+| P2 | `n517g` | `Game2/deepclue_ai/n517g/ai.py` | `n517e` 加 Poker 手法文本候选：死者用冰块固定刀具自杀并伪装他杀。 |
 | P2 | `n514c` | `Game2/deepclue_ai/n514c/ai.py` | stage2 后携带 `102/104/103` 现场证据问。 |
 | P2 | `n514h` | `Game2/deepclue_ai/n514h/ai.py` | `n514c` 加扑克短动机。 |
 | P2 | `n515c` | `Game2/deepclue_ai/n515c/ai.py` | 现场证据问 + 接待者旧轨迹两问：异常发现、证词破绽。 |
@@ -87,8 +95,8 @@ python3 Game2/tools/run_room_eval.py \
 扩样规则：
 
 - P0 先上传并评测安全版 `n514d/n514e`，各跑 `5` 个有效样本；若 `n514e` 复现 `n512a` 的 stage2 触发优势，再扩到 `12-16`。
-- P1 每个候选先跑 `5` 个有效样本；若出现 `2707+` 且低尾不差于 `n511a`，扩到 `12-16`。
-- P2 只在 P1 没有明显退化时并行测；接待者问、证据问和分拆问都可能增加低尾。优先顺序为 `n516a/b`、`n516c`、`n514c/h`、`n515c`。
+- P1 每个候选先跑 `5` 个有效样本；若出现 `2707+` 且低尾不差于 `n511a`，扩到 `12-16`。`n517a/c` 应在 `n514e` 复测能稳定触发 stage2 后优先插入。
+- P2 只在 P1 没有明显退化时并行测；接待者问、证据问和分拆问都可能增加低尾。优先顺序为 `n516a/b`、`n516c`、`n517e/f`、`n517h/g`、`n517b/d`、`n514c/h`、`n515c`。
 - P3 最后测；袁案历史负收益较多，除非 P1/P2 无法突破再扩样。
 
 ## 2026-05-07 10:00 UTC 队列修订
@@ -111,7 +119,12 @@ python3 Game2/tools/run_room_eval.py \
 - 候选安全修订：`n514c-i/n515a-e/n516a-e` 已统一关闭 stderr 调试日志，避免上传后通过对局 API 泄露 hint、marks、问句和路线。
 - 候选鲁棒性修订：Poker 信息源姓名优先从当前 `npcs` 中文名集合精确匹配 hint，fallback 正则不再覆盖已验证 `info_id`；Yuan 相关追问版会在聊天后刷新 `marks` 再确认 `marks=False` 凶手。
 - `n514c-i/n515a-e/n516a-e` 已通过 `python3 -m py_compile`，但未上传、未开房间。
-- 平台恢复后的执行顺序建议：先上传并测安全版 `n514d/e`，再测 `n514g` 与 `n515b/a`，随后测 `n516a/b/c`，最后再测 `n514c/h/n515c` 和袁案 P3 候选。Yuan P3 内部优先 `n514f/n516d/n516e`，再测 `n514i/n515d/n515e`。旧 `n512a` 保留为历史 3 样本，不再作为默认扩样目标。
+- 平台恢复后的执行顺序建议：先上传并测安全版 `n514d/e`，再测 `n514g` 与 `n515b/a`。如果 `n514e` 复现 `n512a` 的高 stage2 触发率，则插入 `n517a/c`，随后测 `n516a/b/c` 与 `n517e/f/h/g/b/d`，最后再测 `n514c/h/n515c` 和袁案 P3 候选。Yuan P3 内部优先 `n514f/n516d/n516e`，再测 `n514i/n515d/n515e`。旧 `n512a` 保留为历史 3 样本，不再作为默认扩样目标。
+- `2026-05-07 10:42 UTC` 复核：`n511a` 的 19 个有效样本中 Rose/Z 可见最终进度恒定，低尾不应优先从 Rose/Z 大改入手；队列继续优先 Poker，再 Yuan。
+- `2026-05-07 10:50 UTC` 恢复探针仍失败：`room 918471` 表现为 `join` 500 但已坐入，`begin_match` 500；继续不上传新候选。
+- `2026-05-07 10:53 UTC` 新增 `n517a/b/c/d`，原因是 `n514e/n512a` 信息源问法历史 3/3 触发 Poker stage2，而此前接待者路线只从 `n511a` 问法派生。四个候选均 `DEBUG = False`，并通过 `python3 -m py_compile`。
+- `2026-05-07 10:55 UTC` Poker 子任务复核认为 `203/204/205` 的最小触发应来自接待者“异常发现”，而不是聊天记录/到达时间表/证词破绽；新增 `n517e/f/g/h`，分别测试三证据精确问、电脑/冰柜/刀具低泄露问、自杀伪装谋杀手法文本叠加接待者问，以及不加接待者问的手法文本隔离。四者均 `DEBUG = False`，并通过语法检查。
+- `2026-05-07 11:00 UTC` 非开赛检查仍显示 token 为 `thebeginning`，`entity 21072 / n513a` 两个 code 仍是 `未编译`；继续等待平台恢复，不上传新候选。
 
 ## 判定口径
 
