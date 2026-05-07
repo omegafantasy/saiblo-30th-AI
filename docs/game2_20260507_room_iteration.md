@@ -185,6 +185,7 @@ Saiblo 状态：
 编译检查：
 
 - `n514c/d/e/f/g/h/i` 与 `n515a/b/c/d/e` 均已用 Python `compile()` 检查语法通过；此前 `n514c/d/e/f/g/h/i` 的 `py_compile` 也通过。
+- `Game2/tools/run_room_eval.py` 已加一处容错：如果 `join` 返回 500 但房间详情显示 code 已坐入，会继续尝试 `begin_match`，避免平台半恢复时被 `join` 假失败挡住。
 
 恢复后的测试顺序建议调整为：
 
