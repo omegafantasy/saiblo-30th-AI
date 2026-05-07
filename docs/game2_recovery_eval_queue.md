@@ -133,6 +133,7 @@ python3 Game2/tools/run_room_eval.py \
 ## 2026-05-07 11:10 UTC 队列修订
 
 - 平台非开赛检查仍未恢复：`entity 21072 / n513a` 两个 code、`21073 / n514a`、`21074 / n514b` 均为 `未编译`。
+- `entities --game-id 53` 仍返回 username `thebeginning`，`active=null`。
 - Poker 复盘确认：旧 `v52` 中 `102/103/104` 是在 stage2 后显式 `others()` 才可见；`203/204/205` 也是接待者回答后再次 `others()` 才可见。当前高分候选多在聊天后直接 answer，可能没有把已满足的证据刷新成可计分进度。
 - 新增 `n518a/b/c/d` 作为低扰动 evidence-refresh 候选：`n518a/b` 不新增聊天，只在 stage2 后刷新 `others()`；`n518c/d` 在接待者追问后再刷新 `others()`，用于隔离 `203/204/205` 是否需要显式取证据才计分。
 - 四个候选均 `DEBUG = False`，通过 `python3 -m py_compile`；未上传、未开房。

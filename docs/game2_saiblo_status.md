@@ -36,6 +36,7 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - `2026-05-07 11:00 UTC` 非开赛检查显示 token 仍为 `thebeginning`，`n513a` 两个 code 仍为 `未编译`。
 - `2026-05-07 11:03 UTC` 单人房间恢复探针仍失败：`room 918483` 表现为 `join` 500 但已坐入，`begin_match` 500。
 - `2026-05-07 11:09 UTC` 非开赛检查仍未恢复：`entity 21072 / n513a` 两个 code、`21073 / n514a`、`21074 / n514b` 均为 `未编译`。
+- `2026-05-07 11:10 UTC` `entities --game-id 53` 仍返回 username `thebeginning`，`active=null`。
 - 本地已补充 `n514c/d/e/f/g/h/i`、`n515a/b/c/d/e`、`n516a/b/c/d/e`、`n517a/b/c/d/e/f/g/h` 与 `n518a/b/c/d` 二十九个未上传候选，语法检查通过；它们只改 Game2 后案逻辑，主要验证扑克案 hint-first 信息源解析、`n512a` 纯问法隔离、stage2 后证据追问、stage2 后接待者问句、stage2 条件短动机、`n514e` 高 stage2 触发问法与接待者/动机组合、Poker 三证据最小异常问、Poker 自杀伪装手法文本、显式 `others()` evidence-refresh，以及袁案低成本 704/短动机/最小 704 路线隔离实验。
 - `n515a/b` 已根据旧 `v52` stage2 hint 修订为接待者单句合并“聊天记录、宾客到达时间表、公馆异常”；`n515c` 保留为更高风险的旧轨迹对照，接待者问“异常发现 + 证词破绽”两句。
 - `n516a/b/c` 是 `n515b` 的 Poker 接待者追问强度对照：只问异常发现、异常发现加证据关键词、以及分拆旧 hint 三问。`n516d/e` 是 Yuan `704` 的省聊天对照：`n516d` 遍历初始 `marks=True` NPC，`n516e` 优先只问第二个 `marks=True` NPC。
