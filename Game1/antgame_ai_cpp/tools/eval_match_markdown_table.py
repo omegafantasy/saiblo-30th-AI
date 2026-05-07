@@ -123,6 +123,7 @@ def collect_rows(eval_dirs: list[Path], target: str) -> list[dict[str, Any]]:
                     "lightning": op_count(target_ops, "lightning"),
                     "emp": op_count(target_ops, "emp"),
                     "evasion": op_count(target_ops, "evasion"),
+                    "ant_up": op_count(target_ops, "upgrade_ant"),
                     "lure_sell_base": sum(1 for name in best_names if LURE_SELL_BASE_RE.search(name)),
                     "double_build": sum(1 for name in best_names if name.startswith("base_double_build_")),
                     "c2c3": sum(1 for name in best_names if C23_RE.search(name)),
@@ -154,6 +155,7 @@ def markdown_table(rows: list[dict[str, Any]], target: str) -> str:
         "Lgt",
         "EMP",
         "Eva",
+        "AntUp",
         "avg_s",
         "p95_s",
         "max_s",
@@ -178,6 +180,7 @@ def markdown_table(rows: list[dict[str, Any]], target: str) -> str:
             str(row["lightning"]),
             str(row["emp"]),
             str(row["evasion"]),
+            str(row["ant_up"]),
             fmt_float(row["avg_s"]),
             fmt_float(row["p95_s"]),
             fmt_float(row["max_s"]),
@@ -202,8 +205,9 @@ def markdown_table(rows: list[dict[str, Any]], target: str) -> str:
             f"- W-L-D: {wins}-{losses}-{draws}",
             f"- total dHP: {hp_diff:+d}, avg dHP: {hp_diff / len(rows):+.3f}" if rows else "- total dHP: +0",
             f"- total dCoin: {coin_diff:+d}, avg dCoin: {coin_diff / len(rows):+.3f}" if rows else "- total dCoin: +0",
-            f"- Lgt/EMP/Eva totals: {sum(int(row['lightning']) for row in rows)}/"
-            f"{sum(int(row['emp']) for row in rows)}/{sum(int(row['evasion']) for row in rows)}",
+            f"- Lgt/EMP/Eva/AntUp totals: {sum(int(row['lightning']) for row in rows)}/"
+            f"{sum(int(row['emp']) for row in rows)}/{sum(int(row['evasion']) for row in rows)}/"
+            f"{sum(int(row['ant_up']) for row in rows)}",
             f"- avg per-match decision time avg_s: {avg_s:.3f}, mean p95_s: {p95_s:.3f}, max_s: {max_s:.3f}",
         ]
     )

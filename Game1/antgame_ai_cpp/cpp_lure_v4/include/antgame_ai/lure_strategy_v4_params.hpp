@@ -8,8 +8,8 @@ struct V4LureStrategyTuning {
     double action_target_total_multiplier = 1.25;
     // Reusable timing probe samples per normal action arm; these samples count toward final UCB totals.
     int action_probe_min_samples = 5;
-    int action_target_rollouts_per_action = 200;
-    int action_max_rollouts_per_batch = 160;
+    int action_target_rollouts_per_action = 150;
+    int action_max_rollouts_per_batch = 120;
     int action_time_budget_ms = 7000;
     bool rollout_static_risk_cache_enabled = true;
     int rollout_static_risk_cache_entries = 1024;
@@ -111,6 +111,9 @@ struct V4LureStrategyTuning {
     int offensive_surplus_emp_min_remaining_coins = 100;
     int offensive_surplus_emp_min_frontline_ants = 4;
     int offensive_surplus_emp_frontline_base_distance = 6;
+
+    int offensive_ant_upgrade_latest_round = 420;
+    double offensive_ant_upgrade_min_equivalent_money = 350.0;
 };
 
 inline constexpr V4LureStrategyTuning kV4LureStrategyTuning{};

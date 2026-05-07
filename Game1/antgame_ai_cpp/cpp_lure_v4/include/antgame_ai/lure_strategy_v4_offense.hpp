@@ -42,11 +42,30 @@ struct OffensiveEmpChoice {
     int frontline_ant_count = 0;
 };
 
+struct OffensiveAntUpgradeChoice {
+    bool use = false;
+    Operation operation = Operation(OperationType::UpgradeGeneratedAnt);
+    std::string reason = "not_checked";
+    int post_action_coins = 0;
+    int remaining_coins = 0;
+    double equivalent_money = 0.0;
+    int current_ant_level = 0;
+};
+
 inline bool enemy_lightning_active(const PublicState &state, int player) {
     const int enemy = 1 - player;
     for (const auto &effect : state.active_effects) {
         if (effect.player == enemy && effect.weapon_type == SuperWeaponType::LightningStorm &&
             effect.remaining_turns > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool own_has_sniper(const PublicState &state, int player) {
+    for (const auto &tower : state.towers) {
+        if (tower.player == player && tower.tower_type == TowerType::Sniper) {
             return true;
         }
     }
@@ -287,6 +306,53 @@ inline OffensiveEvasionChoice choose_offensive_evasion(
         return out;
     }
     out.use = true;
+    out.reason = "use";
+    return out;
+}
+
+inline OffensiveAntUpgradeChoice choose_offensive_ant_upgrade(
+    const PublicState &state,
+    int player,
+    const std::vector<Operation> &best_ops) {
+    OffensiveAntUpgradeChoice out;
+    if (state.round_index > v4_lure_config().offensive_ant_upgrade_latest_round) {
+        out.reason = "round_too_late";
+        return out;
+    }
+
+    PublicState post_action = state.clone();
+    const auto illegal = post_action.apply_operation_list(player, best_ops);
+    if (!illegal.empty()) {
+        out.reason = "best_ops_illegal";
+        return out;
+    }
+
+    out.post_action_coins = post_action.coins[player];
+    out.current_ant_level = post_action.bases[player].ant_level;
+    if (out.current_ant_level != 0) {
+        out.reason = "already_level1_or_higher";
+        return out;
+    }
+    if (!own_has_sniper(post_action, player)) {
+        out.reason = "no_own_sniper";
+        return out;
+    }
+
+    const Operation operation(OperationType::UpgradeGeneratedAnt);
+    const int upgrade_cost = upgrade_base_cost(post_action.bases[player].ant_level);
+    out.remaining_coins = out.post_action_coins - upgrade_cost;
+    if (!state.can_apply_operation(player, operation, best_ops)) {
+        out.reason = "operation_illegal";
+        return out;
+    }
+    out.equivalent_money = static_cast<double>(out.remaining_coins) + tower_full_salvage_value(post_action, player);
+    if (out.equivalent_money < v4_lure_config().offensive_ant_upgrade_min_equivalent_money) {
+        out.reason = "equivalent_money_too_low";
+        return out;
+    }
+
+    out.use = true;
+    out.operation = operation;
     out.reason = "use";
     return out;
 }

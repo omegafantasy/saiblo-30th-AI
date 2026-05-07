@@ -35,19 +35,30 @@ inline std::vector<Operation> decide_lure_strategy(
 
     OffensiveEmpChoice offensive_emp;
     OffensiveEvasionChoice offensive_evasion;
+    OffensiveAntUpgradeChoice offensive_ant_upgrade;
     std::vector<Operation> final_ops;
     if (evaluated.empty()) {
         offensive_emp.reason = "no_evaluated_plan";
         offensive_evasion.reason = "no_evaluated_plan";
+        offensive_ant_upgrade.reason = "no_evaluated_plan";
     } else {
         final_ops = evaluated.front().plan.ops;
-        offensive_emp = choose_offensive_emp(state, context.player, final_ops);
-        if (offensive_emp.use) {
-            final_ops.push_back(offensive_emp.operation);
-        }
         offensive_evasion = choose_offensive_evasion(state, context.player, final_ops);
         if (offensive_evasion.use) {
             final_ops.push_back(offensive_evasion.operation);
+            offensive_emp.reason = "skipped_evasion_used";
+            offensive_ant_upgrade.reason = "skipped_evasion_used";
+        } else {
+            offensive_emp = choose_offensive_emp(state, context.player, final_ops);
+            if (offensive_emp.use) {
+                final_ops.push_back(offensive_emp.operation);
+                offensive_ant_upgrade.reason = "skipped_emp_used";
+            } else {
+                offensive_ant_upgrade = choose_offensive_ant_upgrade(state, context.player, final_ops);
+                if (offensive_ant_upgrade.use) {
+                    final_ops.push_back(offensive_ant_upgrade.operation);
+                }
+            }
         }
     }
 
@@ -110,7 +121,6 @@ inline std::vector<Operation> decide_lure_strategy(
             }
         }
 
-        const auto &best = evaluated.empty() ? CombinedPlan{} : evaluated.front().plan;
         int total_rollouts = 0;
         for (const auto &item : evaluated) {
             total_rollouts += item.rollout_count;
@@ -124,17 +134,9 @@ inline std::vector<Operation> decide_lure_strategy(
             << ",\"plans_unique\":" << root_plans.plans.size()
             << ",\"total_rollouts\":" << total_rollouts
             << ",\"action_count\":" << final_ops.size()
-            << ",\"best_name\":\"" << debug_json_escape(best.name.empty() ? "hold" : best.name) << '"'
-            << ",\"final_pretty\":\"" << debug_json_escape(pretty_ops_text(state, context.player, final_ops)) << '"'
             << ",\"v4_emp_used\":" << (offensive_emp.use ? "true" : "false")
-            << ",\"v4_emp_reason\":\"" << debug_json_escape(offensive_emp.reason) << '"'
-            << ",\"v4_emp_x\":" << offensive_emp.x
-            << ",\"v4_emp_y\":" << offensive_emp.y
             << ",\"v4_evasion_used\":" << (offensive_evasion.use ? "true" : "false")
-            << ",\"v4_evasion_reason\":\"" << debug_json_escape(offensive_evasion.reason) << '"'
-            << ",\"v4_evasion_x\":" << offensive_evasion.x
-            << ",\"v4_evasion_y\":" << offensive_evasion.y
-            << ",\"best_score\":" << (evaluated.empty() ? 0.0 : evaluated.front().mean_score)
+            << ",\"v4_ant_upgrade_used\":" << (offensive_ant_upgrade.use ? "true" : "false")
             << ",\"elapsed_us\":" << elapsed_us
             << "}\n";
     }

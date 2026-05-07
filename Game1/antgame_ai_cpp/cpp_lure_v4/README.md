@@ -74,9 +74,13 @@ v4 初始状态完全继承 2026-04-30 的阶段性最优 v3。2026-05-04 的 `c
 - base 系列当前禁用 `C2` 作为新建、升级、quick-sniper 路径目标；已有 `C2` 仍可降级、拆除或被其它清理候选处理。
 - base 系列允许“一座 base 塔降/拆 + 另一座 base 塔升级”的小规模组合候选，包括同回合 `recycle A + upgrade B`、先 `recycle A` 后 followup `recycle A + upgrade B`，以及同回合 `recycle A + upgrade B` 后 followup `recycle A + next upgrade B`。由于 base 非 lure 塔上限仍为 `2`，该变体只额外增加少量 action。
 - `future_threat_eval_enabled=false`，`hold_followup_enabled=false`。对应代码和 SimViz 开关仍保留，便于单回合审计和后续重开试验。
-- 进攻性 `EMP Blaster` / `Emergency Evasion` 仍作为 best action 之后的后处理。`EMP Blaster` 先检查战斗蚁贴近敌方高级塔的 tactical EMP；若未触发，再检查富余金币 EMP：post-action 后存在己方 `C1 Sniper`、EMP 后仍剩 `100` 金币、敌方闪电 CD 至少 `5`、己方至少 `4` 只存活蚂蚁距离敌方基地 `<=6`，且敌方 C/L/R 系列存在 `Sniper` 或其它三级塔时，对其中距离敌方基地最近的目标释放。
+- 进攻性 `Emergency Evasion` / `EMP Blaster` / `UpgradeGeneratedAnt` 作为 best action 之后的三选一后处理，优先级为 `Evasion > EMP > AntUpgrade`。`EMP Blaster` 先检查战斗蚁贴近敌方高级塔的 tactical EMP；若未触发，再检查富余金币 EMP：post-action 后存在己方 `C1 Sniper`、EMP 后仍剩 `100` 金币、敌方闪电 CD 至少 `5`、己方至少 `4` 只存活蚂蚁距离敌方基地 `<=6`，且敌方 C/L/R 系列存在 `Sniper` 或其它三级塔时，对其中距离敌方基地最近的目标释放。富余升蚂蚁只做 `ant_level 0 -> 1`：post-action 后己方存在 `Sniper`、升级后现金加己方全塔可回收价值的等效金币 `>=350`、且当前回合 `<=420` 时追加；等效金币口径会按塔当前 HP 折算，低血 `Sniper` 会降低触发概率。
 
-2026-05-05 Saiblo 打包口径将当前参数视为最终 v4：普通 action 预算为 `5000ms / 7000ms`，富余金币 EMP 前线距离为 `<=6`，打包入口默认启用每回合简要 summary log，字段只保留 action 数、候选数、总 rollout、总耗时、best/final 操作及 EMP/Evasion 概况。该口径已完成 128 局验证：v4 vs v3 `77-51-0`、总血量差 `+858`、总金币差 `+9985`，报告为 `eval_results/v4_surplus_emp_d6_vs_v3_128_20260505_report.md`；v4 vs baseline `87-41-0`、总血量差 `+1094`、总金币差 `+6552`，报告为 `eval_results/v4_surplus_emp_d6_vs_baseline_128_20260505_report.md`。
+2026-05-07 Saiblo 打包口径将当前参数视为最终 v4：普通 action 预算为 `5000ms / 7000ms`，普通 action 平均 rollout 上限为 `150`，基础 batch 上限为 `120`，富余金币 EMP 前线距离为 `<=6`。打包入口默认启用每回合极简 summary log，字段只保留 `round/player/serial/plans_total/plans_unique/total_rollouts/action_count/v4_emp_used/v4_evasion_used/v4_ant_upgrade_used/elapsed_us`。本地截断测试中 v4 单条 JSON 日志约 `224B`，按 512 回合外推约 `112KiB`，低于 Saiblo `1024KiB` 限制。
+
+2026-05-06 在 Saiblo 最终降采样前的 `3000ms / 4000ms`、`125/100` 参数口径下，用新 seed 做 128 局座位平衡复测：v4 vs v3 `83-45-0`、总血量差 `+1176`、总金币差 `+3764`，报告为 `eval_results/v4_eq350_reseed_vs_v3_128_20260506_report.md`；v4 vs baseline `84-44-0`、总血量差 `+1391`、总金币差 `+3272`，报告为 `eval_results/v4_eq350_reseed_vs_baseline_128_20260506_report.md`。该批用于确认 eq350 AntUpgrade 版本相对 v3 的上一轮退化主要来自评测波动，不作为 2026-05-07 Saiblo 最终预算的严格强度结论。
+
+2026-05-05 增加富余升蚂蚁后处理后，用 seed `751001:751016` 做 32 局座位平衡 v4 vs v3，完整 512 回合上限、`--debug-mode none`、每座位批次 `--jobs 16`，无 IA / failure。总结果 v4 `16-16-0`，总血量差 `+87`、平均 `+2.719`，总金币差 `-1291`、平均 `-40.344`，平均回合 `497.531`，v4 Lgt/EMP/Eva/AntUpgrade `185/4/24/20`。v4 先手 `10-6`，血量差 `+71`，金币差 `-549`，墙钟 `3115s`；v4 后手 `6-10`，血量差 `+16`，金币差 `-742`，墙钟 `2962s`。两批并行视角墙钟约 `3115s`，批次墙钟和 `6077s`。报告：`eval_results/v4_antupgrade_vs_v3_32_20260505_report.md`。
 
 2026-05-04 记录的当前最强 v4 使用上述参数和 base 系列规则，评测均为完整 512 回合上限、座位平衡、新 seed、基础 debug 口径，无 IA / failure：
 
