@@ -218,3 +218,4 @@ Saiblo 状态：
 - 袁案子任务复核认为 `v52` 的“投票结果为什么多出一票”直接问句没有确认解锁 `704`，因此优先使用 `v50` 中已观测到 704 前置的“你觉得谁在说谎？为什么？”。
 - `n515d/e` 的老师定位已收窄为教师自述特征（如“我的学生/我手里/作为老师/作为教师/副教授/负责教学”），避免竞争者回复中的“课程展示/老师/出国名额”误触发。
 - 对当前候选 `n514c-i/n515a-e` 补全旧 Rose 名系映射：`BaiJingTing/CuiAnYan/DengDaLing/FanMinMin/XiaoDingAng/XiaoDingGang/YeWenXiao`。本地扫描历史 `stderr` 后，当前可见 CamelCase NPC 名已全部能映射到中文，避免回滚或混入旧名时最终答案提交拼音。
+- 平台恢复后的上传/评测队列已单独整理到 `docs/game2_recovery_eval_queue.md`；该队列明确不使用 batch、不激活、不上天梯，Saiblo 可见实体名保持中性编号，备注统一为 `r`。
