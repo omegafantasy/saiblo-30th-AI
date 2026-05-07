@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 11:25 UTC`
+更新时间：`2026-05-07 11:49 UTC`
 
 ## 约束
 
@@ -64,6 +64,8 @@ python3 Game2/tools/watch_saiblo_recovery.py \
 | P1 | `n517c` | `Game2/deepclue_ai/n517c/ai.py` | `n514e` 问法 + 条件短动机，不加接待者问，用于隔离 `n514e` 触发 stage2 后答案文本是否有净收益。 |
 | P1 | `n518a` | `Game2/deepclue_ai/n518a/ai.py` | `n514d` 问法 + Poker stage2 后只调用一次 `others()` 刷新 `102/103/104`，不新增聊天。 |
 | P1 | `n518b` | `Game2/deepclue_ai/n518b/ai.py` | `n514e` 问法 + Poker stage2 后只调用一次 `others()` 刷新 `102/103/104`，不新增聊天。 |
+| P1 | `n519a` | `Game2/deepclue_ai/n519a/ai.py` | `n518a` 的鲁棒对照：动态处理最多 12 个剧本，Poker 信息源先按上下文正则匹配，未知新增案优先 `marks=False` 兜底。 |
+| P1 | `n519b` | `Game2/deepclue_ai/n519b/ai.py` | `n518b` 的鲁棒对照：同样修复新增剧本与 NPC 名字混淆风险，保留 `n514e/n518b` 信息源问法。 |
 | P2 | `n516a` | `Game2/deepclue_ai/n516a/ai.py` | `n515b` 的接待者更短问法：stage2 后只问“公馆内有什么异常发现？”。 |
 | P2 | `n516b` | `Game2/deepclue_ai/n516b/ai.py` | `n515b` 的接待者关键词问法：异常发现 + 电脑/塑料盒/厨房少刀。 |
 | P2 | `n516c` | `Game2/deepclue_ai/n516c/ai.py` | 按旧 hint 分拆接待者三问：聊天记录、到达时间表、异常发现；不问证词破绽。 |
@@ -117,7 +119,7 @@ python3 Game2/tools/run_room_eval.py \
 扩样规则：
 
 - P0 先上传并评测安全版 `n514d/n514e`，各跑 `5` 个有效样本；若 `n514e` 复现 `n512a` 的 stage2 触发优势，再扩到 `12-16`。
-- P1 每个候选先跑 `5` 个有效样本；若出现 `2707+` 且低尾不差于 `n511a`，扩到 `12-16`。`n518a/b` 是最低聊天扰动的 evidence-refresh 对照，应在 `n514d/e` 后、接待者聊天候选前插入。
+- P1 每个候选先跑 `5` 个有效样本；若出现 `2707+` 且低尾不差于 `n511a`，扩到 `12-16`。`n518a/b` 是最低聊天扰动的 evidence-refresh 对照，应在 `n514d/e` 后、接待者聊天候选前插入；`n519a/b` 是更新后“新增剧本/NPC 名字混淆”的鲁棒性对照，应和 `n518a/b` 相邻评测。
 - P2 只在 P1 没有明显退化时并行测；接待者问、证据问和分拆问都可能增加低尾。优先顺序为 `n516a/b`、`n516c`、`n517e/f`、`n518c/d`、`n517h/g`、`n517b/d`、`n514c/h`、`n515c`。
 - P3 最后测；袁案历史负收益较多，除非 P1/P2 无法突破再扩样。
 
@@ -165,6 +167,16 @@ python3 Game2/tools/run_room_eval.py \
 - 本地差分也说明 `n514e/n518b` 不能只看 stage2 触发率：`n512a` 历史 3/3 stage2 仍有两个 `2507`，其中低尾更可能来自 Rose/隐藏后案答案波动。
 - `n512a` 的 `2507/2507/2707` 中，唯一 `2707` 的信息源首答明确含“聊天记录有问题”；两个 `2507` 首答没有稳定给出聊天记录。若 `n518b` 只能稳定 stage2 但不升低尾，后续应优先测 `n517a/n518c` 的接待者合并 hint 问，而不是立刻改 Yuan。
 - 恢复后的实际执行顺序微调为：`n514d/e` 安全对照各 5 个有效样本，然后立即测 `n518a/b` 各 5 个有效样本，再进入 `n514g`、`n515b/a`、`n517a/c` 与后续接待者路线。
+
+## 2026-05-07 11:45 UTC 鲁棒候选与恢复队列脚本
+
+- 只读挖掘再次量化确认：当前所有 `2707` 样本共同条件是 Poker stage2、Rose 三项全对且 stage6 由“态度怪？”类问题触发、Z/F 高阶段；Yuan 进度不是冲顶必要条件。
+- 更新后风险集中在两个实现点：固定 `range(6)` 可能漏掉新增剧本；Poker 信息源解析若先匹配 hint 中任意 NPC 中文名，遇到多个姓名时可能问错人。
+- 新增 `n519a/b`：分别从 `n518a/b` 派生，只改鲁棒性，不改变 Rose/Z/Yuan 主路径和 Poker 答案文本。它们把主循环上限改为 `12` 案，Poker 信息源先按“好的信息来源/问问/接待者知道”等上下文正则解析，再在只有唯一姓名命中时回退；未知新增案默认优先提交 `marks=False` NPC。
+- `n519a/b` 均 `DEBUG = False`，通过 `python3 -m py_compile`，未上传、未开房。
+- 新增恢复评测脚本 `Game2/tools/run_recovery_eval_queue.py`，默认队列为 `n514d n514e n518a n518b n519a n519b`。dry-run 已验证只调用 `upload-ai --remark r --wait-compile` 和 `Game2/tools/run_room_eval.py`，不使用 batch，不带 `--activate`。
+- `2026-05-07 11:43 UTC` 非开赛检查显示 `entity 21072 / n513a` 两个 code 仍为 `未编译`；当前 token 仍解析为 `thebeginning`。继续不上传新候选，等待低频 watcher 的房间恢复信号。
+- `2026-05-07 11:48 UTC` watcher 的有效房间探针仍失败；这次 `POST /api/rooms/` 创建房间即返回 500。平台仍未恢复，下一次检查按 900s 间隔等待。
 
 ## 判定口径
 
