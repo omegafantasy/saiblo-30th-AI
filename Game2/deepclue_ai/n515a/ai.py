@@ -84,6 +84,11 @@ def name_from_title(title: str) -> str:
     return ''
 
 
+def poker_info_name(hint: str) -> str:
+    m = re.search(r'([一-龥]{2,4})是个好的信息来源', hint or '')
+    return m.group(1) if m else ''
+
+
 def compact(text: Any, limit: int = 100) -> str:
     return re.sub(r'\s+', ' ', str(text or '')).strip()[:limit]
 
@@ -503,6 +508,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                     suspect = cn_name(npc)
                     break
         if info_id:
+            suspect = poker_info_name(hint) or suspect
             g.chat(info_id, '你为什么是好的信息来源？你发现了哪些别人不知道的线索？')
             g.chat(info_id, '你是谁？你和死者是什么关系？')
             if g.stage >= 2:

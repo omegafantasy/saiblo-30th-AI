@@ -220,3 +220,4 @@ Saiblo 状态：
 - `n515d/e` 的老师定位已收窄为教师自述特征（如“我的学生/我手里/作为老师/作为教师/副教授/负责教学”），避免竞争者回复中的“课程展示/老师/出国名额”误触发。
 - 对当前候选 `n514c-i/n515a-e` 补全旧 Rose 名系映射：`BaiJingTing/CuiAnYan/DengDaLing/FanMinMin/XiaoDingAng/XiaoDingGang/YeWenXiao`。本地扫描历史 `stderr` 后，当前可见 CamelCase NPC 名已全部能映射到中文，避免回滚或混入旧名时最终答案提交拼音。
 - 平台恢复后的上传/评测队列已单独整理到 `docs/game2_recovery_eval_queue.md`；该队列明确不使用 batch、不激活、不上天梯，Saiblo 可见实体名保持中性编号，备注统一为 `r`。
+- 当前候选 `n514c-i/n515a-e` 的扑克案提交名已改为优先从 hint 正则提取 `某某是个好的信息来源` 中的中文名；即使后续出现未收录的拼音 NPC id，也不会把信息源凶手提交成拼音。已用 `陆亦初/林晚舟` 样例验证提取函数。
