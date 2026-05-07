@@ -67,8 +67,12 @@ class SDK:
         return self._receive()
 
 
+DEBUG = False
+
+
 def log(*args: Any) -> None:
-    print(*args, file=sys.stderr, flush=True)
+    if DEBUG:
+        print(*args, file=sys.stderr, flush=True)
 
 
 def cn_name(npc_id: str) -> str:
@@ -84,14 +88,20 @@ def name_from_title(title: str) -> str:
     return ''
 
 
-def poker_info_name(hint: str) -> str:
+def poker_info_name(hint: str, npcs: list[str] | None = None) -> str:
+    text = hint or ''
+    if npcs is not None:
+        for npc in npcs:
+            name = cn_name(npc)
+            if name and name in text:
+                return name
     for pattern in (
         r'([一-龥]{2,4})是个好的信息来源',
         r'([一-龥]{2,4})会是[^，。]*好的信息来源',
         r'问问([一-龥]{2,4})关于',
         r'接待者([一-龥]{2,4})知道',
     ):
-        m = re.search(pattern, hint or '')
+        m = re.search(pattern, text)
         if m:
             return m.group(1)
     return ''
@@ -504,7 +514,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
     text = all_text(hint, evidences)
     if '扑克公馆' in text:
         info_id = ''
-        hint_name = poker_info_name(hint)
+        hint_name = poker_info_name(hint, npcs)
         hint_id = id_for_name(hint_name, npcs) if hint_name else ''
         marked_true = [npc for npc in npcs if marks.get(npc) is True]
         if hint_id:
@@ -520,7 +530,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                     suspect = cn_name(npc)
                     break
         if info_id:
-            suspect = hint_name or suspect
+            suspect = cn_name(info_id)
             g.chat(info_id, '你为什么是好的信息来源？你发现了哪些别人不知道的线索？')
             g.chat(info_id, '你是谁？你和死者是什么关系？')
         method = '凶手利用扑克公馆全员戴面具、身份混淆和场馆密室条件，在衣帽间用刀杀害并伪装死者。'
@@ -533,6 +543,12 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
             resp = g.chat(npc, '你觉得谁在说谎？为什么？')
             reply = str(resp.get('reply') or resp.get('content') or resp.get('npc_reply') or '')
             if any(key in reply for key in ('49人', '48票', '笔迹', '24票', '24:23', '二十四')):
+                break
+        refreshed_npcs = g.npcs() or npcs
+        refreshed_marks = g.marks() or marks
+        for npc in refreshed_npcs:
+            if refreshed_marks.get(npc) is False:
+                suspect = cn_name(npc)
                 break
         method = f'{suspect}利用自己与袁樱瞳长相相似及黄色行李箱制造混淆，取得并清空袁樱瞳手机，围绕凌晨1点女性尸体照片、假发和行李转移视线，随后分尸抛尸。'
         motivation = f'{suspect}因与袁樱瞳竞争出国交流名额，且投票多出一票、袁樱瞳准备等到周五揭穿真相，担心作弊和相关秘密暴露而杀害袁樱瞳。'

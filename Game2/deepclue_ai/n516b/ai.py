@@ -511,7 +511,6 @@ def solve_z_script(g: Game, npcs: list[str], evidences: list[dict[str, Any]]) ->
 def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, evidences: list[dict[str, Any]]) -> None:
     g.stage = 0
     suspect = cn_name(npcs[0]) if npcs else ''
-    motivation = '未知'
     text = all_text(hint, evidences)
     if '扑克公馆' in text:
         info_id = ''
@@ -535,7 +534,6 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
             g.chat(info_id, '你为什么是好的信息来源？你发现了哪些别人不知道的线索？')
             g.chat(info_id, '你是谁？你和死者是什么关系？')
             if g.stage >= 2:
-                motivation = '凶手担心扑克公馆中面具身份混淆、死者真实身份和自己证词破绽暴露，因此杀人灭口。'
                 follow_hint = g.hint()
                 follow_marks = g.marks()
                 follow_npcs = g.npcs() or npcs
@@ -549,7 +547,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                     if len(marked_true_now) == 1:
                         reception_id = marked_true_now[0]
                 if reception_id:
-                    g.chat(reception_id, '请说说聊天记录、宾客到达时间表，以及公馆内的异常发现。')
+                    g.chat(reception_id, '公馆内有什么异常发现？死者房间电脑、方形塑料盒和厨房少了三把刀分别是什么情况？')
         method = '凶手利用扑克公馆全员戴面具、身份混淆和场馆密室条件，在衣帽间用刀杀害并伪装死者。'
     elif '袁樱瞳' in text or '碎尸案' in text:
         current_marks = g.marks()
@@ -565,7 +563,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
     else:
         method = '未知'
     log(f'[v56] unknown hint={compact(hint, 50)} suspect={suspect}')
-    g.answer(murderer=suspect, motivation=motivation, method=method)
+    g.answer(murderer=suspect, motivation='未知', method=method)
 
 
 def solve_case(g: Game, case_idx: int) -> bool:

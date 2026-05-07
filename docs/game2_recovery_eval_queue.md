@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 10:15 UTC`
+更新时间：`2026-05-07 10:35 UTC`
 
 ## 约束
 
@@ -36,16 +36,20 @@ python3 Game2/tools/run_room_eval.py \
 
 | priority | label | source / code_id | 目的 |
 | --- | --- | --- | --- |
-| P0 | `n512a` | `673e54c862394b58a2ce790b63416e55` | 已上传，先扩到 `12-16` 个有效样本，验证 `2707/2507` 分布。 |
-| P1 | `n514d` | `Game2/deepclue_ai/n514d/ai.py` | 低风险对照：扑克信息源优先从 hint 中文名映射，失败再用唯一 `marks=True`，不追加证据问。 |
-| P1 | `n514e` | `Game2/deepclue_ai/n514e/ai.py` | `n512a` 第一问的纯隔离版：案发现场+手中证据两问，不加证据追问、不加短动机。 |
+| P0 | `n514d` | `Game2/deepclue_ai/n514d/ai.py` | 安全版 `n511a` 对照：关闭 stderr，Poker 信息源优先从当前 NPC 中文名精确匹配 hint，失败再用唯一 `marks=True`。 |
+| P0 | `n514e` | `Game2/deepclue_ai/n514e/ai.py` | 安全版 `n512a` 问法隔离：案发现场+手中证据两问，不加证据追问、不加短动机。 |
+| P1 | `n512a` | `673e54c862394b58a2ce790b63416e55` | 历史已上传样本 `2707,2507,2507`；因上传版仍有 verbose stderr，不作为恢复后的默认扩样目标。 |
 | P1 | `n514g` | `Game2/deepclue_ai/n514g/ai.py` | `n514d` 的条件短动机版：只有 Poker stage2 成功后才把 motivation 从 `未知` 改成短动机。 |
 | P1 | `n515b` | `Game2/deepclue_ai/n515b/ai.py` | `n514d` 加 stage2 后接待者合并 hint 单问，不加扑克短动机。 |
 | P1 | `n515a` | `Game2/deepclue_ai/n515a/ai.py` | `n515b` 加条件短动机，只有 Poker stage2 成功后改 motivation。 |
+| P2 | `n516a` | `Game2/deepclue_ai/n516a/ai.py` | `n515b` 的接待者更短问法：stage2 后只问“公馆内有什么异常发现？”。 |
+| P2 | `n516b` | `Game2/deepclue_ai/n516b/ai.py` | `n515b` 的接待者关键词问法：异常发现 + 电脑/塑料盒/厨房少刀。 |
+| P2 | `n516c` | `Game2/deepclue_ai/n516c/ai.py` | 按旧 hint 分拆接待者三问：聊天记录、到达时间表、异常发现；不问证词破绽。 |
 | P2 | `n514c` | `Game2/deepclue_ai/n514c/ai.py` | stage2 后携带 `102/104/103` 现场证据问。 |
 | P2 | `n514h` | `Game2/deepclue_ai/n514h/ai.py` | `n514c` 加扑克短动机。 |
 | P2 | `n515c` | `Game2/deepclue_ai/n515c/ai.py` | 现场证据问 + 接待者旧轨迹两问：异常发现、证词破绽。 |
 | P3 | `n514f` | `Game2/deepclue_ai/n514f/ai.py` | 袁案低成本 704 探针：只遍历初始 `marks=True` NPC 问“谁在说谎”，命中投票关键词即停止。 |
+| P3 | `n516d` | `Game2/deepclue_ai/n516d/ai.py` | 袁案省聊天 704 探针：只问初始 `marks=True` NPC 课程展示投票是否异常，命中投票关键词即停止。 |
 | P3 | `n514i` | `Game2/deepclue_ai/n514i/ai.py` | 袁案短动机替换，不新增袁案聊天。 |
 | P3 | `n515d` | `Game2/deepclue_ai/n515d/ai.py` | 袁案基础问定位老师，再问“谁在说谎”。 |
 | P3 | `n515e` | `Game2/deepclue_ai/n515e/ai.py` | `n515d` 加 `703` 手机照片追问。 |
@@ -81,9 +85,9 @@ python3 Game2/tools/run_room_eval.py \
 
 扩样规则：
 
-- P0 `n512a` 先补到 `12-16` 个有效样本。
+- P0 先上传并评测安全版 `n514d/n514e`，各跑 `5` 个有效样本；若 `n514e` 复现 `n512a` 的 stage2 触发优势，再扩到 `12-16`。
 - P1 每个候选先跑 `5` 个有效样本；若出现 `2707+` 且低尾不差于 `n511a`，扩到 `12-16`。
-- P2 只在 P1 没有明显退化时并行测；证据问和接待者问都可能增加低尾。
+- P2 只在 P1 没有明显退化时并行测；接待者问、证据问和分拆问都可能增加低尾。优先顺序为 `n516a/b`、`n516c`、`n514c/h`、`n515c`。
 - P3 最后测；袁案历史负收益较多，除非 P1/P2 无法突破再扩样。
 
 ## 2026-05-07 10:00 UTC 队列修订
@@ -96,6 +100,17 @@ python3 Game2/tools/run_room_eval.py \
 - `n514f` 已从袁案全员基础问改为更省聊天的 704 探针；全员基础问方向已有历史低收益证据，当前更需要隔离“少量说谎问能否直接触发 704”。
 - 十二个候选文件均已通过 `python3 -m py_compile`。
 - `2026-05-07 10:14 UTC` 恢复探针仍卡在 `begin_match` 500，`n513a` 仍有两个长期 `未编译` code；不要上传新候选，避免继续制造长期 `未编译` code。
+
+## 2026-05-07 10:29-10:35 UTC 队列修订
+
+- `2026-05-07 10:26 UTC` 再跑 `n511a` 恢复探针，`room 918439` 仍表现为 `join` 500 但已坐入，`begin_match` 500。
+- 当前 token 仍解析为 `thebeginning`；如果需要使用 `theend` 实体，必须先切 token 并重新核验。
+- 新增 `n516a/b/c`，用于把 Poker stage2 后接待者路线拆成更细的净收益实验。它们都从 `n515b` 派生，只改变接待者追问，不改变 Poker 提交答案。
+- 新增 `n516d`，用于 Yuan `704` 的省聊天对照。它保留 `marks=False` 凶手，只问 `marks=True` NPC 关于课程展示投票是否异常。
+- 候选安全修订：`n514c-i/n515a-e/n516a-d` 已统一关闭 stderr 调试日志，避免上传后通过对局 API 泄露 hint、marks、问句和路线。
+- 候选鲁棒性修订：Poker 信息源姓名优先从当前 `npcs` 中文名集合精确匹配 hint，fallback 正则不再覆盖已验证 `info_id`；Yuan 相关追问版会在聊天后刷新 `marks` 再确认 `marks=False` 凶手。
+- `n514c-i/n515a-e/n516a-d` 已通过 `python3 -m py_compile`，但未上传、未开房间。
+- 平台恢复后的执行顺序建议：先上传并测安全版 `n514d/e`，再测 `n514g` 与 `n515b/a`，随后测 `n516a/b/c`，最后再测 `n514c/h/n515c` 和袁案 P3 候选。旧 `n512a` 保留为历史 3 样本，不再作为默认扩样目标。
 
 ## 判定口径
 

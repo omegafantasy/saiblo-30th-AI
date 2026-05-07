@@ -67,8 +67,12 @@ class SDK:
         return self._receive()
 
 
+DEBUG = False
+
+
 def log(*args: Any) -> None:
-    print(*args, file=sys.stderr, flush=True)
+    if DEBUG:
+        print(*args, file=sys.stderr, flush=True)
 
 
 def cn_name(npc_id: str) -> str:
@@ -84,14 +88,20 @@ def name_from_title(title: str) -> str:
     return ''
 
 
-def poker_info_name(hint: str) -> str:
+def poker_info_name(hint: str, npcs: list[str] | None = None) -> str:
+    text = hint or ''
+    if npcs is not None:
+        for npc in npcs:
+            name = cn_name(npc)
+            if name and name in text:
+                return name
     for pattern in (
         r'([一-龥]{2,4})是个好的信息来源',
         r'([一-龥]{2,4})会是[^，。]*好的信息来源',
         r'问问([一-龥]{2,4})关于',
         r'接待者([一-龥]{2,4})知道',
     ):
-        m = re.search(pattern, hint or '')
+        m = re.search(pattern, text)
         if m:
             return m.group(1)
     return ''
@@ -505,7 +515,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
     text = all_text(hint, evidences)
     if '扑克公馆' in text:
         info_id = ''
-        hint_name = poker_info_name(hint)
+        hint_name = poker_info_name(hint, npcs)
         hint_id = id_for_name(hint_name, npcs) if hint_name else ''
         marked_true = [npc for npc in npcs if marks.get(npc) is True]
         if hint_id:
@@ -521,7 +531,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                     suspect = cn_name(npc)
                     break
         if info_id:
-            suspect = hint_name or suspect
+            suspect = cn_name(info_id)
             g.chat(info_id, '你为什么是好的信息来源？你发现了哪些别人不知道的线索？')
             g.chat(info_id, '你是谁？你和死者是什么关系？')
             if g.stage >= 2:
@@ -537,6 +547,12 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
         for npc in npcs:
             resp = g.chat(npc, '你对死者袁樱瞳和这起碎尸案了解多少？请说最关键的线索。')
             replies[npc] = str(resp.get('reply') or resp.get('content') or resp.get('npc_reply') or '')
+        refreshed_npcs = g.npcs() or npcs
+        refreshed_marks = g.marks() or current_marks
+        for npc in refreshed_npcs:
+            if refreshed_marks.get(npc) is False:
+                suspect = cn_name(npc)
+                break
         teacher_id = ''
         for npc, reply in replies.items():
             if any(key in reply for key in ('我的学生', '我手里', '作为老师', '作为教师', '副教授', '负责教学')):
