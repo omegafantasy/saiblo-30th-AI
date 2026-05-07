@@ -17,7 +17,11 @@ from typing import Any
 
 
 PINYIN_TO_CN = {
+    'BaiJingTing': '白井霆',
     'ChuRongZhen': '楚戎臻',
+    'CuiAnYan': '崔安彦',
+    'DengDaLing': '邓达岭',
+    'FanMinMin': '范敏敏',
     'GuYunShu': '顾云舒',
     'JiangMuQing': '江沐青',
     'LinWanZhou': '林晚舟',
@@ -26,8 +30,11 @@ PINYIN_TO_CN = {
     'ShenZhiYao': '沈知遥',
     'WangKeJin': '王科瑾',
     'WangZe': '王泽',
+    'XiaoDingAng': '萧定昂',
+    'XiaoDingGang': '萧定刚',
     'XuQingHe': '许清和',
     'YeQingHeng': '叶青衡',
+    'YeWenXiao': '叶文潇',
     'ZhangShuo': '张朔',
     'ZhangYi': '张壹',
     'ZhangZiHan': '张子韩',
