@@ -1,6 +1,6 @@
 # Game2 Recovery Eval Queue
 
-更新时间：`2026-05-07 09:45 UTC`
+更新时间：`2026-05-07 10:15 UTC`
 
 ## 约束
 
@@ -37,14 +37,14 @@ python3 Game2/tools/run_room_eval.py \
 | priority | label | source / code_id | 目的 |
 | --- | --- | --- | --- |
 | P0 | `n512a` | `673e54c862394b58a2ce790b63416e55` | 已上传，先扩到 `12-16` 个有效样本，验证 `2707/2507` 分布。 |
-| P1 | `n514d` | `Game2/deepclue_ai/n514d/ai.py` | 低风险对照：扑克信息源从唯一 `marks=True` 取，不追加证据问。 |
-| P1 | `n514g` | `Game2/deepclue_ai/n514g/ai.py` | `n514d` 加扑克短动机，验证 stage2 后直接答案是否加分。 |
-| P1 | `n515b` | `Game2/deepclue_ai/n515b/ai.py` | `n514d` 加 stage2 后接待者最小异常问，不加扑克短动机。 |
-| P1 | `n515a` | `Game2/deepclue_ai/n515a/ai.py` | `n515b` 加扑克短动机。 |
+| P1 | `n514d` | `Game2/deepclue_ai/n514d/ai.py` | 低风险对照：扑克信息源优先从 hint 中文名映射，失败再用唯一 `marks=True`，不追加证据问。 |
+| P1 | `n514e` | `Game2/deepclue_ai/n514e/ai.py` | `n512a` 第一问的纯隔离版：案发现场+手中证据两问，不加证据追问、不加短动机。 |
+| P1 | `n514g` | `Game2/deepclue_ai/n514g/ai.py` | `n514d` 的条件短动机版：只有 Poker stage2 成功后才把 motivation 从 `未知` 改成短动机。 |
+| P1 | `n515b` | `Game2/deepclue_ai/n515b/ai.py` | `n514d` 加 stage2 后接待者合并 hint 单问，不加扑克短动机。 |
+| P1 | `n515a` | `Game2/deepclue_ai/n515a/ai.py` | `n515b` 加条件短动机，只有 Poker stage2 成功后改 motivation。 |
 | P2 | `n514c` | `Game2/deepclue_ai/n514c/ai.py` | stage2 后携带 `102/104/103` 现场证据问。 |
 | P2 | `n514h` | `Game2/deepclue_ai/n514h/ai.py` | `n514c` 加扑克短动机。 |
-| P2 | `n514e` | `Game2/deepclue_ai/n514e/ai.py` | `n512a` 问法加现场证据追问。 |
-| P2 | `n515c` | `Game2/deepclue_ai/n515c/ai.py` | 现场证据问 + 接待者异常问叠加。 |
+| P2 | `n515c` | `Game2/deepclue_ai/n515c/ai.py` | 现场证据问 + 接待者合并 hint 单问叠加。 |
 | P3 | `n514f` | `Game2/deepclue_ai/n514f/ai.py` | 袁案只加全员基础问，保留 `marks=False` 凶手。 |
 | P3 | `n514i` | `Game2/deepclue_ai/n514i/ai.py` | 袁案短动机替换，不新增袁案聊天。 |
 | P3 | `n515d` | `Game2/deepclue_ai/n515d/ai.py` | 袁案基础问定位老师，再问“谁在说谎”。 |
@@ -85,6 +85,15 @@ python3 Game2/tools/run_room_eval.py \
 - P1 每个候选先跑 `5` 个有效样本；若出现 `2707+` 且低尾不差于 `n511a`，扩到 `12-16`。
 - P2 只在 P1 没有明显退化时并行测；证据问和接待者问都可能增加低尾。
 - P3 最后测；袁案历史负收益较多，除非 P1/P2 无法突破再扩样。
+
+## 2026-05-07 10:00 UTC 队列修订
+
+- `n515a/b/c` 的接待者问句已从“只问公馆异常/厨房刀具/门窗/血迹/面具”改成 `请说说聊天记录、宾客到达时间表，以及公馆内的异常发现。`。
+- 修订原因：旧 `v52` match `8065213` 的 stage2 hint 明确要求这三类信息；只问异常可能无法稳定复现 `203/204/205` 证据解锁。
+- `n514c-i/n515a-e` 的 Poker 名字解析已扩展为多模式：`X是个好的信息来源`、`X会是...好的信息来源`、`问问X关于...`、`接待者X知道...`。样例 `陆亦初/林晚舟/张子韩` 均能正确解析，避免中文姓名边界吞掉后续字。
+- `n514e` 已改为纯 `n512a` 问法隔离版；`n514g` 已改为 stage2 成功才启用短动机。
+- 十二个候选文件均已通过 `python3 -m py_compile`。
+- `2026-05-07 10:14 UTC` 恢复探针仍卡在 `begin_match` 500，`n513a` 仍有两个长期 `未编译` code；不要上传新候选，避免继续制造长期 `未编译` code。
 
 ## 判定口径
 

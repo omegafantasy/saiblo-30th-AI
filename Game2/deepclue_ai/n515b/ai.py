@@ -85,8 +85,16 @@ def name_from_title(title: str) -> str:
 
 
 def poker_info_name(hint: str) -> str:
-    m = re.search(r'([一-龥]{2,4})是个好的信息来源', hint or '')
-    return m.group(1) if m else ''
+    for pattern in (
+        r'([一-龥]{2,4})是个好的信息来源',
+        r'([一-龥]{2,4})会是[^，。]*好的信息来源',
+        r'问问([一-龥]{2,4})关于',
+        r'接待者([一-龥]{2,4})知道',
+    ):
+        m = re.search(pattern, hint or '')
+        if m:
+            return m.group(1)
+    return ''
 
 
 def compact(text: Any, limit: int = 100) -> str:
@@ -496,8 +504,13 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
     text = all_text(hint, evidences)
     if '扑克公馆' in text:
         info_id = ''
+        hint_name = poker_info_name(hint)
+        hint_id = id_for_name(hint_name, npcs) if hint_name else ''
         marked_true = [npc for npc in npcs if marks.get(npc) is True]
-        if len(marked_true) == 1:
+        if hint_id:
+            info_id = hint_id
+            suspect = hint_name
+        elif len(marked_true) == 1:
             info_id = marked_true[0]
             suspect = cn_name(info_id)
         else:
@@ -507,7 +520,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                     suspect = cn_name(npc)
                     break
         if info_id:
-            suspect = poker_info_name(hint) or suspect
+            suspect = hint_name or suspect
             g.chat(info_id, '你为什么是好的信息来源？你发现了哪些别人不知道的线索？')
             g.chat(info_id, '你是谁？你和死者是什么关系？')
             if g.stage >= 2:
@@ -524,7 +537,7 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                     if len(marked_true_now) == 1:
                         reception_id = marked_true_now[0]
                 if reception_id:
-                    g.chat(reception_id, '公馆内有什么异常发现？厨房刀具、门窗、血迹和面具哪里不对？')
+                    g.chat(reception_id, '请说说聊天记录、宾客到达时间表，以及公馆内的异常发现。')
         method = '凶手利用扑克公馆全员戴面具、身份混淆和场馆密室条件，在衣帽间用刀杀害并伪装死者。'
     elif '袁樱瞳' in text or '碎尸案' in text:
         current_marks = g.marks()
