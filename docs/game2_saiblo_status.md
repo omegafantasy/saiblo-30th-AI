@@ -42,6 +42,7 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - 新增 `rose_stage6_index` 因子后，`rose6_idx=28` 与 `rose6_idx=29..33` 可稳定解释一个 `-40` 档位；例如 `n548a` 的 `2057 -> 2017`、Poker stage3 的 `2757 -> 2717`。剩余 `-200` 低尾仍未被 Z/F stage、err8、文本关键词解释。
 - 当前可操作分数格子：`2657` 是 Rose+Z/F full + Poker direct 高档，`2707/2757` 分别是 Poker stage2/stage3 各加 `+50`；`2617/2717` 是 Rose late `-40`，`2457/2507/2557` 是隐藏 `-200`，`2417/2467/2517` 是两者叠加。这个格子比“Poker stage3 不稳定”更精确。
 - 已有 `1206` 个有效因子样本中没有任何 `>2757`；Yuan `704` 或 `703/704` 样本也只到 `2757`，尚不能证明 Yuan 是独立正组件。
+- 隐藏 `-200` 再挖掘：`990` 个 comparable 样本和 `524` 个 Poker stage3 comparable 样本中，sample_count、记录长度、case index、reply 数、evidence 数和常见文本关键词均不能稳定过滤低尾；唯一 0 低尾条件是 Yuan `704/703+704` 的 8 个小样本，仍需 `n548i` 验证。
 - 置零机制已确认可行，但后续实验应优先用“非目标 direct 正确答案、目标 full/probe”的 `1607` 基底做 A/B；全零 `207` 基底只适合验证后案不中断，不适合判断完整主线收益。
 - 完成度审计：置零、direct 基础分、单剧本 full 增量已完成；all-direct + Yuan direct 异常、两两 full、三案 full、Yuan 条件贡献、隐藏 `-200` 低尾和 Poker/Yuan 实测并发可行性均未完成。
 - 因 Saiblo API 读超时，`n548e-j` 尚未上传/评测；`n547c` all-direct/Yuan direct 的 `1407` 异常也需要 `n547c_more` 复测。补跑脚本为 `Game2/runtime/recovery_eval_queue/20260508_175135/retry_n548_failed.sh`，已加固为只按 `end_state=OK && score>0` 的有效样本计数，并默认每 900 秒重试至补齐。补齐前不应拆成 Poker/Yuan 并发迭代。

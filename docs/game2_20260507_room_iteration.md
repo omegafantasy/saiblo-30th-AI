@@ -928,6 +928,14 @@ R+Z+P direct  = 1607
 
 因此当前不能把本轮视为“分数拆分完成”。最小完成条件是：`n547c_more`、`n548d_more2`、`n548e-j` 都拿到足够有效样本，并将新的分布重新汇总进本节。
 
+### 2026-05-08 19:31 UTC 隐藏 `-200` 低尾再挖掘
+
+本轮继续只读本地日志，没有新增上传或房间评测。筛选 `mTmTmT + z_err8=2` 且分数落在“预测高档”或“预测高档 -200”的 comparable 样本，共 `990` 条，其中隐藏低尾 `106` 条。再单独筛 Poker stage3 comparable 样本，共 `524` 条，其中低尾 `66` 条。
+
+复核的可见特征包括：`sample_count`、`decoded_stdin_records` 长度、各案起始 index、各案 segment 长度、reply 数、Poker/Yuan evidence 数、Poker 常见关键词（`Joker/医生/人口贩卖/聊天记录/电脑/塑料盒/冰柜/刀具/寄送/自杀/伪装` 等）、Z/F 常见关键词、Yuan 投票/笔迹/手机/照片/假发关键词。结论仍是高度重叠，不能给出稳定硬过滤。
+
+唯一低尾为 0 的简单条件只覆盖很小样本：Poker stage3 下 `yuan_ev_count>=2`、`Yuan 49/24/23/笔迹` 关键词、或 `poker_ev_count==10` 均只有 `8` 个样本，来自 `n546c/n546e` 的 Yuan `704` 或 `703/704` 小样本，分布为 `2757 x7, 2717 x1`。这不足以证明 Yuan 是正组件，只说明 `n548i` 的三案 full + Yuan probe 补跑仍值得保留。
+
 ### 服务器状态与补跑
 
 `2026-05-08 18:26-18:34 UTC` 期间，Saiblo API 连续在 `POST /api/rooms/` 和 `GET /api/profile/` 上读超时。已落盘本线程专用补跑脚本：
