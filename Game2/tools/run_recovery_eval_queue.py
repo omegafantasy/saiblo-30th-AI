@@ -129,6 +129,20 @@ def eval_code(label: str, code_id: str, args: argparse.Namespace) -> dict[str, A
     return data
 
 
+def valid_eval_count(data: dict[str, Any]) -> int:
+    rows = data.get('rows')
+    if not isinstance(rows, list):
+        return 0
+    total = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        score = row.get('score')
+        if row.get('end_state') == 'OK' and isinstance(score, int) and score > 0:
+            total += 1
+    return total
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Upload and evaluate a neutral Game53 recovery queue without batch or ladder activation')
     parser.add_argument('--labels', nargs='+', default=DEFAULT_LABELS)
@@ -140,6 +154,11 @@ def main() -> int:
     parser.add_argument('--upload-poll-max', type=int, default=30)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--continue-on-error', action='store_true')
+    parser.add_argument(
+        '--allow-partial-eval',
+        action='store_true',
+        help='mark a label ok even if fewer than --count valid room samples were collected',
+    )
     parser.add_argument(
         '--expected-username',
         default=os.environ.get('SAIBLO_EXPECTED_USERNAME', ''),
@@ -160,7 +179,13 @@ def main() -> int:
                 code_id = '<uploaded-code-id>'
             if not code_id:
                 raise RuntimeError(f'upload did not return code id for {label}: {upload}')
-            row['eval'] = eval_code(label, code_id, args)
+            eval_data = eval_code(label, code_id, args)
+            row['eval'] = eval_data
+            row['valid_eval_count'] = valid_eval_count(eval_data)
+            if not args.dry_run and not args.allow_partial_eval and row['valid_eval_count'] < max(1, int(args.count)):
+                raise RuntimeError(
+                    f'room eval for {label} produced {row["valid_eval_count"]}/{args.count} valid samples'
+                )
             row['ok'] = True
         except Exception as exc:
             row['ok'] = False

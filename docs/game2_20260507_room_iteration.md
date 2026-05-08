@@ -857,6 +857,60 @@ R+Z+P direct  = 1607
 
 这比“Poker stage3 不稳定”更精确：Poker stage3 只是把当前档位整体上移 `+100`，真正需要破解的是 Rose stage6 延迟和另一个不可见 `-200` 隐藏变量。
 
+### 2026-05-08 19:20 UTC 本地格子复核
+
+本轮没有新增上传、没有新增房间评测、没有 batch、没有上天梯；只复核 `docs/generated/game2_room_score_factors.json` 中已有 `1206` 个有效样本和 `n547/n548` 单人房间结果。Saiblo 房间 API 仍处于读超时状态，恢复 watcher 继续低频等待。
+
+当前最可操作的分数格子如下：
+
+```text
+207  zero baseline
++600 Rose direct
++600 Z/F direct
++200 Poker direct
++410 Rose full late layer
++ 40 Rose full fast bonus, rose6_idx=28
++600 Z/F full layer
++ 50 Poker stage2 layer
++ 50 Poker stage3 layer
+-200 unexplained hidden low-tail
+```
+
+由此可预测并解释当前主要档位：
+
+```text
+2657 = 207 + Rose direct/full fast + Z/F direct/full + Poker direct
+2617 = 2657 - 40  Rose stage6 late
+2457 = 2657 - 200 hidden low-tail
+2417 = 2657 - 40 - 200
+2707 = 2657 + 50  Poker stage2
+2667 = 2707 - 40
+2507 = 2707 - 200
+2467 = 2707 - 40 - 200
+2757 = 2657 + 50 + 50  Poker stage3
+2717 = 2757 - 40
+2557 = 2757 - 200
+2517 = 2757 - 40 - 200
+```
+
+这套格子同时覆盖 `n548d` 的 `2657/2417` 和旧主线的 `2757/2717/2557/2517`。关键含义是：`2757` 并不是另一个独立大组件，只是在 Rose+Z/F full 高档上叠加 Poker stage2/stage3 的 `+100`；当前最大未知不是 Poker 证据是否可见，而是 `-200` 隐藏低尾何时发生。
+
+`1206` 个有效样本中尚无任何 `>2757`。Yuan 相关样本也没有显示上穿：`yuan_stage=None` 和 `yuan_stage=1` 的最高分都只是 `2757`；`yuan_evidence_ids=('001','704')` 与 `('001','703','704')` 都出现过 `2757`，但没有超过当前上限，且旧 Yuan 聊天探针已多次引入低尾。因此“理论上限可能更高”目前只是一条待证假设，证据上还不能把 Yuan 视为已知正组件。
+
+按 `mTmTmT + z_err8=2` 筛选已有样本后，可见分布也符合该格子：
+
+- Poker None/1 且 Rose fast 主要在 `2657`，但有 `2457` 隐藏低尾；Rose late 主要在 `2617`，但有 `2417` 隐藏低尾。
+- Poker stage2 且 Rose fast 主要在 `2707`，隐藏低尾是 `2507`；Rose late 主要在 `2667`，隐藏低尾是 `2467`。
+- Poker stage3 且 Rose fast 主要在 `2757`，隐藏低尾是 `2557`；Rose late 主要在 `2717`，隐藏低尾是 `2517`。
+
+因此“每次只独立测一个剧本，其他剧本按 0 分去答”已经被 `n547a/b` 证明机制可行，但更推荐的实验骨架是“非目标剧本 direct 正确答案，目标剧本 full/probe”。原因是全零骨架的绝对分太低，只能证明后案不中断；direct 骨架保留 `1607` 稳定基底，更适合同一骨架内做 A/B，同时不会把无关 full 调查的隐藏低尾混进目标变量。
+
+并发拆线判断仍为暂不支持实测拆分：
+
+- 支持并发只读分析，或准备互不覆盖写集的候选目录。
+- 不支持马上并发跑 Poker-only/Yuan-only 房间评测，因为 `n548e-j` 和 `n547c_more` 还没补齐，三案 full + Yuan zero/direct/probe 以及 all-direct + Yuan direct 的条件贡献未确认。
+- 补齐后如果 `n548g/h/i/j` 证明 Yuan 在三案 full 骨架中仍是 `+0` 或负收益，Poker 线和 Yuan 线才可以拆成并行 A/B；否则 Yuan 可能影响隐藏低尾，必须先留在同一组合实验里。
+
 ### 服务器状态与补跑
 
 `2026-05-08 18:26-18:34 UTC` 期间，Saiblo API 连续在 `POST /api/rooms/` 和 `GET /api/profile/` 上读超时。已落盘本线程专用补跑脚本：
@@ -865,7 +919,7 @@ R+Z+P direct  = 1607
 Game2/runtime/recovery_eval_queue/20260508_175135/retry_n548_failed.sh
 ```
 
-脚本会在服务器恢复后补跑 `n548d_more2` 3 局和 `n548e-j` 各 5 局，并刷新：
+脚本已加固为按 `end_state=OK && score>0` 统计有效样本；服务器恢复后会低频补跑缺口，不再把无效超时样本算作完成。当前补跑范围包括 `n548d_more2` 补足到 5 个有效样本、`n547c_more` 复测 all-direct/Yuan direct 5 个有效样本、以及 `n548e-j` 各 5 个有效样本。默认 `N548_RETRY_MAX_ATTEMPTS=0`，即每 900 秒继续尝试直到样本补齐；若需要临时限次，可在环境变量中覆盖。
 
 - `docs/generated/game2_room_eval_summary.md/json`
 - `docs/generated/game2_room_score_factors.md/json`
