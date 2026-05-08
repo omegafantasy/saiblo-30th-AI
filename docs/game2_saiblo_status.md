@@ -39,6 +39,7 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - 单案 full 增量：Rose full 比 Rose direct 高 `+410/+450`，Z/F full 比 Z/F direct 高 `+600`，Poker full 比 Poker direct 高 `+100`。
 - 组合隔离已跑完一半：`n548a` Rose full + direct 基底为 `2017 x2, 2057 x3`；`n548b` Z/F full + direct 基底为 `2207 x5`；`n548c` Poker full + direct 基底为 `1707 x4, 1607 x1`；`n548d` Rose+Z/F full + Poker direct 为 `2657 x1, 2417 x1`，另 3 局 API 超时。
 - `n548d` 的同形 `2417/2657` 是新关键点：隐藏低尾不只发生在 Poker stage3，Rose+Z/F full 组合已经能产生 `240` 分跨度。
+- 新增 `rose_stage6_index` 因子后，`rose6_idx=28` 与 `rose6_idx=29..33` 可稳定解释一个 `-40` 档位；例如 `n548a` 的 `2057 -> 2017`、Poker stage3 的 `2757 -> 2717`。剩余 `-200` 低尾仍未被 Z/F stage、err8、文本关键词解释。
 - 因 Saiblo API 读超时，`n548e-j` 尚未上传/评测；补跑脚本为 `Game2/runtime/recovery_eval_queue/20260508_175135/retry_n548_failed.sh`。补齐前不应拆成 Poker/Yuan 并发迭代。
 
 历史关键结论（2026-05-07 恢复前，保留背景；最新口径以上方 0a 为准）：

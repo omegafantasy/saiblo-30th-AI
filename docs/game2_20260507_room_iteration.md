@@ -833,6 +833,29 @@ R+Z+P direct  = 1607
 - `n548d` 的 `2417/2657` 同形差异证明，隐藏低尾不应再只归咎于 Poker stage3；Rose+Z/F full 组合已经足够产生 `240` 分跨度。
 - 尚未完成的最小实验是 `n548e-j`：两两 full、三案 full、以及三案 full 时 Yuan zero/direct/probe。它们决定是否可以把 Poker 与 Yuan 拆成并行子线。
 
+### Rose stage6 触发序号新因子
+
+补充挖掘后，`Game2/tools/analyze_room_score_factors.py` 已新增 `rose_stage6_index` 字段，表示 Rose 案第几条回复首次达到 stage6；`docs/generated/game2_room_score_factors.md/json` 已刷新出 `rose6_idx` 列。
+
+这个因子解释了之前混在一起的一部分低尾：
+
+- 在 `n548a` 和 `n547d` 中，`rose6_idx=28` 对应高档，`rose6_idx=32` 稳定低 `40` 分：`n548a` 为 `2057 -> 2017`，`n547d` 为 `1257 -> 1217`。
+- 在 Rose 全真、Z/F 双 err8、Poker None/1 条件下，`rose6_idx=28` 主要是 `2657`，而 `rose6_idx=29..33` 主要是 `2617`。这就是稳定的 `-40` Rose 延迟触发层。
+- 在 Poker stage3 条件下，`rose6_idx=28` 主要是 `2757`，`rose6_idx=29..33` 主要是 `2717`。这解释了大批 `2717`，它不是 Poker 证据少，而是 Rose stage6 触发晚。
+- 剩余 `-200` 低尾仍未解释：同样 `rose6_idx=28` 下仍有 `2457/2557`，同样延迟触发下也有 `2417/2517`。Z/F stage7 首次触发序号、Z/F stage 计数、`KeyError('8')` 次数、常见文本关键词均无法区分。
+
+因此当前更准确的高分模型是：
+
+```text
+基础 full/direct 组合高档
+- 40  Rose stage6 延迟触发，通常 rose6_idx=29..33
+-200  未识别隐藏低尾
++ 50  Poker stage2
++ 50  Poker stage3
+```
+
+这比“Poker stage3 不稳定”更精确：Poker stage3 只是把当前档位整体上移 `+100`，真正需要破解的是 Rose stage6 延迟和另一个不可见 `-200` 隐藏变量。
+
 ### 服务器状态与补跑
 
 `2026-05-08 18:26-18:34 UTC` 期间，Saiblo API 连续在 `POST /api/rooms/` 和 `GET /api/profile/` 上读超时。已落盘本线程专用补跑脚本：

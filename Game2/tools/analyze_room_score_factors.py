@@ -114,18 +114,19 @@ def reply_stage(record: Any) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def segment_indices(records: list[Any]) -> tuple[int | None, int | None]:
-    poker_start: int | None = None
-    yuan_start: int | None = None
+def case_start_indices(records: list[Any]) -> dict[str, int]:
+    starts: dict[str, int] = {}
     for index, record in enumerate(records):
         hint = hint_text(record)
-        if poker_start is None and '案发现场' in hint and '信息来源' in hint:
-            poker_start = index
-            continue
-        if poker_start is not None and yuan_start is None and '袁樱瞳' in hint:
-            yuan_start = index
-            break
-    return poker_start, yuan_start
+        if 'Rose' in hint and 'rose' not in starts:
+            starts['rose'] = index
+        elif ('Z失踪' in hint or 'F无法联络' in hint) and 'zf' not in starts:
+            starts['zf'] = index
+        elif '案发现场' in hint and '信息来源' in hint and 'poker' not in starts:
+            starts['poker'] = index
+        elif '袁樱瞳' in hint and 'yuan' not in starts:
+            starts['yuan'] = index
+    return starts
 
 
 def max_reply_stage(records: list[Any], start: int | None, end: int | None) -> int | None:
@@ -137,6 +138,19 @@ def max_reply_stage(records: list[Any], start: int | None, end: int | None) -> i
         if (stage := reply_stage(record)) is not None
     ]
     return max(stages) if stages else None
+
+
+def first_reply_stage_index(records: list[Any], start: int | None, end: int | None, target_stage: int) -> int | None:
+    if start is None:
+        return None
+    reply_index = 0
+    for record in records[start : end if end is not None else len(records)]:
+        if reply_stage(record) is None:
+            continue
+        reply_index += 1
+        if reply_stage(record) == target_stage:
+            return reply_index
+    return None
 
 
 def segment_evidence_ids(records: list[Any], start: int | None, end: int | None) -> list[str]:
@@ -179,7 +193,11 @@ def analyze_match(path: Path) -> dict[str, Any] | None:
     if not isinstance(records, list):
         records = []
 
-    poker_start, yuan_start = segment_indices(records)
+    starts = case_start_indices(records)
+    rose_start = starts.get('rose')
+    zf_start = starts.get('zf')
+    poker_start = starts.get('poker')
+    yuan_start = starts.get('yuan')
     poker_stage = max_reply_stage(records, poker_start, yuan_start)
     yuan_stage = max_reply_stage(records, yuan_start, None)
 
@@ -196,6 +214,7 @@ def analyze_match(path: Path) -> dict[str, Any] | None:
         'rose_answer_key': ''.join(f'{key[0]}{"T" if value else "F"}' for key, value in sorted(rose_result.items())),
         'rose_stage6_question': stderr_features['rose_stage6_question'],
         'rose_stage6_kind': 'like' if '喜欢你' in stderr_features['rose_stage6_question'] else ('attitude' if '态度怪' in stderr_features['rose_stage6_question'] else 'other'),
+        'rose_stage6_index': first_reply_stage_index(records, rose_start, zf_start, 6),
         'z_err8_count': count_err8(records, stderr),
         'poker_stage': poker_stage,
         'poker_evidence_ids': segment_evidence_ids(records, poker_start, yuan_start),
@@ -239,6 +258,7 @@ def summarize_group(group: list[dict[str, Any]]) -> dict[str, Any]:
         'score_distribution': dict(sorted(collections.Counter(scores).items())),
         'rose_answer_distribution': dict(sorted(collections.Counter(row.get('rose_answer_key') or '' for row in group).items())),
         'rose_stage6_distribution': dict(sorted(collections.Counter(row.get('rose_stage6_kind') or '' for row in group).items())),
+        'rose_stage6_index_distribution': dict(sorted(collections.Counter(str(row.get('rose_stage6_index')) for row in group).items())),
         'poker_stage_distribution': dict(sorted(collections.Counter(str(row.get('poker_stage')) for row in group).items())),
         'z_err8_distribution': dict(sorted(collections.Counter(int(row.get('z_err8_count') or 0) for row in group).items())),
         'yuan_stage_distribution': dict(sorted(collections.Counter(str(row.get('yuan_stage')) for row in group).items())),
@@ -251,38 +271,41 @@ def render_md(data: dict[str, Any]) -> str:
     lines.append('')
     lines.append('## By Score')
     lines.append('')
-    lines.append('| score | count | poker_stage | rose_answer | rose_stage6 | z_err8 | yuan_stage |')
-    lines.append('| ---: | ---: | --- | --- | --- | --- | --- |')
+    lines.append('| score | count | poker_stage | rose_answer | rose_stage6 | rose6_idx | z_err8 | yuan_stage |')
+    lines.append('| ---: | ---: | --- | --- | --- | --- | --- | --- |')
     for score, summary in sorted(data.get('by_score', {}).items(), key=lambda item: int(item[0])):
         lines.append(
             f"| {score} | {summary.get('count')} | "
             f"{format_counter(summary.get('poker_stage_distribution'))} | "
             f"{format_counter(summary.get('rose_answer_distribution'))} | "
             f"{format_counter(summary.get('rose_stage6_distribution'))} | "
+            f"{format_counter(summary.get('rose_stage6_index_distribution'))} | "
             f"{format_counter(summary.get('z_err8_distribution'))} | "
             f"{format_counter(summary.get('yuan_stage_distribution'))} |"
         )
     lines.append('')
     lines.append('## By Base Label')
     lines.append('')
-    lines.append('| label | count | avg | scores | poker_stage | rose_stage6 |')
-    lines.append('| --- | ---: | ---: | --- | --- | --- |')
+    lines.append('| label | count | avg | scores | poker_stage | rose_stage6 | rose6_idx |')
+    lines.append('| --- | ---: | ---: | --- | --- | --- | --- |')
     for label, summary in sorted(data.get('by_base_label', {}).items()):
         lines.append(
             f"| `{label}` | {summary.get('count')} | {summary.get('avg') if summary.get('avg') is not None else ''} | "
             f"{format_counter(summary.get('score_distribution'))} | "
             f"{format_counter(summary.get('poker_stage_distribution'))} | "
-            f"{format_counter(summary.get('rose_stage6_distribution'))} |"
+            f"{format_counter(summary.get('rose_stage6_distribution'))} | "
+            f"{format_counter(summary.get('rose_stage6_index_distribution'))} |"
         )
     lines.append('')
     lines.append('## Rows')
     lines.append('')
-    lines.append('| score | label | match | rose | rose_q | poker_stage | z_err8 | yuan_stage |')
-    lines.append('| ---: | --- | --- | --- | --- | ---: | ---: | ---: |')
+    lines.append('| score | label | match | rose | rose_q | rose6_idx | poker_stage | z_err8 | yuan_stage |')
+    lines.append('| ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: |')
     for row in sorted(data.get('rows', []), key=lambda item: (int(item.get('score', 0)), str(item.get('label')), str(item.get('match_id')))):
         lines.append(
             f"| {row.get('score')} | `{row.get('label')}` | `{row.get('match_id')}` | "
             f"`{row.get('rose_answer_key')}` | {compact(row.get('rose_stage6_question'), 30)} | "
+            f"{row.get('rose_stage6_index') if row.get('rose_stage6_index') is not None else ''} | "
             f"{row.get('poker_stage') if row.get('poker_stage') is not None else ''} | "
             f"{row.get('z_err8_count')} | {row.get('yuan_stage') if row.get('yuan_stage') is not None else ''} |"
         )
