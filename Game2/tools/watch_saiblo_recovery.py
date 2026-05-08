@@ -87,6 +87,7 @@ def main() -> int:
     parser.add_argument('--status-jsonl', default=str(DEFAULT_STATUS_JSONL))
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--skip-room-probe', action='store_true')
+    parser.add_argument('--skip-compile-check', action='store_true')
     parser.add_argument('--require-compile-clear', action='store_true')
     parser.add_argument('--callback', default='', help='shell command to run once recovery is detected')
     args = parser.parse_args()
@@ -103,7 +104,7 @@ def main() -> int:
         time.sleep(sleep_sec)
     while True:
         check_index += 1
-        compile_rows = code_statuses([int(x) for x in args.compile_entity_id], token)
+        compile_rows = [] if args.skip_compile_check else code_statuses([int(x) for x in args.compile_entity_id], token)
         pending = [row for row in compile_rows if row.get('pending') or row.get('error')]
         room_result = {'ok': False, 'skipped': True} if args.skip_room_probe else probe_room(args.probe_code_id, token, args.request_timeout)
         if args.skip_room_probe:
