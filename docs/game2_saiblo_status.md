@@ -21,31 +21,32 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 
 ## 0b. 2026-05-08 分布审计与隔离实验口径
 
-- 当前有效单人房间样本重新统计为 `1206` 个；最高仍是 `2757`，没有观测到 `>2757`。
+- 当前有效单人房间样本重新统计为 `1277` 个；最高仍是 `2757`，没有观测到 `>2757`。
 - `2757` 的当前差分分解为 `2520` 基础包 + `137` Z/F hidden err8 + `50` Poker stage2 + `50` Poker stage3。这里的 `2520` 是“当前直接答案/基础调查包”，不是单个 Rose 分数；平台只暴露 Rose 的 `answer_result`，后续剧本不能精确逐案拆分。
 - Rose 当前只确认三项全真；motivation false 在同档约 `-200`，stage6 由 `喜欢你？` 类触发常约 `-40`。Z/F 当前可证额外收益约 `+137`。Poker 当前可证额外收益约 `+100`。Yuan 当前没有证明稳定正增量，`703/704` 仍是小样本疑点。
 - 在 Rose 全真且 Z/F 双 `KeyError('8')` 条件下，Poker 可见 stage 与分数台阶关系很清楚：stage None/1 最高 `2657`，stage2 最高 `2707`，stage3 最高 `2757`。
 - 但 Poker stage3 不是稳定解。同一核心可见签名：Rose 全真、Rose stage6=`other`、Z/F 双 err8、Poker stage3、Poker evidence `001/002/101/102/103/104/201/202/203/204/205`、Yuan 只有 `001`，共有 464 个样本，分布为 `2517 x21, 2557 x41, 2627 x1, 2717 x122, 2757 x279`。可见日志无法解释这 `240` 分跨度。
-- Yuan 的 `703/704` 目前只有少量样本，不能证明独立正收益；`n544a/n530b` 类 Yuan 追问已出现 `2467/2507` 低尾。
+- Yuan 的 `703/704` 不能证明独立正收益；三案 full 扩样中 Yuan zero/direct/probe 分别为 `2757 x12, 2717 x3`、`2757 x11, 2717 x2, 2657 x2`、`2757 x10, 2717 x4, 2517 x1`，没有任何上穿，且 probe 已出现隐藏低尾。
 - “快速放弃非目标剧本”机制上可行，错误或低分前案后仍能进入后续案；但它只适合同一隔离骨架内做 A/B，不适合用绝对分数直接决定完整主线。
-- 当前不建议马上把 Poker/Yuan 拆成并发评测。应先做一个中性 `skip/control` 骨架验证非目标直接答案的方差和进入后案的稳定性；control 稳定后，才值得让 Poker-only 与 Yuan-only 并行。
+- 现在支持受控拆线评测，但不是“随便把其他案全零后外推”。Poker 线应固定 Rose+Z/F full + Yuan zero；Yuan 线应固定 Rose+Z/F+Poker full。每条线必须用中性实体名/备注、独立输出目录和固定 code_id 汇总。
 - Saiblo 房间评测工具当前是串行；手工多进程并发技术上可行，但会增加 pending、编译延迟、限流与归因混淆。若以后并发，必须用不同中性实体、不同输出目录、固定 code_id、先小样本 sanity，再扩到 16+。
 
 ## 0c. 2026-05-08 `n547/n548` 置零拆分结论
 
 - `n547a/n547b` 已确认 robust zero baseline：hard-zero 与 soft-zero 均为 `207 x5`，前案错答不阻塞后续四案。
 - 直接答案贡献在 `n547i-o` 中严格可加：Rose direct `+600`、Z/F direct `+600`、Poker direct `+200`、Yuan direct/probe `+0`；Rose+Z/F+Poker direct 且 Yuan zero 为 `1607 x5`。
-- `n547c` all-direct 为 `1607 x4, 1407 x1`，而 `n547o` 去掉 Yuan direct 后稳定 `1607 x5`；当前怀疑 Yuan direct 在 R+Z+P direct 条件下可能偶发 `-200`，但需要补样确认。
+- `n547c+n547c_more` all-direct 合计为 `1607 x9, 1407 x1`，而 `n547o` 去掉 Yuan direct 后稳定 `1607 x5`；当前更倾向于把 `1407` 视为 direct 骨架中的偶发隐藏 `-200`，不是稳定 Yuan direct 负分。
 - 单案 full 增量：Rose full 比 Rose direct 高 `+410/+450`，Z/F full 比 Z/F direct 高 `+600`，Poker full 比 Poker direct 高 `+100`。
-- 组合隔离已跑完一半：`n548a` Rose full + direct 基底为 `2017 x2, 2057 x3`；`n548b` Z/F full + direct 基底为 `2207 x5`；`n548c` Poker full + direct 基底为 `1707 x4, 1607 x1`；`n548d` Rose+Z/F full + Poker direct 为 `2657 x1, 2417 x1`，另 3 局 API 超时。
+- 组合隔离已补齐：`n548a` Rose full + direct 基底为 `2017 x2, 2057 x3`；`n548b` Z/F full + direct 基底为 `2207 x5`；`n548c` Poker full + direct 基底为 `1707 x4, 1607 x1`；`n548d` Rose+Z/F full + Poker direct 为 `2657 x4, 2417 x1`；`n548e` Rose+Poker full + Z/F direct 为 `2157 x3, 2117 x1, 1957 x1`；`n548f` Z/F+Poker full + Rose direct 为 `2307 x5`。
 - `n548d` 的同形 `2417/2657` 是新关键点：隐藏低尾不只发生在 Poker stage3，Rose+Z/F full 组合已经能产生 `240` 分跨度。
 - 新增 `rose_stage6_index` 因子后，`rose6_idx=28` 与 `rose6_idx=29..33` 可稳定解释一个 `-40` 档位；例如 `n548a` 的 `2057 -> 2017`、Poker stage3 的 `2757 -> 2717`。剩余 `-200` 低尾仍未被 Z/F stage、err8、文本关键词解释。
 - 当前可操作分数格子：`2657` 是 Rose+Z/F full + Poker direct 高档，`2707/2757` 分别是 Poker stage2/stage3 各加 `+50`；`2617/2717` 是 Rose late `-40`，`2457/2507/2557` 是隐藏 `-200`，`2417/2467/2517` 是两者叠加。这个格子比“Poker stage3 不稳定”更精确。
-- 已有 `1206` 个有效因子样本中没有任何 `>2757`；Yuan `704` 或 `703/704` 样本也只到 `2757`，尚不能证明 Yuan 是独立正组件。
-- 隐藏 `-200` 再挖掘：`990` 个 comparable 样本和 `524` 个 Poker stage3 comparable 样本中，sample_count、记录长度、case index、reply 数、evidence 数和常见文本关键词均不能稳定过滤低尾；唯一 0 低尾条件是 Yuan `704/703+704` 的 8 个小样本，仍需 `n548i` 验证。
+- 三案 full + Yuan 条件扩样：`n548g` Yuan zero 为 `2757 x12, 2717 x3`；`n548h` Yuan direct 为 `2757 x11, 2717 x2, 2657 x2`；`n548i` Yuan probe 为 `2757 x10, 2717 x4, 2517 x1`；`n548j` direct + Yuan probe 为 `1607 x5`。Yuan 仍没有独立正分证据。
+- 已有 `1277` 个有效因子样本中没有任何 `>2757`；Yuan `704` 或 `703/704` 样本也只到 `2757`，尚不能证明 Yuan 是独立正组件。
+- 隐藏 `-200` 再挖掘：此前 `990` 个 comparable 样本和 `524` 个 Poker stage3 comparable 样本中，sample_count、记录长度、case index、reply 数、evidence 数和常见文本关键词均不能稳定过滤低尾；`n548i` 出现 `2517` 后，原先 Yuan `704/703+704` 的 8 个小样本 0 低尾条件已被反驳。
 - 置零机制已确认可行，但后续实验应优先用“非目标 direct 正确答案、目标 full/probe”的 `1607` 基底做 A/B；全零 `207` 基底只适合验证后案不中断，不适合判断完整主线收益。
-- 完成度审计：置零、direct 基础分、单剧本 full 增量已完成；all-direct + Yuan direct 异常、两两 full、三案 full、Yuan 条件贡献、隐藏 `-200` 低尾和 Poker/Yuan 实测并发可行性均未完成。
-- 因 Saiblo API 读超时，`n548e-j` 尚未上传/评测；`n547c` all-direct/Yuan direct 的 `1407` 异常也需要 `n547c_more` 复测。补跑脚本为 `Game2/runtime/recovery_eval_queue/20260508_175135/retry_n548_failed.sh`，已加固为只按 `end_state=OK && score>0` 的有效样本计数，并默认每 900 秒重试至补齐。补齐前不应拆成 Poker/Yuan 并发迭代。
+- 完成度审计：置零、direct 基础分、单剧本 full 增量、两两 full、三案 full 与 Yuan 条件贡献已经足够指导下一轮受控 A/B；隐藏 `-200` 低尾仍未解释。
+- Saiblo 恢复 watcher 于 `2026-05-08 21:33:51 UTC` 触发回调，`n548d_more2`、`n547c_more`、`n548e-j` 已补齐，随后 `n548g/h/i_more2` 也完成扩样。补跑脚本 `Game2/runtime/recovery_eval_queue/20260508_175135/retry_n548_failed.sh` 不再是阻塞项。
 
 历史关键结论（2026-05-07 恢复前，保留背景；最新口径以上方 0a 为准）：
 
