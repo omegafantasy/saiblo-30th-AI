@@ -48,7 +48,8 @@ PY
     --request-timeout 180 \
     --allow-partial-eval \
     --continue-on-error \
-    --expected-username thebeginning
+    --expected-username thebeginning &
+  pid_yuan=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
     --labels n578a n578b n578c n578d n579a n579d n581a n581b n574c \
@@ -60,7 +61,8 @@ PY
     --request-timeout 180 \
     --allow-partial-eval \
     --continue-on-error \
-    --expected-username thebeginning
+    --expected-username thebeginning &
+  pid_poker=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
     --labels n577e n578e n578f n579b n579c n581c n581d \
@@ -72,7 +74,16 @@ PY
     --request-timeout 180 \
     --allow-partial-eval \
     --continue-on-error \
-    --expected-username thebeginning
+    --expected-username thebeginning &
+  pid_full=$!
 
-  echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] retry watcher finished"
+  status=0
+  for pid in "$pid_yuan" "$pid_poker" "$pid_full"; do
+    if ! wait "$pid"; then
+      status=1
+    fi
+  done
+
+  echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] retry watcher finished status=${status}"
+  exit "$status"
 } >>"$LOG" 2>&1

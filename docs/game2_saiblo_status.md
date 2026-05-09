@@ -1254,7 +1254,7 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 
 - 进程：`scripts/game2_late_probe_retry.sh`，当前 PID 以 `ps` 为准，本节最后一次重启后为当前后台 watcher。
 - 账号守卫仍为 `--expected-username thebeginning`，不绕过 profile 校验。
-- 恢复后队列：`n576a-c/n577a-d/n580a-d`，随后 `n578a-d/n579a/n579d/n581a-b/n574c`，最后 `n577e/n578e/n578f/n579b/n579c/n581c-d`，每个默认 `3` 局单人房间评测。
+- 恢复后会并行启动三组队列：`n576a-c/n577a-d/n580a-d`，`n578a-d/n579a/n579d/n581a-b/n574c`，`n577e/n578e/n578f/n579b/n579c/n581c-d`；每组内部串行，每个默认 `3` 局单人房间评测。
 - 回调仍不使用 batch、不激活、不上天梯，备注统一 `r`。
 
 本地只读复盘补充：

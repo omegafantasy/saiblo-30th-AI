@@ -1500,7 +1500,7 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 
 - `Game2/tools/make_n577_candidates.py`、`Game2/tools/make_n578_candidates.py`、`Game2/tools/make_n579_candidates.py`、`Game2/tools/make_n580_candidates.py`、`Game2/tools/make_n581_candidates.py` 已生成候选。
 - `n577a-e`、`n578a-f`、`n579a-d`、`n580a-d`、`n581a-d` 全部通过 Python `compile()` 语法检查。
-- `scripts/game2_late_probe_retry.sh` 已更新并重启，当前恢复队列包含 `n576a-c/n577a-d/n580a-d/n578a-d/n579a/n579d/n581a-b/n574c/n577e/n578e/n578f/n579b/n579c/n581c-d`，每个默认跑 `3` 局单人房间。
+- `scripts/game2_late_probe_retry.sh` 已更新并重启，profile 恢复后会并行启动 Yuan 隔离、Poker 隔离/post-monitor、完整骨架交叉三组队列；每组内部串行，每个标签默认跑 `3` 局单人房间。
 - 继续遵守：不用 batch、不上天梯、不激活；Saiblo 可见实体名保持中性编号，备注仍为 `r`。
 
 本地补充复盘：
