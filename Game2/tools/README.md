@@ -45,6 +45,13 @@
   - 汇总每个 case 的步数、阶段、最终答案
   - 统计版本间新增/移除的问题，定位“同码不同分”与误导性追问
 
+- `analyze_score_lattice.py`
+  - 读取 `docs/generated/game2_room_score_factors.json`
+  - 默认只统计当前线程的 `n*` 候选，排除 `sk*` 等其他线程标签
+  - 把分数拆成 Rose stage6、Z/F err8、Poker stage 和 residual 格子
+  - 输出到被 git 忽略的 `docs/generated/game2_score_lattice.{md,json}`
+  - 用于判断低分档是可见层缺失、Rose late、还是不可见 `-200` residual
+
 常用命令：
 
 ```bash
@@ -75,6 +82,8 @@ python3 /www/Game2/tools/analyze_match.py \
 python3 /www/Game2/tools/summarize_versions.py
 
 python3 /www/Game2/tools/extract_story_unlocks.py --limit 12
+
+python3 /www/Game2/tools/analyze_score_lattice.py
 
 python3 /www/Game2/tools/compare_match_runs.py \
   --input v2_best=/www/Game2/runtime/manual_match_7421776_v2 \
