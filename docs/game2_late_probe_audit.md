@@ -1,6 +1,6 @@
 # Game2 Late Poker/Yuan Probe Audit
 
-更新时间：`2026-05-10 04:55 UTC+8 / 2026-05-09 20:55 UTC`
+更新时间：`2026-05-10 05:06 UTC+8 / 2026-05-09 21:06 UTC`
 
 ## 目标
 
@@ -18,6 +18,7 @@
 - 新增 stage 上限扇出：`n593a-b` 用 Poker `401/402 -> 密码/身份 -> 404/501` 后的官方卷宗多 holder 扇出追 `405/502`；`n593c` Yuan 隔离追 `705 -> 706` 官方来源；`n593d` 在完整骨架中把 Poker `404/501` late flag 带入 Yuan，测试跨案隐藏链是否打开 `706+`。
 - 新增全员粗粒度 BFS：`n594a-b` 在 Poker late gate 后对所有可见 NPC 做 stage4/`405/502` 角色与物证扇出，降低 holder 解析错误风险；`n594c` Yuan 隔离按 `703-708` 官方来源做 BFS；`n594d` 完整骨架中组合 Poker all-NPC stage4 扇出与 Yuan 跨案 `703-708` BFS。
 - 新增大答案假设矩阵：`n595a-b` 在 Poker 隔离中分别提交真梅花5/林渝植和 late-holder 作为最终凶手；`n595c-d` 在 Yuan 隔离中分别提交竞争者和隐藏链关键人，验证后两案是否因最终答案大方向错误而丢失答案层。
+- 新增非微调 ceiling 拆轴：`n596a-b` 追 Poker `404/501` 后的警方卷宗、车辆/转账持有人、真梅花5、DNA/指纹、银行流水和 `405/502` 续证；`n596c-d` 追 Poker 空间权限/刀具/toolmark/门禁/清洁动线，并在完整骨架中接 Yuan 官方跨案链；`n596e-g` 分别隔离 Yuan 周五揭发缓存/行政记录、尸源-DNA-行李箱-手机数字取证、`705` 隐藏来源/全局姓名直连与 `706+` 续追；`n596h` 组合 Poker 官方卷宗链与 Yuan 跨案官方来源链。
 - 旧待补 witness 双问：`n576a-c`。
 
 生成脚本：
@@ -41,6 +42,7 @@
 - `Game2/tools/make_n593_candidates.py`
 - `Game2/tools/make_n594_candidates.py`
 - `Game2/tools/make_n595_candidates.py`
+- `Game2/tools/make_n596_candidates.py`
 
 恢复与汇总：
 
@@ -50,15 +52,15 @@
 
 ## 当前验证
 
-- watcher 队列共 `83` 个标签，均有对应 `Game2/deepclue_ai/<label>/ai.py`。
-- `83` 个标签全部通过 Python `compile()` 检查。
+- watcher 队列共 `91` 个标签，均有对应 `Game2/deepclue_ai/<label>/ai.py`。
+- `91` 个标签全部通过 Python `compile()` 检查。
 - watcher 标签全部被 `summarize_late_probe_results.py` 覆盖。
 - `scripts/game2_late_probe_retry.sh` 通过 `bash -n`。
-- 当前后台 watcher 已重启为五队列并发版本，PID `422760`；必须仍通过 `thebeginning` profile 守卫后才上传。旧 profile 子进程已清理，避免重复守卫。
+- 当前后台 watcher 已重启为五队列并发版本，PID `423833`；必须仍通过 `thebeginning` profile 守卫后才上传。旧 profile 子进程已清理，避免重复守卫。
 
 ## 阻塞
 
-Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n595`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。当前只增加外层 wall timeout，不绕过账号守卫。
+Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n596`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。当前只增加外层 wall timeout，不绕过账号守卫。
 
 ## 恢复后判定
 
@@ -87,3 +89,4 @@ Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username s
 - `n593a-d`：补“stage 上限扇出”而不是问句同义变体。Poker 侧把信息源、密码 holder、真梅花5、404 车主、501 收款人、接待者全部作为可能的 `405/502` holder，但只在 `401/402` 后触发；Yuan 侧把 `705` 尸检报告来源、biology runner、guard/web/source 三类来源作为 `706+` holder，并在完整骨架里把 Poker `404/501` late flag 作为跨案条件。
 - `n594a-d`：补全员粗粒度 BFS。Poker 侧不再依赖已解析出的 owner/recipient/true-club，而是 late gate 后遍历所有可见 NPC，问其是否是 stage4/`405/502` 的角色或物证 holder；Yuan 侧不再只追 `705`，而是按 `703-708`、官方系统、安保/警方/法医/车辆/网站后台来源做更高预算 BFS。
 - `n595a-d`：补最终答案大假设矩阵。Poker 用隔离骨架验证“真梅花5/林渝植杀 Joker”和“404/501 late-holder 参与杀人/移尸”两种大方向；Yuan 用隔离骨架验证“出国名额竞争者”和“biology/guard/705 隐藏链关键人”两种大方向。
+- `n596a-h`：按用户提醒停止细节抠问，改为补后两案 stage/theory ceiling。Poker 分为官方卷宗/车辆/转账持有人链与空间权限/刀具/toolmark 链，且若 `405/502` 出现会继续问下一层。Yuan 分为周五揭发缓存与行政记录、尸源/DNA/行李箱/手机云端数字取证、`705` 来源姓名可能不可见时的全局姓名直连与可见 NPC 代理追问，且若 `706/707/708` 出现会继续闭环最终层。完整骨架版把 Poker `404/501/405/502` late flag 带入 Yuan，测试 Joker 人口贩卖、匿名转账、李海天、1919 黑车、生物馆、保安网页、蓝色背包和手机照片是否共享同一官方来源链。
