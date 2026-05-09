@@ -105,6 +105,25 @@ def find_yuan_segment(records: list[Any]) -> tuple[int | None, int | None, tuple
     return start, end, npcs
 
 
+def yuan_marks(record: Any) -> tuple[str, ...]:
+    state = result_state(record)
+    raw_marks = state.get('npc_marks')
+    if isinstance(raw_marks, list):
+        return tuple(str(npc) for npc in raw_marks)
+    if isinstance(raw_marks, dict):
+        return tuple(str(npc) for npc, value in raw_marks.items() if value)
+    return ()
+
+
+def mark_pattern(npcs: tuple[str, ...], marks: tuple[str, ...]) -> str:
+    marked = set(marks)
+    return ''.join('T' if npc in marked else 'F' for npc in npcs)
+
+
+def npc_at(npcs: list[str], index: int) -> str:
+    return npcs[index] if index < len(npcs) else ''
+
+
 def row_from_analysis(path: Path, label_regex: re.Pattern[str], score_filter: set[int]) -> dict[str, Any] | None:
     data = load_json(path)
     player = first_player(data)
@@ -123,6 +142,7 @@ def row_from_analysis(path: Path, label_regex: re.Pattern[str], score_filter: se
     start, end, npcs = find_yuan_segment(records)
     if start is None:
         return None
+    marks = yuan_marks(records[start])
     segment = records[start : end if end is not None else len(records)]
 
     replies: list[str] = []
@@ -144,9 +164,11 @@ def row_from_analysis(path: Path, label_regex: re.Pattern[str], score_filter: se
             'evidence_ids': evidences,
             'reply_count': len(replies),
             'npcs': npcs,
+            'marks': marks,
             'any_unlock': any_unlock,
         }
     )
+    zhangyi_pos = npcs.index('ZhangYi') if 'ZhangYi' in npcs else None
     return {
         'label': label,
         'score': score,
@@ -154,6 +176,12 @@ def row_from_analysis(path: Path, label_regex: re.Pattern[str], score_filter: se
         'match_id': path.parent.name,
         'path': str(path.relative_to(ROOT)),
         'npcs': list(npcs),
+        'marks': list(marks),
+        'mark_pattern': mark_pattern(npcs, marks),
+        'npc0': npcs[0] if len(npcs) > 0 else '',
+        'npc1': npcs[1] if len(npcs) > 1 else '',
+        'npc2': npcs[2] if len(npcs) > 2 else '',
+        'zhangyi_pos': zhangyi_pos,
         'reply_count': len(replies),
         'evidence_ids': sorted(evidences),
         'features': features,
@@ -188,6 +216,9 @@ def feature_definitions() -> dict[str, FeatureFn]:
         'kw_lolita_wig': lambda row: 'lo裙' in row['text'] or '假发' in row['text'],
         'any_unlock': lambda row: bool(row['any_unlock']),
         'visible_npc_3': lambda row: len(row['npcs']) == 3,
+        'mark_pattern_ttf': lambda row: mark_pattern(tuple(row['npcs']), tuple(row.get('marks', ()))) == 'TTF',
+        'zhangyi_visible': lambda row: 'ZhangYi' in row['npcs'],
+        'zhangyi_pos_2': lambda row: row['npcs'].index('ZhangYi') == 2 if 'ZhangYi' in row['npcs'] else False,
     }
 
 
@@ -244,12 +275,35 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
 
+    breakdown_fields = ('mark_pattern', 'npc0', 'npc1', 'npc2', 'zhangyi_pos', 'reply_count')
+    breakdown_rows: list[dict[str, Any]] = []
+    for field in breakdown_fields:
+        groups: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
+        for row in rows:
+            groups[str(row.get(field))].append(row)
+        for value, group in groups.items():
+            if len(group) < 4:
+                continue
+            plus_count = sum(1 for row in group if row.get('plus40'))
+            breakdown_rows.append(
+                {
+                    'field': field,
+                    'value': value,
+                    'count': len(group),
+                    'plus_count': plus_count,
+                    'plus_rate': round(plus_count / len(group), 4),
+                    'score_distribution': score_distribution(group),
+                }
+            )
+    breakdown_rows.sort(key=lambda row: (row['field'], -row['plus_rate'], -row['count'], row['value']))
+
     return {
         'row_count': len(rows),
         'plus40_count': len(positives),
         'score_distribution': score_distribution(rows),
         'feature_rows': feature_rows,
         'label_rows': label_rows,
+        'breakdown_rows': breakdown_rows,
         'plus40_samples': positives,
         'rows': rows,
     }
@@ -280,14 +334,25 @@ def render_md(data: dict[str, Any], max_features: int, max_samples: int) -> str:
             f"{format_counter(row['evidence_distribution'])} | {format_counter(row['reply_distribution'])} |"
         )
     lines.append('')
+    lines.append('## Position And Mark Breakdown')
+    lines.append('')
+    lines.append('| field | value | count | plus40 | scores |')
+    lines.append('| --- | --- | ---: | ---: | --- |')
+    for row in data.get('breakdown_rows', []):
+        lines.append(
+            f"| `{row['field']}` | `{row['value']}` | {row['count']} | "
+            f"{row['plus_count']} ({row['plus_rate']}) | {format_counter(row['score_distribution'])} |"
+        )
+    lines.append('')
     lines.append('## Plus40 Samples')
     lines.append('')
-    lines.append('| label | match | score | npcs | evidence_ids | reply_count | features |')
-    lines.append('| --- | --- | ---: | --- | --- | ---: | --- |')
+    lines.append('| label | match | score | npcs | marks | evidence_ids | reply_count | features |')
+    lines.append('| --- | --- | ---: | --- | --- | --- | ---: | --- |')
     for row in data.get('plus40_samples', [])[:max_samples]:
         lines.append(
             f"| `{row['label']}` | `{row['match_id']}` | {row['score']} | "
-            f"{'/'.join(row['npcs'])} | {'/'.join(row['evidence_ids'])} | {row['reply_count']} | "
+            f"{'/'.join(row['npcs'])} | {'/'.join(row.get('marks', []))} | "
+            f"{'/'.join(row['evidence_ids'])} | {row['reply_count']} | "
             f"{', '.join(row['features'])} |"
         )
     return '\n'.join(lines) + '\n'
@@ -295,7 +360,7 @@ def render_md(data: dict[str, Any], max_features: int, max_samples: int) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--label-regex', default=r'n(549|550|551|552)[a-z]')
+    parser.add_argument('--label-regex', default=r'n(549|550|551|552|553)[a-z]')
     parser.add_argument('--scores', nargs='*', type=int, default=[207, 247, 1407, 1607, 1647])
     parser.add_argument('--out-json', type=Path, default=OUT_JSON)
     parser.add_argument('--out-md', type=Path, default=OUT_MD)

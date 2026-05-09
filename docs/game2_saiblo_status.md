@@ -1,6 +1,6 @@
 # Game2 Saiblo 当前状态
 
-更新时间：`2026-05-09 09:59 UTC`
+更新时间：`2026-05-09 11:17 UTC`
 
 ## 0. 2026-05-07 线上更新后的最新口径
 
@@ -106,6 +106,16 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - 刷新后 `docs/generated/game2_room_score_factors.json` 为 `2448` 行，当前线程 `n*` 行为 `1561`；严格高分格子仍为 `1059` 行，residual 仍是 `0 x945, -200 x108, -40 x6`。
 - 新增 `Game2/tools/analyze_yuan_isolation.py`，本地生成 `docs/generated/game2_yuan_isolation.md/json`；当前 Yuan 隔离样本为 `272` 条，其中 plus40 为 `14` 条。`n552a-d` 全部为 `207`，没有新 plus40 样本。
 - 结论：投票异常、李海天/生物馆/1919 显式链路、二者组合、可见首个 NPC/竞争者答案都不是 Yuan `+40` 或 answer 分的充分条件。下一步若继续 Yuan，应优先测第三轮问句顺序与 NPC 位置，而不是继续换最终答案文本。
+
+## 0i. 2026-05-09 `n553a-c` Yuan 位置/顺序 A/B
+
+- 上传实体名 `n553a` 到 `n553c` 和备注 `r` 均保持中性；未使用 batch，未激活，未上天梯；每个版本通过单人房间评测 12 局，上传账号守卫为 `thebeginning / user_id=2646`。
+- `n553a`，code_id `2a76cc2c7ddd44ae8b34a9562550fcf6`：全零骨架，Yuan broad 两问后只问第三个 false-marked NPC 两条生物馆/张壹/李海天纠偏问，最终答案置零；12 局 `207 x12`。
+- `n553b`，code_id `7d32509b3423488f8d06c7988b7a0e87`：同骨架，但第三轮只问前两个 marked true NPC，最终答案置零；12 局 `207 x12`。
+- `n553c`，code_id `0b85cf2b414c4a0da0eb9fbe1a5e1d45`：同骨架，第三优先顺序但仍覆盖全员，每人两条纠偏问，最终答案置零；12 局 `207 x12`。
+- `Game2/tools/analyze_yuan_isolation.py` 已增强为记录 Yuan 初始 `marks`、`mark_pattern`、`npc0/npc1/npc2` 和 `zhangyi_pos`。刷新后 `docs/generated/game2_yuan_isolation.json` 为 `308` 条 Yuan 隔离样本，plus40 仍为 `14` 条；`n553a-c` 新增 36 条全部为 `207`。
+- 刷新后 `docs/generated/game2_room_score_factors.json` 为 `2604` 行，当前线程 `n*` 行为 `1597`；严格高分格子仍为 `1059` 行。
+- 结论：Yuan 初始 marks 恒为 `TTF`，不是解释变量；只问第三人、只问前两人、第三优先全员双问都不能放大 `+40`。后续不应继续同类位置 A/B，应换成旧 `n549c/d/e` 高 reply-count 结构复现，或转向完整骨架的 `-200` residual 归因。
 
 历史关键结论（2026-05-07 恢复前，保留背景；最新口径以上方 0a 为准）：
 

@@ -1190,3 +1190,28 @@ residuals: 0 x945, -200 x108, -40 x6
 - 可见首个 NPC、可见竞争者或张壹方向目前都没有 Yuan 最终答案正分证据；继续换 Yuan murderer 文本没有优先级。
 - Yuan `+40` 更像依赖隐藏聊天/身份排列/问句顺序的低频组件，而不是单个关键词、证据号或答案文本。
 - 下一轮 Yuan 若继续，应优先做第三轮问句顺序与 NPC 位置 A/B；仍应留在全零或 direct 隔离骨架中，等能稳定出现 `247/1647` 后再考虑移植到完整高分骨架。
+
+### 2026-05-09 11:17 UTC Yuan 第三轮 NPC 位置 A/B
+
+本轮继续只用单人房间评测，不使用 batch，不激活/不上天梯；上传实体名 `n553a` 到 `n553c` 和备注 `r` 均保持中性。当前上传账号守卫为 `thebeginning / user_id=2646`。
+
+本轮先增强 `Game2/tools/analyze_yuan_isolation.py`，把 Yuan 初始 `npc_marks`、`mark_pattern`、`npc0/npc1/npc2`、`zhangyi_pos` 纳入生成报告。刷新前后的核心结论是：Yuan 隔离样本的 marks 恒为 `TTF`，即前两个 NPC 为 marked true、第三个为 false；`mark_pattern` 不是 `+40` 的解释变量。
+
+| label | code_id | 变体 | 有效分布 | 结论 |
+| --- | --- | --- | --- | --- |
+| `n553a` | `2a76cc2c7ddd44ae8b34a9562550fcf6` | 全零骨架；Yuan broad 两问后，只问第三个 false-marked NPC 两条生物馆/张壹/李海天纠偏问；最终答案置零 | `207 x12` | 第三 NPC 单独追问不能触发 `+40` |
+| `n553b` | `7d32509b3423488f8d06c7988b7a0e87` | 同骨架；第三轮只问前两个 marked true NPC 作为对照；最终答案置零 | `207 x12` | 前两个 NPC 单独追问也不能触发 `+40` |
+| `n553c` | `0b85cf2b414c4a0da0eb9fbe1a5e1d45` | 同骨架；第三优先顺序，但仍覆盖全员，每人两条纠偏问；最终答案置零 | `207 x12` | 第三优先全员双问也没有复现低频 `+40` |
+
+刷新后的本地统计：
+
+- `docs/generated/game2_room_score_factors.json` 为 `2604` 行。
+- 当前线程 `n*` 行为 `1597`。
+- 严格高分格子仍为 `1059` 行，说明 `n553a-c` 作为全零 Yuan 隔离不影响高分 lattice。
+- `docs/generated/game2_yuan_isolation.json` 为 `308` 条 Yuan 隔离样本，其中 plus40 仍为 `14` 条；新增 `n553a-c` 的 `36` 条样本全部为 `207`。
+
+结论更新：
+
+- “只问第三人”“只问前两人”“第三优先再全员覆盖”三种位置/顺序策略均被 12 局小样本反证；它们不是足以放大 `+40` 的变量。
+- 新增位置拆分后，`+40` 仍只表现为低频隐藏聊天分；`kw_biology/kw_zhangyi/kw_runout` 是必要样关键词但不是充分条件。
+- Yuan 方向下一步不应继续做同类第三轮位置 A/B。若要继续，必须换更强假设，例如把旧 `n549c/d/e` 的高 reply-count 多轮 broad/targeted 结构复现到全零骨架，或转向从完整骨架挖 `-200` residual 的答案/角色隐变量。
