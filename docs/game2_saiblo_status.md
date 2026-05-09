@@ -1212,6 +1212,6 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - `n573b/c` witness 移植继续出现 `2657/2557` 低尾；强行嫁接 witness 十点半链暂时不是 keeper。
 - `n574` Poker 医生/尸检方向未打开新分：隔离 `507 x2`，完整首局 `2757`。
 - `n575` Yuan witness 后答案方向未打开：competitor/false-witness/teacher 答案当前均为 `207` 起步。
-- `n576` witness 双问强化首次因 Saiblo API timeout 未上传成功，已低频长超时重试。
+- `n576` witness 双问强化首次因 Saiblo API timeout 未上传成功；低频长超时重试仍卡在 `/api/profile/`，未绕过 username safety check。
 
 当前建议版本仍不是定版。若 `n568c_more` 或 `n573*` 不能提高 `2797` 频率，继续把 `n559a/n568c` 作为高分基线，把 `n572b` 作为 Yuan 隐藏 `+40` 的专项线索，而不是把 witness 问句直接合入主线。

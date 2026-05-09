@@ -1455,4 +1455,4 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 - `n574b`：完整骨架 + Poker 医生/尸检问，首局 `2757`，暂未突破。
 - `n575a/b`：Yuan witness-first 后分别提交 competitor/false-witness 答案，均为 `207`，说明 witness `+40` 上下文仍没有打开 Yuan 答案分。
 - `n575c`：teacher 答案首局 `207`，后续样本 pending。
-- `n576a/b/c`：false-marked witness 双问强化版。首次上传遇到 Saiblo API read timeout，已安排低频长超时重试。
+- `n576a/b/c`：false-marked witness 双问强化版。首次上传遇到 Saiblo API read timeout；低频长超时重试仍卡在 `/api/profile/`，未通过 username safety check，因此没有上传。
