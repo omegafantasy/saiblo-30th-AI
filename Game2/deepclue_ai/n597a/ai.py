@@ -833,7 +833,8 @@ def solve_unknown(g: Game, npcs: list[str], marks: dict[str, bool], hint: str, e
                     for npc_id in local_current_npcs:
                         add_global_target(npc_id)
                     local_rich_ids = list(locals().get('rich_ids', []))
-                    for npc_id in global_targets[:18]:
+                    sweep_limit = 32 if globals().get('N597_POKER_ALL_GLOBAL') else 18
+                    for npc_id in global_targets[:sweep_limit]:
                         if npc_id:
                             g.probe_chat_once(
                                 npc_id,
