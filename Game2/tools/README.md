@@ -54,9 +54,15 @@
 
 - `analyze_yuan_isolation.py`
   - 扫描单人房间分析结果中的 `decoded_stdin_records`
-  - 默认统计 `n549` 到 `n552` 的 Yuan 隔离样本
+  - 默认统计 `n549` 到 `n553` 的 Yuan 隔离样本
   - 输出 `docs/generated/game2_yuan_isolation.{md,json}`
   - 用于复核 `207/247/1607/1647` 中 Yuan `+40` 与关键词、证据、NPC 角色排列的关联
+
+- `analyze_poker_residual_roles.py`
+  - 读取 `docs/generated/game2_room_score_factors.json` 并回查单人房间 `analysis.json`
+  - 在严格高分格子内提取 Poker 信息源、接待者、医生提示、回复序列和首答类型
+  - 输出 `docs/generated/game2_poker_residual_roles.{md,json}`
+  - 用于把 `-200` residual 拆成可见问句结构、角色排列和候选标签混杂
 
 常用命令：
 
@@ -92,6 +98,8 @@ python3 /www/Game2/tools/extract_story_unlocks.py --limit 12
 python3 /www/Game2/tools/analyze_score_lattice.py
 
 python3 /www/Game2/tools/analyze_yuan_isolation.py
+
+python3 /www/Game2/tools/analyze_poker_residual_roles.py
 
 python3 /www/Game2/tools/compare_match_runs.py \
   --input v2_best=/www/Game2/runtime/manual_match_7421776_v2 \

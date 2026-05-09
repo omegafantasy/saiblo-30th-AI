@@ -1,6 +1,6 @@
 # Game2 Saiblo 当前状态
 
-更新时间：`2026-05-09 11:17 UTC`
+更新时间：`2026-05-09 11:50 UTC`
 
 ## 0. 2026-05-07 线上更新后的最新口径
 
@@ -116,6 +116,15 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - `Game2/tools/analyze_yuan_isolation.py` 已增强为记录 Yuan 初始 `marks`、`mark_pattern`、`npc0/npc1/npc2` 和 `zhangyi_pos`。刷新后 `docs/generated/game2_yuan_isolation.json` 为 `308` 条 Yuan 隔离样本，plus40 仍为 `14` 条；`n553a-c` 新增 36 条全部为 `207`。
 - 刷新后 `docs/generated/game2_room_score_factors.json` 为 `2604` 行，当前线程 `n*` 行为 `1597`；严格高分格子仍为 `1059` 行。
 - 结论：Yuan 初始 marks 恒为 `TTF`，不是解释变量；只问第三人、只问前两人、第三优先全员双问都不能放大 `+40`。后续不应继续同类位置 A/B，应换成旧 `n549c/d/e` 高 reply-count 结构复现，或转向完整骨架的 `-200` residual 归因。
+
+## 0j. 2026-05-09 Poker residual 角色/回复序列复核
+
+- 新增 `Game2/tools/analyze_poker_residual_roles.py`，在严格高分格子内回查 Poker 信息源、接待者、医生提示、回复序列和首答类型；输出 `docs/generated/game2_poker_residual_roles.md/json`。
+- 刷新后 `docs/generated/game2_room_score_factors.json` 为 `2636` 行，当前线程 `n*` 行为 `1601`；严格高分格子为 `1063` 行，residual 为 `0 x949, -200 x108, -40 x6`。
+- 顶层 stage3 同形签名仍为 `347` 行，分布 `2757 x302, 2557 x41, 2717 x4`。
+- 新分析显示：`poker_stage_sequence=1/2/2/3` 在现有 14 个顶层 stage3 样本中暂时全 `2757`，而 `1/2/2/3/3` 为 `2757 x5, 2557 x4`。这是一个候选结构信号，但仍是小样本，不能直接定论。
+- `n554a`，code_id `6921d82dfd4340e7bda3fcf4bb5a5c80`：从 `n539d` 派生，把接待者宽问收窄为先说 Joker 聊天记录和到达时间表，目标是强制 `1/2/2/3`；提前停止，4 局为 `2707 x3, 2667 x1`。
+- `n554a` 轨迹全为 Poker stage2，序列 `1/2/2/2/2`，证据只有 `001/002/101/102/103/104/201/202`，没有 `203/204/205`。结论：接待者第一问不能过窄，否则会关掉 stage3 上限；后续若继续 Poker，应保留“异常发现”信息量，再研究如何减少 stage3 后的额外回复。
 
 历史关键结论（2026-05-07 恢复前，保留背景；最新口径以上方 0a 为准）：
 
