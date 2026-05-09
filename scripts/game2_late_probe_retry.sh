@@ -71,7 +71,7 @@ check_profile() {
   pid_poker_core=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n588a n588b n588c n589a n589b n589c n592a n592b n592c n593a n594a n595a n595b n596a n596c n597a n599e \
+    --labels n588a n588b n588c n589a n589b n589c n592a n592b n592c n593a n594a n595a n595b n596a n596c n597a n599e n600a n600b n600c \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -84,7 +84,7 @@ check_profile() {
   pid_poker_stage=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n577e n578e n578f n579b n579c n581c n581d n583d n584d n585d n586d n587d n588d n589d n590d n592d n593b n593d n594b n594d n596b n596d n596h n597d n597e n598e n599d n599f \
+    --labels n577e n578e n578f n579b n579c n581c n581d n583d n584d n585d n586d n587d n588d n589d n590d n592d n593b n593d n594b n594d n596b n596d n596h n597d n597e n598e n599d n599f n600d n600e \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
