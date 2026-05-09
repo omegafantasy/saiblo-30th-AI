@@ -1483,10 +1483,14 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 | `n578d` | Poker 隔离 | 基于 `n568c` 监控路线，保留动态 suspect，只改 method 为监控身份错位与冰冻刀具。 |
 | `n578e` | 完整骨架 | Poker stage3 后单问接待者责任链/隐瞒原因，寻找隐藏调查 `+40` 或 residual 过滤信号。 |
 | `n578f` | 完整骨架 | Poker stage3 后单问医生/尸检事实，寻找医生线隐藏组件。 |
+| `n579a` | Poker 隔离 | 复现 `401/402 -> 真梅花5/Joker身份 -> 衣帽间密码/破绽 -> 404/501` 的 post-monitor 链，不改答案。 |
+| `n579b` | 完整骨架 | 将 post-monitor 链接回 `n568c`，验证高证据链能否在完整路线中稳定上穿。 |
+| `n579c` | 完整骨架 | `n579b` 加 Yuan `705` 条件第四问，避免 Poker 长链后继续无差别消耗 Yuan 预算。 |
+| `n579d` | Poker 隔离 | post-monitor 链后保留动态 suspect，只改 method/motivation 为监控身份错位与移尸破绽。 |
 
 本地状态：
 
-- `Game2/tools/make_n577_candidates.py`、`Game2/tools/make_n578_candidates.py` 已生成候选。
-- `n577a-e`、`n578a-f` 全部通过 Python `compile()` 语法检查。
-- `scripts/game2_late_probe_retry.sh` 已更新并重启，当前恢复队列包含 `n576a-c/n577a-d/n578a-d/n574c/n577e/n578e/n578f`，每个默认跑 `3` 局单人房间。
+- `Game2/tools/make_n577_candidates.py`、`Game2/tools/make_n578_candidates.py`、`Game2/tools/make_n579_candidates.py` 已生成候选。
+- `n577a-e`、`n578a-f`、`n579a-d` 全部通过 Python `compile()` 语法检查。
+- `scripts/game2_late_probe_retry.sh` 已更新并重启，当前恢复队列包含 `n576a-c/n577a-d/n578a-d/n579a/n579d/n574c/n577e/n578e/n578f/n579b/n579c`，每个默认跑 `3` 局单人房间。
 - 继续遵守：不用 batch、不上天梯、不激活；Saiblo 可见实体名保持中性编号，备注仍为 `r`。

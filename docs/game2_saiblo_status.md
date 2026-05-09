@@ -1237,10 +1237,14 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - `n578d`：Poker 隔离；基于 `n568c` 监控路线，保留动态 suspect，只改 method 为监控时间线与冰冻刀具身份错位。
 - `n578e`：完整骨架；Poker stage3 后只问接待者责任链/隐瞒原因，不改答案，测试隐藏 `+40` 或 residual 过滤。
 - `n578f`：完整骨架；Poker stage3 后只问一个非信息源/接待者 NPC 的尸检事实，不改答案，测试医生线隐藏组件。
+- `n579a`：Poker 隔离；复现 `401/402 -> 真梅花5/Joker身份 -> 衣帽间密码/破绽 -> 404/501` 的 post-monitor 链，不改答案，验证 `404/501` 是否有独立净分。
+- `n579b`：完整骨架；把 post-monitor 链接回 `n568c`，测试高证据链是否能在完整路线中稳定上穿。
+- `n579c`：完整骨架；`n579b` 加 Yuan `705` 条件第四问，给 Poker 长链后留更有针对性的 Yuan 预算。
+- `n579d`：Poker 隔离；post-monitor 链后保留动态 suspect，只改 method/motivation 为监控身份错位与移尸破绽，验证答案字段是否能吃到 `404/501`。
 
 恢复回调已更新并重启：
 
-- 进程：`scripts/game2_late_probe_retry.sh`，当前 PID `405873`。
+- 进程：`scripts/game2_late_probe_retry.sh`，当前 PID `407506`。
 - 账号守卫仍为 `--expected-username thebeginning`，不绕过 profile 校验。
-- 恢复后队列：`n576a-c/n577a-d`，随后 `n578a-d/n574c`，最后 `n577e/n578e/n578f`，每个默认 `3` 局单人房间评测。
+- 恢复后队列：`n576a-c/n577a-d`，随后 `n578a-d/n579a/n579d/n574c`，最后 `n577e/n578e/n578f/n579b/n579c`，每个默认 `3` 局单人房间评测。
 - 回调仍不使用 batch、不激活、不上天梯，备注统一 `r`。

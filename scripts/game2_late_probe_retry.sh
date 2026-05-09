@@ -51,7 +51,7 @@ PY
     --expected-username thebeginning
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n578a n578b n578c n578d n574c \
+    --labels n578a n578b n578c n578d n579a n579d n574c \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -63,7 +63,7 @@ PY
     --expected-username thebeginning
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n577e n578e n578f \
+    --labels n577e n578e n578f n579b n579c \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
