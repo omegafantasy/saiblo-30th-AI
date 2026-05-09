@@ -1456,3 +1456,5 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 - `n575a/b`：Yuan witness-first 后分别提交 competitor/false-witness 答案，均为 `207`，说明 witness `+40` 上下文仍没有打开 Yuan 答案分。
 - `n575c`：teacher 答案首局 `207`，后续样本 pending。
 - `n576a/b/c`：false-marked witness 双问强化版。首次上传遇到 Saiblo API read timeout；低频长超时重试仍卡在 `/api/profile/`，未通过 username safety check，因此没有上传。
+
+服务器恢复回调：已新增并启动 `scripts/game2_late_probe_retry.sh`。它每 5 分钟做一次 profile 校验，确认仍为 `thebeginning` 后再依次跑 `n576a-c` 与 `n574c`；日志写入 `Game2/runtime/game2_late_probe_retry.log`。
