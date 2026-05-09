@@ -52,6 +52,12 @@
   - 输出到被 git 忽略的 `docs/generated/game2_score_lattice.{md,json}`
   - 用于判断低分档是可见层缺失、Rose late、还是不可见 `-200` residual
 
+- `analyze_yuan_isolation.py`
+  - 扫描单人房间分析结果中的 `decoded_stdin_records`
+  - 默认统计 `n549` 到 `n552` 的 Yuan 隔离样本
+  - 输出 `docs/generated/game2_yuan_isolation.{md,json}`
+  - 用于复核 `207/247/1607/1647` 中 Yuan `+40` 与关键词、证据、NPC 角色排列的关联
+
 常用命令：
 
 ```bash
@@ -84,6 +90,8 @@ python3 /www/Game2/tools/summarize_versions.py
 python3 /www/Game2/tools/extract_story_unlocks.py --limit 12
 
 python3 /www/Game2/tools/analyze_score_lattice.py
+
+python3 /www/Game2/tools/analyze_yuan_isolation.py
 
 python3 /www/Game2/tools/compare_match_runs.py \
   --input v2_best=/www/Game2/runtime/manual_match_7421776_v2 \
