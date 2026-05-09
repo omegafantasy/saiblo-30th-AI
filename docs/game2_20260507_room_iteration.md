@@ -1533,4 +1533,17 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 - `n583a-d`、生成器、`Game2/tools/check_saiblo_profile.py`、`Game2/tools/summarize_late_probe_results.py` 均通过语法检查。
 - `scripts/game2_late_probe_retry.sh` 已把 `n583a-c` 加入 Yuan/direct 队列，把 `n583d` 加入完整骨架队列；`summarize_late_probe_results.py` 已覆盖这些标签。
 - profile 守卫增加外层 `timeout 180s`，并拆成 `Game2/tools/check_saiblo_profile.py` helper，避免服务器卡住时 watcher 永久挂死。
-- 旧 watcher 已重启为 `setsid` 后台进程；当前 PID `412695`。仍然只在 profile 解析为 `thebeginning` 后上传，不绕过账号校验，不用 batch，不上天梯，实体名/备注保持中性。
+- watcher 已重启为 `setsid` 后台进程；当前 PID `413213`。仍然只在 profile 解析为 `thebeginning` 后上传，不绕过账号校验，不用 batch，不上天梯，实体名/备注保持中性。
+
+### 2026-05-09 20:01 UTC Poker post-monitor 上限补强
+
+当前 Poker 不再重复“如何拿到 `401/402`”，而是专门测试 post-monitor 之后是否存在更深层评分或证据层。新增 `n584a-d`：
+
+| label | 类型 | 目的 |
+| --- | --- | --- |
+| `n584a` | Poker 隔离 | 在 `401/402 -> 身份确认 -> 密码/破绽` 后，显式索取 `404/501` 之后的 `405/502`、车辆、后院窗户、匿名转账、看诊记录和人口贩卖名单，不改答案。 |
+| `n584b` | Poker 隔离 | 同 `n584a`，但保留动态 suspect，改短 method/motivation 为身份错位、监控矛盾、衣帽间密码、面具血迹与人口贩卖线索。 |
+| `n584c` | Poker 隔离 | 同 `n584a`，但提交 `Joker` 答案，测试 post-monitor 证据后是否打开 Joker/人口贩卖答案字段。 |
+| `n584d` | 完整骨架 | 将 `n584a` post-monitor 深挖嫁接回完整骨架，其余保持 `n579b` 路线。 |
+
+本地状态：`Game2/tools/make_n584_candidates.py` 已生成 `n584a-d`；四个 `ai.py` 与生成器均通过语法检查。恢复 watcher 已把 `n584a-c` 放入 Poker 隔离队列、`n584d` 放入完整骨架队列，并在 `20:02 UTC` 重启为 PID `413213`；仍只用单人房间评测，不使用 batch/天梯。

@@ -39,7 +39,7 @@ check_profile() {
   pid_yuan=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n578a n578b n578c n578d n579a n579d n581a n581b n574c \
+    --labels n578a n578b n578c n578d n579a n579d n581a n581b n584a n584b n584c n574c \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -52,7 +52,7 @@ check_profile() {
   pid_poker=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n577e n578e n578f n579b n579c n581c n581d n583d \
+    --labels n577e n578e n578f n579b n579c n581c n581d n583d n584d \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
