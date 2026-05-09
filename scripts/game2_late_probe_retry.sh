@@ -84,6 +84,8 @@ PY
     fi
   done
 
+  python3 Game2/tools/summarize_late_probe_results.py || true
+
   echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] retry watcher finished status=${status}"
   exit "$status"
 } >>"$LOG" 2>&1
