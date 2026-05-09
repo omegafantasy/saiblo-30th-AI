@@ -1,6 +1,6 @@
 # Game2 Saiblo 当前状态
 
-更新时间：`2026-05-10 04:01 UTC+8 / 2026-05-09 20:01 UTC`
+更新时间：`2026-05-10 04:15 UTC+8 / 2026-05-09 20:15 UTC`
 
 ## 0. 2026-05-07 线上更新后的最新口径
 
@@ -14,7 +14,9 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - 新增 `n583a-d`：`n583a-c` 固定 Rose/Z/F/Poker direct，只测 Yuan 身份置换/隐藏证据 meta/短答案；`n583d` 在完整骨架中把 Yuan 第四轮改为“掩护者/下一物证”而非继续直接猜凶手。
 - 当前 Poker 恢复队列已覆盖 post-monitor `401/402 -> 404/501` 和 `405/502` 尝试，不再继续新增同族监控问句。
 - 追加 `n584a-d`：专门测试 Poker post-monitor 后的 `404/501 -> 405/502`、车辆/后院窗户/匿名转账/看诊记录/人口贩卖名单，以及 post-monitor 后的动态 suspect/Joker 答案字段。
-- `scripts/game2_late_probe_retry.sh` 已加入 `n583a-d` 与 `n584a-d`，profile 守卫改为独立 helper 并加外层 wall timeout；当前 watcher 通过 `setsid` 启动，PID `413213`。
+- 追加 `n585a-d`：按 Poker 高层剧情轴测试警方卷宗/DNA/指纹/银行流水、真梅花5本人直问、404车辆与501转账后续，不再重复监控问句。
+- 追加 `n586a-d`：按 Yuan 高层剧情轴测试两人作案分工、尸源/DNA/照片元数据、biology-runner、保安网页/门禁监控、官方证据 custody。
+- `scripts/game2_late_probe_retry.sh` 已加入 `n583a-d`、`n584a-d`、`n585a-d` 与 `n586a-d`，profile 守卫改为独立 helper 并加外层 wall timeout；watcher 队列为 `47` 个中性标签，当前 PID `418622`。
 - 仍只用单人房间评测，不使用 batch，不激活、不上天梯；实体名保持 `n*` 中性编号，备注为 `r`。
 
 ## 0m. 2026-05-09 `n558/n559` Poker/Yuan 并发拓展
