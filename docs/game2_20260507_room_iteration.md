@@ -1446,3 +1446,13 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 - `n573a/b/c`：把 witness 十点半单问以不同方式嫁接回 `n559a` 原四轮 Yuan 结构，验证是否能提高 `2797` 频率而不引入低尾。
 
 补充观察：`n568c_more` 暂见 `2717,2657`，`n573a` 为 `2757,2757,2517,2717`。这说明 `n568c` 的小样本 `2797` 仍可能只是旧 Yuan `+40` 随机外显；而直接在完整骨架前插入 witness 十点半单问会引入低尾，暂不能作为 keeper。
+
+追加扩样后，`n568c_more` 完整为 `2717,2657,2757,2797,2757,2717`，复现了 `2797` 但不稳定；`n573b` 为 `2717,2757,2757,2657`，`n573c` 已见 `2557` 且有 pending 样本。强行把 witness 十点半链嫁接到完整骨架，当前没有优于 `n559a/n568c`。
+
+进一步大方向探针：
+
+- `n574a`：Poker 隔离，医生/尸检/冰冻刀柄/烧伤/血水事实，全为 `507 x2`，没有新增 Poker 隐藏分。
+- `n574b`：完整骨架 + Poker 医生/尸检问，首局 `2757`，暂未突破。
+- `n575a/b`：Yuan witness-first 后分别提交 competitor/false-witness 答案，均为 `207`，说明 witness `+40` 上下文仍没有打开 Yuan 答案分。
+- `n575c`：teacher 答案首局 `207`，后续样本 pending。
+- `n576a/b/c`：false-marked witness 双问强化版。首次上传遇到 Saiblo API read timeout，已安排低频长超时重试。
