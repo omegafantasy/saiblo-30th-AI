@@ -1605,3 +1605,20 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 | `n590d` | 完整骨架 | Poker/Yuan toolmark 跨案：Poker 厨房缺刀/冰冻刀柄/背后三刀与 Li Haitian 背刺失血/断肢是否共用刀具或组织。 |
 
 本地状态：`Game2/tools/make_n589_candidates.py`、`Game2/tools/make_n590_candidates.py` 已生成 `n589a-d` 与 `n590a-d`，全部通过 `py_compile`。恢复 watcher 队列扩为 `63` 个标签；仍只用单人房间、不中断账号守卫、不用 batch/天梯。
+
+### 2026-05-09 20:30 UTC 第四批高层轴补充
+
+继续补两个此前未独立隔离的高层方向：Yuan 开场“失忆侦探/保安认识你/网页截图”的主角身份轴，以及 Poker 的 Joker 账号数字取证/邀请函地址表/接待付款轴。新增 `n591a-d` 与 `n592a-d`：
+
+| label | 类型 | 目的 |
+| --- | --- | --- |
+| `n591a` | Rose/Z/F/Poker direct + Yuan probe | 开场主角身份轴：保安为什么认识失忆侦探、网页截图内容、侦探身份、世纪林和旧案关系。 |
+| `n591b` | Rose/Z/F/Poker direct + Yuan probe | 尸源身份拆分：不默认死者就是袁樱瞳，拆袁樱瞳本人、凌晨照片女尸、世纪林尸块、李海天和替身 DNA。 |
+| `n591c` | Rose/Z/F/Poker direct + Yuan probe | 出国名额行政轴：行政名单、推荐材料、学院系统、办公室记录、名单变更和周五揭发。 |
+| `n591d` | Yuan 隔离 | 完整隔离主角身份/网页截图/保安/旧案卷宗/安保系统来源，观察是否打开 `706+` 或隐藏 `+40`。 |
+| `n592a` | Poker 隔离 | Joker 账号数字取证：登录 IP、设备、付款账户、转账定金、地址表来源、快递记录和账号实名。 |
+| `n592b` | Poker 隔离 | 邀请函/地址表/面具映射：每个宾客牌面、到达时间、真实地址、梅花5缺位、面具替换和身份伪造。 |
+| `n592c` | Poker 隔离 | 接待付款轴：十万定金、五十万承诺、任务清单、清洁范围、银行流水和 `501` 是否同源。 |
+| `n592d` | 完整骨架 | Joker 账号、地址表、快递、面具分发、接待付款和银行流水数字链综合接回完整骨架。 |
+
+本地状态：`Game2/tools/make_n591_candidates.py`、`Game2/tools/make_n592_candidates.py` 已生成 `n591a-d` 与 `n592a-d`，全部通过 `py_compile`。恢复 watcher 队列扩为 `71` 个标签；仍只用单人房间、不中断账号守卫、不用 batch/天梯。
