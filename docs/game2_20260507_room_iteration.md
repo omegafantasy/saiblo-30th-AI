@@ -1472,6 +1472,10 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 | `n577c` | Yuan 全零隔离 | 将李海天/学生会会长链和十点半生物馆目击拆问，排除复合长问污染。 |
 | `n577d` | Yuan 全零隔离 | `marks=False` 短答案，测试身份置换/灭口/转移尸块是否有答案字段分。 |
 | `n577e` | 完整骨架 | 保留 `n559a` 前三轮，第四轮改为 `705` 条件追问，避免无 `705` 时继续消耗预算问长结论。 |
+| `n580a` | Yuan 全零隔离 | 凶手填第一个 `marks=True` 竞争者，测试投票获利+手机/身份置换答案字段。 |
+| `n580b` | Yuan 全零隔离 | 凶手填第二个 `marks=True` 老师，测试投票造假/掩盖名额答案字段。 |
+| `n580c` | Yuan 全零隔离 | 凶手填 `marks=False` witness，测试生物馆/1919/尸块转移答案字段。 |
+| `n580d` | Yuan 全零隔离 | 凶手仍 `无名氏`，只强化真实死者、替身、李海天尸检、海豚挂件、二次利用和死亡时间伪造。 |
 
 新增 Poker 候选：
 
@@ -1487,12 +1491,16 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 | `n579b` | 完整骨架 | 将 post-monitor 链接回 `n568c`，验证高证据链能否在完整路线中稳定上穿。 |
 | `n579c` | 完整骨架 | `n579b` 加 Yuan `705` 条件第四问，避免 Poker 长链后继续无差别消耗 Yuan 预算。 |
 | `n579d` | Poker 隔离 | post-monitor 链后保留动态 suspect，只改 method/motivation 为监控身份错位与移尸破绽。 |
+| `n581a` | Poker 隔离 | post-monitor 后若有 `501`，追问匿名转账/看诊/Joker/林渝植/人口贩卖关系。 |
+| `n581b` | Poker 隔离 | post-monitor 后若有 `404`，追问车牌/7:20车辆/司机/移尸地点/后院窗户和衣帽间关系。 |
+| `n581c` | 完整骨架 | post-monitor 后 Yuan 首轮改问李海天尸检、海豚挂件、501、人口贩卖、1919黑车和生物馆跨线索。 |
+| `n581d` | 完整骨架 | 若 Poker 侧拿到 `501`，Yuan 改成极短同源 meta 问，否则保持原 Yuan 结构。 |
 
 本地状态：
 
-- `Game2/tools/make_n577_candidates.py`、`Game2/tools/make_n578_candidates.py`、`Game2/tools/make_n579_candidates.py` 已生成候选。
-- `n577a-e`、`n578a-f`、`n579a-d` 全部通过 Python `compile()` 语法检查。
-- `scripts/game2_late_probe_retry.sh` 已更新并重启，当前恢复队列包含 `n576a-c/n577a-d/n578a-d/n579a/n579d/n574c/n577e/n578e/n578f/n579b/n579c`，每个默认跑 `3` 局单人房间。
+- `Game2/tools/make_n577_candidates.py`、`Game2/tools/make_n578_candidates.py`、`Game2/tools/make_n579_candidates.py`、`Game2/tools/make_n580_candidates.py`、`Game2/tools/make_n581_candidates.py` 已生成候选。
+- `n577a-e`、`n578a-f`、`n579a-d`、`n580a-d`、`n581a-d` 全部通过 Python `compile()` 语法检查。
+- `scripts/game2_late_probe_retry.sh` 已更新并重启，当前恢复队列包含 `n576a-c/n577a-d/n580a-d/n578a-d/n579a/n579d/n581a-b/n574c/n577e/n578e/n578f/n579b/n579c/n581c-d`，每个默认跑 `3` 局单人房间。
 - 继续遵守：不用 batch、不上天梯、不激活；Saiblo 可见实体名保持中性编号，备注仍为 `r`。
 
 本地补充复盘：

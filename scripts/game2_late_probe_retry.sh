@@ -39,7 +39,7 @@ PY
   done
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n576a n576b n576c n577a n577b n577c n577d \
+    --labels n576a n576b n576c n577a n577b n577c n577d n580a n580b n580c n580d \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -51,7 +51,7 @@ PY
     --expected-username thebeginning
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n578a n578b n578c n578d n579a n579d n574c \
+    --labels n578a n578b n578c n578d n579a n579d n581a n581b n574c \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -63,7 +63,7 @@ PY
     --expected-username thebeginning
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n577e n578e n578f n579b n579c \
+    --labels n577e n578e n578f n579b n579c n581c n581d \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
