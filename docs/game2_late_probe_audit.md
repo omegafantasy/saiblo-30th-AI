@@ -1,6 +1,6 @@
 # Game2 Late Poker/Yuan Probe Audit
 
-更新时间：`2026-05-10 05:16 UTC+8 / 2026-05-09 21:16 UTC`
+更新时间：`2026-05-10 05:30 UTC+8 / 2026-05-09 21:30 UTC`
 
 ## 目标
 
@@ -20,6 +20,7 @@
 - 新增大答案假设矩阵：`n595a-b` 在 Poker 隔离中分别提交真梅花5/林渝植和 late-holder 作为最终凶手；`n595c-d` 在 Yuan 隔离中分别提交竞争者和隐藏链关键人，验证后两案是否因最终答案大方向错误而丢失答案层。
 - 新增非微调 ceiling 拆轴：`n596a-b` 追 Poker `404/501` 后的警方卷宗、车辆/转账持有人、真梅花5、DNA/指纹、银行流水和 `405/502` 续证；`n596c-d` 追 Poker 空间权限/刀具/toolmark/门禁/清洁动线，并在完整骨架中接 Yuan 官方跨案链；`n596e-g` 分别隔离 Yuan 周五揭发缓存/行政记录、尸源-DNA-行李箱-手机数字取证、`705` 隐藏来源/全局姓名直连与 `706+` 续追；`n596h` 组合 Poker 官方卷宗链与 Yuan 跨案官方来源链。
 - 新增鲁棒 holder ceiling：`n597a` Poker 隔离，`401/402` 后对全局姓名做一次受控 `405/502` holder 探测；`n597b` Yuan 隔离，解析“保安许大叔/江大叔”、生物馆跑出者、尸检报告来源等半名后直连可能全名；`n597c` Yuan 隔离，专门走失忆侦探/眼熟保安/网页截图/保安缺岗/旧案系统轴；`n597d-e` 完整骨架中分别测试鲁棒 Yuan holder 链和不依赖 Poker late flag 的跨案官方链。
+- 新增 Yuan 大答案假设：`n598a-d` 分别把最终答案指向失忆侦探本人、保安/奇怪网站来源、生物馆跑出者、教师/行政名额链；`n598e` 在完整骨架中测试保安/网站来源是否是跨案隐藏链核心。
 - 旧待补 witness 双问：`n576a-c`。
 
 生成脚本：
@@ -45,6 +46,7 @@
 - `Game2/tools/make_n595_candidates.py`
 - `Game2/tools/make_n596_candidates.py`
 - `Game2/tools/make_n597_candidates.py`
+- `Game2/tools/make_n598_candidates.py`
 
 恢复与汇总：
 
@@ -54,15 +56,15 @@
 
 ## 当前验证
 
-- watcher 队列共 `96` 个标签，均有对应 `Game2/deepclue_ai/<label>/ai.py`。
-- `96` 个标签全部通过 Python `compile()` 检查。
+- watcher 队列共 `101` 个标签，均有对应 `Game2/deepclue_ai/<label>/ai.py`。
+- `101` 个标签全部通过 Python `compile()` 检查。
 - watcher 标签全部被 `summarize_late_probe_results.py` 覆盖。
 - `scripts/game2_late_probe_retry.sh` 通过 `bash -n`。
-- 当前后台 watcher 已用 `nohup + setsid` 重启为五队列并发版本，PID `425776`；必须仍通过 `thebeginning` profile 守卫后才上传。已确认 profile wall-time 超时后 bash 本体仍存活并进入 `sleep 300` 退避。
+- 当前后台 watcher 已用 `nohup + setsid` 重启为五队列并发版本，PID `426830`；必须仍通过 `thebeginning` profile 守卫后才上传。最新一次已通过 profile 守卫并开始上传/开房间评测。
 
-## 阻塞
+## 当前运行状态
 
-Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n596`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。当前只增加外层 wall timeout，不绕过账号守卫。
+Saiblo `/api/profile/` 已恢复一次并返回 `thebeginning`，watcher 正在用 neutral name/remark 上传 `n576-n598` 并开房间评测。若后续 API 再次 timeout，脚本仍保留 profile 守卫和 `300s` 退避，不绕过账号守卫。
 
 ## 恢复后判定
 
@@ -93,3 +95,4 @@ Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username s
 - `n595a-d`：补最终答案大假设矩阵。Poker 用隔离骨架验证“真梅花5/林渝植杀 Joker”和“404/501 late-holder 参与杀人/移尸”两种大方向；Yuan 用隔离骨架验证“出国名额竞争者”和“biology/guard/705 隐藏链关键人”两种大方向。
 - `n596a-h`：按用户提醒停止细节抠问，改为补后两案 stage/theory ceiling。Poker 分为官方卷宗/车辆/转账持有人链与空间权限/刀具/toolmark 链，且若 `405/502` 出现会继续问下一层。Yuan 分为周五揭发缓存与行政记录、尸源/DNA/行李箱/手机云端数字取证、`705` 来源姓名可能不可见时的全局姓名直连与可见 NPC 代理追问，且若 `706/707/708` 出现会继续闭环最终层。完整骨架版把 Poker `404/501/405/502` late flag 带入 Yuan，测试 Joker 人口贩卖、匿名转账、李海天、1919 黑车、生物馆、保安网页、蓝色背包和手机照片是否共享同一官方来源链。
 - `n597a-e`：针对游戏更新后的 NPC 名字混淆补鲁棒性，而不是继续改同义问句。关键变化是把“保安许大叔/江大叔/叶大叔”这类半名解析到可能全名，允许对非当前可见但全局存在的 NPC id 做一次无重试探测；Poker 隔离用全局姓名扫 `405/502` holder，Yuan 隔离分别扫旧案 holder 与失忆网页/保安身份轴，完整骨架再测试跨案官方链是否不需要先显性出现 Poker `404/501`。
+- `n598a-e`：补 Yuan 最终答案层的大方向，而不是继续追问现有证词。若 `705` 已经能出但分数不稳定，可能问题不是 stage holder，而是最终凶手/动机/手法没有命中隐藏答案层；因此分别测试“侦探本人/保安网页源/生物馆跑出者/教师行政链/完整骨架保安源”五类互斥答案。
