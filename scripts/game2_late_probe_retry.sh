@@ -4,27 +4,14 @@ set -u
 ROOT="/root/autodl-tmp/saiblo_iter"
 LOG="$ROOT/Game2/runtime/game2_late_probe_retry.log"
 INTERVAL="${GAME2_LATE_PROBE_RETRY_INTERVAL:-300}"
+PROFILE_WALL_TIMEOUT="${GAME2_PROFILE_CHECK_WALL_TIMEOUT:-180s}"
 
 mkdir -p "$(dirname "$LOG")"
 cd "$ROOT" || exit 1
 
 check_profile() {
-  SAIBLO_API_TIMEOUT="${SAIBLO_API_TIMEOUT:-120}" python3 - <<'PY'
-from saiblo_tools import get_profile, require_token
-
-try:
-    token = require_token('', 'game2 late probe retry')
-    profile = get_profile(token)
-    user = profile.get('user', {}) if isinstance(profile.get('user'), dict) else {}
-    username = str(user.get('username', '')).strip()
-    if username != 'thebeginning':
-        raise SystemExit(f'wrong username: {username!r}')
-    print(username)
-except SystemExit:
-    raise
-except Exception as exc:
-    raise SystemExit(f'{type(exc).__name__}: {exc}')
-PY
+  timeout "$PROFILE_WALL_TIMEOUT" env SAIBLO_API_TIMEOUT="${SAIBLO_API_TIMEOUT:-120}" \
+    python3 Game2/tools/check_saiblo_profile.py --expected-username thebeginning
 }
 
 {
@@ -39,7 +26,7 @@ PY
   done
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n576a n576b n576c n577a n577b n577c n577d n580a n580b n580c n580d n582a n582b n582c n582d \
+    --labels n576a n576b n576c n577a n577b n577c n577d n580a n580b n580c n580d n582a n582b n582c n582d n583a n583b n583c \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -65,7 +52,7 @@ PY
   pid_poker=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n577e n578e n578f n579b n579c n581c n581d \
+    --labels n577e n578e n578f n579b n579c n581c n581d n583d \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \

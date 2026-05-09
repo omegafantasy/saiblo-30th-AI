@@ -1,6 +1,6 @@
 # Game2 Late Poker/Yuan Probe Audit
 
-更新时间：`2026-05-10 03:02 UTC+8 / 2026-05-09 19:02 UTC`
+更新时间：`2026-05-10 03:56 UTC+8 / 2026-05-09 19:56 UTC`
 
 ## 目标
 
@@ -11,7 +11,8 @@
 候选覆盖：
 
 - Yuan 隔离与答案字段：`n577a-d`、`n580a-d`、`n582a-d`。
-- Yuan 完整骨架条件线：`n577e`。
+- Yuan direct 骨架高层探针：`n583a-c`，固定 Rose/Z/F/Poker direct，只测 Yuan 身份置换/隐藏证据 meta/短答案字段。
+- Yuan 完整骨架条件线：`n577e`、`n583d`。
 - Poker 字段/隐藏链隔离：`n578a-d`、`n579a`、`n579d`、`n581a-b`、`n574c`。
 - Poker/Yuan 完整骨架交叉线：`n578e-f`、`n579b-c`、`n581c-d`。
 - 旧待补 witness 双问：`n576a-c`。
@@ -24,23 +25,25 @@
 - `Game2/tools/make_n580_candidates.py`
 - `Game2/tools/make_n581_candidates.py`
 - `Game2/tools/make_n582_candidates.py`
+- `Game2/tools/make_n583_candidates.py`
 
 恢复与汇总：
 
-- `scripts/game2_late_probe_retry.sh`：profile 账号守卫通过后并行启动三组 `run_recovery_eval_queue.py`；profile 检查默认超时已放宽到 `120s`，避免服务器慢响应时误判不可用。
+- `scripts/game2_late_probe_retry.sh`：profile 账号守卫通过后并行启动三组 `run_recovery_eval_queue.py`；profile 检查默认 API 超时为 `120s`，外层 wall timeout 为 `180s`，避免服务器慢响应或 Python 网络调用卡死时永久挂住。
+- `Game2/tools/check_saiblo_profile.py`：独立 profile 守卫 helper，避免 bash heredoc 后台运行留下孤儿 profile 子进程。
 - `Game2/tools/summarize_late_probe_results.py`：恢复队列结束后生成 `docs/generated/game2_late_probe_results.md/json`。
 
 ## 当前验证
 
-- watcher 队列共 `31` 个标签，均有对应 `Game2/deepclue_ai/<label>/ai.py`。
-- `31` 个标签全部通过 Python `compile()` 检查。
+- watcher 队列共 `35` 个标签，均有对应 `Game2/deepclue_ai/<label>/ai.py`。
+- `35` 个标签全部通过 Python `compile()` 检查。
 - watcher 标签全部被 `summarize_late_probe_results.py` 覆盖。
 - `scripts/game2_late_probe_retry.sh` 通过 `bash -n`。
-- 当前后台 watcher PID 为 `409649`。
+- 当前后台 watcher 通过 `setsid -f bash scripts/game2_late_probe_retry.sh` 启动，PID 为 `412695`。
 
 ## 阻塞
 
-Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n582`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。当前只放宽 profile 超时，不绕过账号守卫。
+Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n583`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。当前只增加外层 wall timeout，不绕过账号守卫。
 
 ## 恢复后判定
 

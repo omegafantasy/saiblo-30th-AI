@@ -1513,3 +1513,24 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 - Poker 高证据样本的关键不是 `401/402` 本身，而是之后的“真梅花5/Joker身份确认 -> 衣帽间密码/血迹破绽 -> 404 或 501”。因此 `n579a-d` 比继续测监控问句更有价值。
 - Yuan `705` 已在 5 个历史房间样本出现，证据内容为李海天尸检报告、背刺失血、断肢和蓝色背包海豚挂件；但这些样本仍停在 Yuan stage1，分数也没有因 `705` 稳定上穿。
 - `705` 的出现形态通常是第一轮 broad 同时覆盖手机/投票/李海天/1919/保安网站，第二轮 witness 说出十点半生物馆跑出者后刷新 `703/704/705`。因此下一步只保留 `n577e` 的条件追问，不再继续新增同族 705 关键词候选。
+
+### 2026-05-09 19:56 UTC 后段剧本上限拆分补强
+
+本轮不再新增 Poker 同族监控问句。只读复盘后判断：Poker 已有恢复队列覆盖 `401/402 -> 404/501 -> 405/502` 方向，且隔离样本已证明 `401/402` 本身不是独立加分层；继续加同类 Poker 问法会变成细节微调。
+
+补强方向改为 Yuan 的实验骨架：此前 `n577/n580/n582` 多为全零隔离，噪声低但不能检验 `1607 direct` 骨架上的可叠加性；完整骨架又受 Rose/Z/F/Poker 隐藏低尾干扰。因此新增 `n583a-d`：
+
+| label | 类型 | 目的 |
+| --- | --- | --- |
+| `n583a` | Rose/Z/F/Poker direct + Yuan probe | 身份置换/真实死者/死亡时间法医链，最终 Yuan 置零；观察是否能把 `1607` 推到 `1647+`。 |
+| `n583b` | Rose/Z/F/Poker direct + Yuan probe | 隐藏调查 meta：直接索取未公开证据、证据来源、保管人和下一阶段线索，最终 Yuan 置零。 |
+| `n583c` | Rose/Z/F/Poker direct + Yuan answer | 短答案字段：用 `marks=False`/witness 作为嫌疑人，测试“掩盖真实死亡时间、手机操作和尸块转移链”的答案是否有分。 |
+| `n583d` | 完整骨架 | 保留 `n559a` Yuan 前三轮，第四轮改为“不要给最终凶手，只问谁在掩护清空手机/搬行李箱/伪造照片/转移尸块及下一物证”。 |
+
+本地状态：
+
+- 新增 `Game2/tools/make_n583_candidates.py`，已生成 `n583a-d`。
+- `n583a-d`、生成器、`Game2/tools/check_saiblo_profile.py`、`Game2/tools/summarize_late_probe_results.py` 均通过语法检查。
+- `scripts/game2_late_probe_retry.sh` 已把 `n583a-c` 加入 Yuan/direct 队列，把 `n583d` 加入完整骨架队列；`summarize_late_probe_results.py` 已覆盖这些标签。
+- profile 守卫增加外层 `timeout 180s`，并拆成 `Game2/tools/check_saiblo_profile.py` helper，避免服务器卡住时 watcher 永久挂死。
+- 旧 watcher 已重启为 `setsid` 后台进程；当前 PID `412695`。仍然只在 profile 解析为 `thebeginning` 后上传，不绕过账号校验，不用 batch，不上天梯，实体名/备注保持中性。
