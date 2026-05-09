@@ -6,6 +6,12 @@ LOG="$ROOT/Game2/runtime/game2_late_probe_retry.log"
 INTERVAL="${GAME2_LATE_PROBE_RETRY_INTERVAL:-300}"
 PROFILE_WALL_TIMEOUT="${GAME2_PROFILE_CHECK_WALL_TIMEOUT:-180s}"
 
+if [[ "${GAME2_LATE_PROBE_RETRY_ENABLED:-0}" != "1" ]]; then
+  mkdir -p "$(dirname "$LOG")"
+  echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] retry watcher disabled; set GAME2_LATE_PROBE_RETRY_ENABLED=1 to run broad n* queue" >>"$LOG"
+  exit 75
+fi
+
 mkdir -p "$(dirname "$LOG")"
 cd "$ROOT" || exit 1
 
@@ -39,7 +45,7 @@ check_profile() {
   pid_yuan_core=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n586c n587c n590a n590b n590c n591a n591b n591c n591d n593c n594c n595c n595d n596e n596f n596g n597b n597c n598a n598b n598c n598d \
+    --labels n586c n587c n590a n590b n590c n591a n591b n591c n591d n593c n594c n595c n595d n596e n596f n596g n597b n597c n598a n598b n598c n598d n599a n599b n599c \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -65,7 +71,7 @@ check_profile() {
   pid_poker_core=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n588a n588b n588c n589a n589b n589c n592a n592b n592c n593a n594a n595a n595b n596a n596c n597a \
+    --labels n588a n588b n588c n589a n589b n589c n592a n592b n592c n593a n594a n595a n595b n596a n596c n597a n599e \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -78,7 +84,7 @@ check_profile() {
   pid_poker_stage=$!
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n577e n578e n578f n579b n579c n581c n581d n583d n584d n585d n586d n587d n588d n589d n590d n592d n593b n593d n594b n594d n596b n596d n596h n597d n597e n598e \
+    --labels n577e n578e n578f n579b n579c n581c n581d n583d n584d n585d n586d n587d n588d n589d n590d n592d n593b n593d n594b n594d n596b n596d n596h n597d n597e n598e n599d n599f \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
