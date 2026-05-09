@@ -1,6 +1,27 @@
 # Game2 Batch 与结果分析机制
 
-更新时间：`2026-04-19`
+更新时间：`2026-05-07`
+
+## 0. 2026-05-07 口径更新：当前迭代不再使用 batch
+
+用户已明确要求：Game53 当前不要再用 batch 评测，因为后手/反向对局没有意义。后续迭代统一使用单人房间：
+
+```bash
+python3 Game2/tools/run_room_eval.py \
+  --code-id <code_id> \
+  --label <neutral_label> \
+  --count 5 \
+  --timeout 420 \
+  --poll-interval 2
+```
+
+当前已验证的房间 API：
+
+- `POST /api/rooms/` with `{"game_id":53,"player_number":1}`
+- `POST /api/rooms/<room_id>/join/` with our code at `order=0`
+- `POST /api/rooms/<room_id>/begin_match/`
+
+当前文档保留 batch 历史分析，只作为旧实验材料。新的版本判断以 `docs/game2_20260507_room_iteration.md` 和 `Game2/runtime/room_matches/` 为准。
 
 ## 1. 最重要的口径修正
 
