@@ -1,6 +1,6 @@
 # Game2 Saiblo 当前状态
 
-更新时间：`2026-05-10 04:15 UTC+8 / 2026-05-09 20:15 UTC`
+更新时间：`2026-05-10 04:25 UTC+8 / 2026-05-09 20:25 UTC`
 
 ## 0. 2026-05-07 线上更新后的最新口径
 
@@ -16,7 +16,11 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - 追加 `n584a-d`：专门测试 Poker post-monitor 后的 `404/501 -> 405/502`、车辆/后院窗户/匿名转账/看诊记录/人口贩卖名单，以及 post-monitor 后的动态 suspect/Joker 答案字段。
 - 追加 `n585a-d`：按 Poker 高层剧情轴测试警方卷宗/DNA/指纹/银行流水、真梅花5本人直问、404车辆与501转账后续，不再重复监控问句。
 - 追加 `n586a-d`：按 Yuan 高层剧情轴测试两人作案分工、尸源/DNA/照片元数据、biology-runner、保安网页/门禁监控、官方证据 custody。
-- `scripts/game2_late_probe_retry.sh` 已加入 `n583a-d`、`n584a-d`、`n585a-d` 与 `n586a-d`，profile 守卫改为独立 helper 并加外层 wall timeout；watcher 队列为 `47` 个中性标签，当前 PID `418622`。
+- 追加 `n587a-d`：Yuan 手机数字取证、投票原件 custody、完整骨架官方材料，以及 Poker `404/501` 后的 Yuan 跨案同源线。
+- 追加 `n588a-d`：Poker 404 车主本人、501 收款/于书华本人、0512/手机/隐藏房间，以及完整骨架中车主/收款人/信息源三路并查。
+- 追加 `n589a-d`：Poker 公馆空间/权限、密码/门锁/隐藏房间权限、刀具/刀痕/血迹法医和完整骨架空间权限+toolmark 复原。
+- 追加 `n590a-d`：Yuan 周五揭发证据缓存、张壹/张朔传闻源、黄色行李箱来源，以及 Poker/Yuan 刀具与背刺 toolmark 跨案物证。
+- `scripts/game2_late_probe_retry.sh` 已加入 `n583a-d` 到 `n590a-d`，profile 守卫改为独立 helper 并加外层 wall timeout；watcher 队列为 `63` 个中性标签，当前 PID `419552`。
 - 仍只用单人房间评测，不使用 batch，不激活、不上天梯；实体名保持 `n*` 中性编号，备注为 `r`。
 
 ## 0m. 2026-05-09 `n558/n559` Poker/Yuan 并发拓展

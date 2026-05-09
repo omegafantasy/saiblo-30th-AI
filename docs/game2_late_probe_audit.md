@@ -1,6 +1,6 @@
 # Game2 Late Poker/Yuan Probe Audit
 
-更新时间：`2026-05-10 04:15 UTC+8 / 2026-05-09 20:15 UTC`
+更新时间：`2026-05-10 04:25 UTC+8 / 2026-05-09 20:25 UTC`
 
 ## 目标
 
@@ -11,10 +11,10 @@
 候选覆盖：
 
 - Yuan 隔离与答案字段：`n577a-d`、`n580a-d`、`n582a-d`。
-- Yuan direct 骨架高层探针：`n583a-c`、`n586a-b`，固定 Rose/Z/F/Poker direct，只测 Yuan 身份置换/隐藏证据 meta、两人作案、尸源/DNA 和短答案字段。
-- Yuan 完整骨架/隔离条件线：`n577e`、`n583d`、`n586c-d`。
-- Poker 字段/隐藏链隔离：`n578a-d`、`n579a`、`n579d`、`n581a-b`、`n584a-c`、`n585a-c`、`n574c`。
-- Poker/Yuan 完整骨架交叉线：`n578e-f`、`n579b-c`、`n581c-d`、`n584d`、`n585d`。
+- Yuan direct 骨架高层探针：`n583a-c`、`n586a-b`、`n587a-b`、`n590a-c`，固定 Rose/Z/F/Poker direct，只测 Yuan 身份置换/隐藏证据 meta、两人作案、尸源/DNA、手机数字取证、投票 custody、周五揭发缓存、传闻源和行李箱来源。
+- Yuan 完整骨架/隔离条件线：`n577e`、`n583d`、`n586c-d`、`n587c-d`、`n590d`。
+- Poker 字段/隐藏链隔离：`n578a-d`、`n579a`、`n579d`、`n581a-b`、`n584a-c`、`n585a-c`、`n588a-c`、`n589a-c`、`n574c`。
+- Poker/Yuan 完整骨架交叉线：`n578e-f`、`n579b-c`、`n581c-d`、`n584d`、`n585d`、`n588d`、`n589d`、`n590d`。
 - 旧待补 witness 双问：`n576a-c`。
 
 生成脚本：
@@ -29,6 +29,10 @@
 - `Game2/tools/make_n584_candidates.py`
 - `Game2/tools/make_n585_candidates.py`
 - `Game2/tools/make_n586_candidates.py`
+- `Game2/tools/make_n587_candidates.py`
+- `Game2/tools/make_n588_candidates.py`
+- `Game2/tools/make_n589_candidates.py`
+- `Game2/tools/make_n590_candidates.py`
 
 恢复与汇总：
 
@@ -38,15 +42,15 @@
 
 ## 当前验证
 
-- watcher 队列共 `47` 个标签，均有对应 `Game2/deepclue_ai/<label>/ai.py`。
-- `47` 个标签全部通过 Python `compile()` 检查。
+- watcher 队列共 `63` 个标签，均有对应 `Game2/deepclue_ai/<label>/ai.py`。
+- `63` 个标签全部通过 Python `compile()` 检查。
 - watcher 标签全部被 `summarize_late_probe_results.py` 覆盖。
 - `scripts/game2_late_probe_retry.sh` 通过 `bash -n`。
-- 当前后台 watcher 通过 `setsid -f bash scripts/game2_late_probe_retry.sh` 重启，PID 为 `418622`；必须仍通过 `thebeginning` profile 守卫后才上传。
+- 当前后台 watcher 通过 `setsid -f bash scripts/game2_late_probe_retry.sh` 重启，PID 为 `419552`；必须仍通过 `thebeginning` profile 守卫后才上传。
 
 ## 阻塞
 
-Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n586`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。当前只增加外层 wall timeout，不绕过账号守卫。
+Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n590`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。当前只增加外层 wall timeout，不绕过账号守卫。
 
 ## 恢复后判定
 
@@ -66,3 +70,7 @@ Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username s
 - `n586a-b`：Rose/Z/F/Poker direct + Yuan probe，验证 Yuan 两人作案/分工假设与尸源/DNA/照片元数据轴。
 - `n586c`：Yuan 隔离，解析 biology-runner 和保安来源后定向问官方记录、门禁/监控、网页日志和车辆记录。
 - `n586d`：完整骨架，保留前案完整路线，Yuan 改为证据来源、两人分工、官方证据 custody 的高层探针。
+- `n587a-d`：补 Yuan 手机数字取证、投票原件 custody、完整骨架手机/投票官方材料，以及 Poker `404/501` 后的 Yuan 跨案同源问题。
+- `n588a-d`：补 Poker 404 车主本人、501 收款/于书华本人、0512/手机/隐藏房间，以及完整骨架中车主/收款人/信息源三路并查。
+- `n589a-d`：补 Poker 公馆空间/权限轴、密码/门锁/隐藏房间权限轴、刀具/刀痕/血迹法医轴，以及完整骨架空间权限+toolmark 合并复原。
+- `n590a-d`：补 Yuan 周五揭发证据缓存、张壹/张朔传闻源、黄色行李箱 provenance，以及 Poker/Yuan 刀具与背刺 toolmark 跨案物证轴。
