@@ -58,7 +58,7 @@
 - `96` 个标签全部通过 Python `compile()` 检查。
 - watcher 标签全部被 `summarize_late_probe_results.py` 覆盖。
 - `scripts/game2_late_probe_retry.sh` 通过 `bash -n`。
-- 当前后台 watcher 已重启为五队列并发版本，PID `425166`；必须仍通过 `thebeginning` profile 守卫后才上传。旧 profile 子进程已清理，避免重复守卫。
+- 当前后台 watcher 已用 `nohup + setsid` 重启为五队列并发版本，PID `425776`；必须仍通过 `thebeginning` profile 守卫后才上传。已确认 profile wall-time 超时后 bash 本体仍存活并进入 `sleep 300` 退避。
 
 ## 阻塞
 
