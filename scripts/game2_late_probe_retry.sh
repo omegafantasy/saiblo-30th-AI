@@ -39,7 +39,7 @@ PY
   done
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n576a n576b n576c n577a n577b n577c n577d n580a n580b n580c n580d \
+    --labels n576a n576b n576c n577a n577b n577c n577d n580a n580b n580c n580d n582a n582b n582c n582d \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \

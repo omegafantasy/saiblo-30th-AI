@@ -1232,6 +1232,10 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 - `n580b`：全零 Yuan 隔离；凶手填第二个 `marks=True` 老师，测试投票造假/掩盖名额答案字段。
 - `n580c`：全零 Yuan 隔离；凶手填 `marks=False` witness，测试生物馆/1919/尸块转移答案字段。
 - `n580d`：全零 Yuan 隔离；凶手仍为 `无名氏`，只强化真实死者、替身、李海天尸检、海豚挂件和死亡时间伪造 method/motivation。
+- `n582a`：全零 Yuan 隔离；`705` 后追问尸检报告来源、海豚挂件主人、DNA/生物馆监控等下一阶段物证。
+- `n582b`：全零 Yuan 隔离；聚焦法医链，追问袁樱瞳 DNA、真实死因、死亡时间、背刺失血和断肢差异。
+- `n582c`：全零 Yuan 隔离；聚焦监控路线，追问保安网站日志、生物馆监控、1919 黑车和世纪林路径。
+- `n582d`：全零 Yuan 隔离；聚焦跨案同源，追问李海天/袁樱瞳/Joker/人口贩卖/匿名转账是否同线。
 
 新增 Poker 专项候选：
 
@@ -1254,7 +1258,7 @@ Game53 已更新剧本与 NPC 命名机制。当前迭代记录见：
 
 - 进程：`scripts/game2_late_probe_retry.sh`，当前 PID 以 `ps` 为准，本节最后一次重启后为当前后台 watcher。
 - 账号守卫仍为 `--expected-username thebeginning`，不绕过 profile 校验。
-- 恢复后会并行启动三组队列：`n576a-c/n577a-d/n580a-d`，`n578a-d/n579a/n579d/n581a-b/n574c`，`n577e/n578e/n578f/n579b/n579c/n581c-d`；每组内部串行，每个默认 `3` 局单人房间评测。
+- 恢复后会并行启动三组队列：`n576a-c/n577a-d/n580a-d/n582a-d`，`n578a-d/n579a/n579d/n581a-b/n574c`，`n577e/n578e/n578f/n579b/n579c/n581c-d`；每组内部串行，每个默认 `3` 局单人房间评测。
 - 队列结束后会自动运行 `Game2/tools/summarize_late_probe_results.py`，生成 `docs/generated/game2_late_probe_results.md/json` 供快速看分布和 `401/402/404/501/703/704/705` 等证据。
 - 回调仍不使用 batch、不激活、不上天梯，备注统一 `r`。
 

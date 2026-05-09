@@ -1476,6 +1476,10 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 | `n580b` | Yuan 全零隔离 | 凶手填第二个 `marks=True` 老师，测试投票造假/掩盖名额答案字段。 |
 | `n580c` | Yuan 全零隔离 | 凶手填 `marks=False` witness，测试生物馆/1919/尸块转移答案字段。 |
 | `n580d` | Yuan 全零隔离 | 凶手仍 `无名氏`，只强化真实死者、替身、李海天尸检、海豚挂件、二次利用和死亡时间伪造。 |
+| `n582a` | Yuan 全零隔离 | `705` 后追问尸检报告来源、海豚挂件主人、DNA/生物馆监控等下一阶段物证。 |
+| `n582b` | Yuan 全零隔离 | 聚焦法医链：袁樱瞳 DNA、真实死因、死亡时间、背刺失血和断肢差异。 |
+| `n582c` | Yuan 全零隔离 | 聚焦监控路线：保安网站日志、生物馆监控、1919 黑车和世纪林路径。 |
+| `n582d` | Yuan 全零隔离 | 聚焦跨案同源：李海天/袁樱瞳/Joker/人口贩卖/匿名转账是否同线。 |
 
 新增 Poker 候选：
 
@@ -1498,8 +1502,8 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 
 本地状态：
 
-- `Game2/tools/make_n577_candidates.py`、`Game2/tools/make_n578_candidates.py`、`Game2/tools/make_n579_candidates.py`、`Game2/tools/make_n580_candidates.py`、`Game2/tools/make_n581_candidates.py` 已生成候选。
-- `n577a-e`、`n578a-f`、`n579a-d`、`n580a-d`、`n581a-d` 全部通过 Python `compile()` 语法检查。
+- `Game2/tools/make_n577_candidates.py`、`Game2/tools/make_n578_candidates.py`、`Game2/tools/make_n579_candidates.py`、`Game2/tools/make_n580_candidates.py`、`Game2/tools/make_n581_candidates.py`、`Game2/tools/make_n582_candidates.py` 已生成候选。
+- `n577a-e`、`n578a-f`、`n579a-d`、`n580a-d`、`n581a-d`、`n582a-d` 全部通过 Python `compile()` 语法检查。
 - `scripts/game2_late_probe_retry.sh` 已更新并重启，profile 恢复后会并行启动 Yuan 隔离、Poker 隔离/post-monitor、完整骨架交叉三组队列；每组内部串行，每个标签默认跑 `3` 局单人房间。
 - 队列结束后会自动运行 `Game2/tools/summarize_late_probe_results.py`，输出 `docs/generated/game2_late_probe_results.md/json`，便于直接检查分数分布和后案证据上限。
 - 继续遵守：不用 batch、不上天梯、不激活；Saiblo 可见实体名保持中性编号，备注仍为 `r`。
