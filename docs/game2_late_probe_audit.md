@@ -27,7 +27,7 @@
 
 恢复与汇总：
 
-- `scripts/game2_late_probe_retry.sh`：profile 账号守卫通过后并行启动三组 `run_recovery_eval_queue.py`。
+- `scripts/game2_late_probe_retry.sh`：profile 账号守卫通过后并行启动三组 `run_recovery_eval_queue.py`；profile 检查默认超时已放宽到 `120s`，避免服务器慢响应时误判不可用。
 - `Game2/tools/summarize_late_probe_results.py`：恢复队列结束后生成 `docs/generated/game2_late_probe_results.md/json`。
 
 ## 当前验证
@@ -40,7 +40,7 @@
 
 ## 阻塞
 
-Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n582`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。
+Saiblo `/api/profile/` 持续 read timeout，未通过 `thebeginning` username safety check，因此尚未上传 `n577-n582`，也没有新的单人房间结果。不能改用 `entities` 作为备用守卫，因为 `saiblo_tools.py entities` 也依赖 `/api/profile/`；直接查 `thebeginning` entities 会绕过当前 token 身份验证。当前只放宽 profile 超时，不绕过账号守卫。
 
 ## 恢复后判定
 

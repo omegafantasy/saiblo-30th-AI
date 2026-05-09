@@ -9,7 +9,7 @@ mkdir -p "$(dirname "$LOG")"
 cd "$ROOT" || exit 1
 
 check_profile() {
-  SAIBLO_API_TIMEOUT="${SAIBLO_API_TIMEOUT:-20}" python3 - <<'PY'
+  SAIBLO_API_TIMEOUT="${SAIBLO_API_TIMEOUT:-120}" python3 - <<'PY'
 from saiblo_tools import get_profile, require_token
 
 try:
