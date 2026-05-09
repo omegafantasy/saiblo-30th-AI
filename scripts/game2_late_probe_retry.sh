@@ -9,16 +9,21 @@ mkdir -p "$(dirname "$LOG")"
 cd "$ROOT" || exit 1
 
 check_profile() {
-  python3 - <<'PY'
+  SAIBLO_API_TIMEOUT="${SAIBLO_API_TIMEOUT:-20}" python3 - <<'PY'
 from saiblo_tools import get_profile, require_token
 
-token = require_token('', 'game2 late probe retry')
-profile = get_profile(token)
-user = profile.get('user', {}) if isinstance(profile.get('user'), dict) else {}
-username = str(user.get('username', '')).strip()
-if username != 'thebeginning':
-    raise SystemExit(f'wrong username: {username!r}')
-print(username)
+try:
+    token = require_token('', 'game2 late probe retry')
+    profile = get_profile(token)
+    user = profile.get('user', {}) if isinstance(profile.get('user'), dict) else {}
+    username = str(user.get('username', '')).strip()
+    if username != 'thebeginning':
+        raise SystemExit(f'wrong username: {username!r}')
+    print(username)
+except SystemExit:
+    raise
+except Exception as exc:
+    raise SystemExit(f'{type(exc).__name__}: {exc}')
 PY
 }
 
@@ -34,7 +39,7 @@ PY
   done
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n576a n576b n576c \
+    --labels n576a n576b n576c n577a n577b n577c n577d \
     --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
@@ -46,8 +51,20 @@ PY
     --expected-username thebeginning
 
   python3 Game2/tools/run_recovery_eval_queue.py \
-    --labels n574c \
-    --count 2 \
+    --labels n578a n578b n578c n578d n574c \
+    --count 3 \
+    --timeout 900 \
+    --eval-poll-interval 75 \
+    --upload-poll-interval 120 \
+    --upload-poll-max 80 \
+    --request-timeout 180 \
+    --allow-partial-eval \
+    --continue-on-error \
+    --expected-username thebeginning
+
+  python3 Game2/tools/run_recovery_eval_queue.py \
+    --labels n577e n578e n578f \
+    --count 3 \
     --timeout 900 \
     --eval-poll-interval 75 \
     --upload-poll-interval 120 \

@@ -1,6 +1,6 @@
 # Game2 2026-05-07 Room Iteration
 
-更新时间：`2026-05-09 12:41 UTC`
+更新时间：`2026-05-10 02:33 UTC+8 / 2026-05-09 18:33 UTC`
 
 ## 当前口径
 
@@ -1458,3 +1458,35 @@ Poker 答案字段探针 `n569a-e` 全部失败：`timeline_self/timeline_murder
 - `n576a/b/c`：false-marked witness 双问强化版。首次上传遇到 Saiblo API read timeout；低频长超时重试仍卡在 `/api/profile/`，未通过 username safety check，因此没有上传。
 
 服务器恢复回调：已新增并启动 `scripts/game2_late_probe_retry.sh`。它每 5 分钟做一次 profile 校验，确认仍为 `thebeginning` 后再依次跑 `n576a-c` 与 `n574c`；日志写入 `Game2/runtime/game2_late_probe_retry.log`。
+
+### 2026-05-09 18:33 UTC 上限扩展而非细节微调
+
+本轮重新调整方向：不继续在 `n559a/n568c` 的 `2757/2797` 高分骨架附近改同义句，而是先用专项候选扩 Poker/Yuan 的剧情与评分维度上限。当前 Saiblo `/api/profile/` 仍读超时，没有通过账号守卫，因此本节只记录本地候选和恢复队列，尚无开房结果。
+
+新增 Yuan 候选：
+
+| label | 类型 | 目的 |
+| --- | --- | --- |
+| `n577a` | Yuan 全零隔离 | 身份置换、真实死者、李海天尸检、海豚挂件、尸块 DNA、死亡时间线。 |
+| `n577b` | Yuan 全零隔离 | 先投票异常、后生物馆 witness，测试两条线是否必须组合才触发隐藏 `+40`。 |
+| `n577c` | Yuan 全零隔离 | 将李海天/学生会会长链和十点半生物馆目击拆问，排除复合长问污染。 |
+| `n577d` | Yuan 全零隔离 | `marks=False` 短答案，测试身份置换/灭口/转移尸块是否有答案字段分。 |
+| `n577e` | 完整骨架 | 保留 `n559a` 前三轮，第四轮改为 `705` 条件追问，避免无 `705` 时继续消耗预算问长结论。 |
+
+新增 Poker 候选：
+
+| label | 类型 | 目的 |
+| --- | --- | --- |
+| `n578a` | Poker 隔离 | method 置 `未知`，拆 Poker direct 分是否主要来自 murderer。 |
+| `n578b` | Poker 隔离 | murderer 置 `无名氏`，拆 murderer 字段贡献。 |
+| `n578c` | Poker 隔离 | 只改 motivation 为身份/监控时间线，拆 motivation 是否有正分入口。 |
+| `n578d` | Poker 隔离 | 基于 `n568c` 监控路线，保留动态 suspect，只改 method 为监控身份错位与冰冻刀具。 |
+| `n578e` | 完整骨架 | Poker stage3 后单问接待者责任链/隐瞒原因，寻找隐藏调查 `+40` 或 residual 过滤信号。 |
+| `n578f` | 完整骨架 | Poker stage3 后单问医生/尸检事实，寻找医生线隐藏组件。 |
+
+本地状态：
+
+- `Game2/tools/make_n577_candidates.py`、`Game2/tools/make_n578_candidates.py` 已生成候选。
+- `n577a-e`、`n578a-f` 全部通过 Python `compile()` 语法检查。
+- `scripts/game2_late_probe_retry.sh` 已更新并重启，当前恢复队列包含 `n576a-c/n577a-d/n578a-d/n574c/n577e/n578e/n578f`，每个默认跑 `3` 局单人房间。
+- 继续遵守：不用 batch、不上天梯、不激活；Saiblo 可见实体名保持中性编号，备注仍为 `r`。
