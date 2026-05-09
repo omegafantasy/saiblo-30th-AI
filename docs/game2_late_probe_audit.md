@@ -1,6 +1,6 @@
 # Game2 Late Poker/Yuan Probe Audit
 
-更新时间：`2026-05-10 04:52 UTC+8 / 2026-05-09 20:52 UTC`
+更新时间：`2026-05-10 04:55 UTC+8 / 2026-05-09 20:55 UTC`
 
 ## 目标
 
@@ -44,7 +44,7 @@
 
 恢复与汇总：
 
-- `scripts/game2_late_probe_retry.sh`：profile 账号守卫通过后并行启动三组 `run_recovery_eval_queue.py`；profile 检查默认 API 超时为 `120s`，外层 wall timeout 为 `180s`，避免服务器慢响应或 Python 网络调用卡死时永久挂住。
+- `scripts/game2_late_probe_retry.sh`：profile 账号守卫通过后并行启动五组 `run_recovery_eval_queue.py`，分别覆盖 Yuan core、Yuan stage/answer、Poker core、Poker stage/answer、full/cross；profile 检查默认 API 超时为 `120s`，外层 wall timeout 为 `180s`，避免服务器慢响应或 Python 网络调用卡死时永久挂住。
 - `Game2/tools/check_saiblo_profile.py`：独立 profile 守卫 helper，避免 bash heredoc 后台运行留下孤儿 profile 子进程。
 - `Game2/tools/summarize_late_probe_results.py`：恢复队列结束后生成 `docs/generated/game2_late_probe_results.md/json`。
 
@@ -54,7 +54,7 @@
 - `83` 个标签全部通过 Python `compile()` 检查。
 - watcher 标签全部被 `summarize_late_probe_results.py` 覆盖。
 - `scripts/game2_late_probe_retry.sh` 通过 `bash -n`。
-- 当前后台 watcher 已重启为包含 `n593a-d/n594a-d/n595a-d` 的 83 标签队列，PID `422517`；必须仍通过 `thebeginning` profile 守卫后才上传。
+- 当前后台 watcher 已重启为五队列并发版本，PID `422760`；必须仍通过 `thebeginning` profile 守卫后才上传。旧 profile 子进程已清理，避免重复守卫。
 
 ## 阻塞
 
