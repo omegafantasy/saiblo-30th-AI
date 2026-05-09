@@ -32,6 +32,62 @@ h1 {
   font-size: 14px;
 }
 
+.board-switcher {
+  display: inline-grid;
+  grid-template-columns: 42px minmax(170px, auto) 42px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.nav-btn {
+  width: 42px;
+  height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.nav-btn:hover {
+  background: #eaf2ff;
+  border-color: #93c5fd;
+}
+
+.board-current {
+  min-width: 170px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  margin-left: 12px;
+  min-height: 30px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
+  vertical-align: top;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fold-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #2563eb;
+}
+
 .container {
   display: grid;
   grid-template-columns: 1fr;
@@ -45,6 +101,10 @@ h1 {
   border-radius: 8px;
   box-shadow: 0 2px 10px #0000000e;
   overflow: hidden;
+}
+
+.panel[hidden] {
+  display: none;
 }
 
 .wide {
@@ -212,8 +272,18 @@ code {
   background: #fef2f2;
 }
 
-@media (min-width: 1100px) {
-  .container {
-    grid-template-columns: 1fr 1fr;
+@media (max-width: 520px) {
+  .board-switcher {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
+  }
+
+  .board-current {
+    min-width: 0;
+  }
+
+  .fold-toggle {
+    display: flex;
+    margin-left: 0;
   }
 }

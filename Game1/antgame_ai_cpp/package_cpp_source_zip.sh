@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "usage: $0 <cpp_lure_v3n> [output_zip]" >&2
+  echo "usage: $0 <cpp_lure_v3n|cpp_lure_v4> [output_zip]" >&2
   exit 1
 fi
 
@@ -14,7 +14,13 @@ OUTPUT_ARG="${2:-}"
 case "$TARGET" in
   cpp_lure_v3n)
     SOURCE_MAIN="${SCRIPT_DIR}/cpp_lure_v3n/ai_cpp_lure_v3n.cpp"
+    AI_INCLUDE_ROOT="${SCRIPT_DIR}/cpp_lure_v3/include/antgame_ai"
     ARCHIVE_NAME="ai_cpp_lure_v3n_cppzip.zip"
+    ;;
+  cpp_lure_v4)
+    SOURCE_MAIN="${SCRIPT_DIR}/cpp_lure_v4/ai_cpp_lure_v4.cpp"
+    AI_INCLUDE_ROOT="${SCRIPT_DIR}/cpp_lure_v4/include/antgame_ai"
+    ARCHIVE_NAME="ai_cpp_lure_v4_cppzip.zip"
     ;;
   *)
     echo "unknown target: ${TARGET}" >&2
@@ -43,7 +49,7 @@ mkdir -p \
   "$STAGING_DIR/Ant-Game/game/src"
 
 cp "$SOURCE_MAIN" "$STAGING_DIR/main.cpp"
-cp -R "${SCRIPT_DIR}/cpp_lure_v3/include/antgame_ai/." "$STAGING_DIR/antgame_ai/"
+cp -R "${AI_INCLUDE_ROOT}/." "$STAGING_DIR/antgame_ai/"
 cp -R "${GAME1_ROOT}/antgame_cpp_sdk/include/antgame_sdk/." "$STAGING_DIR/antgame_sdk/"
 cp "${GAME1_ROOT}/antgame_cpp_sdk/src/native_sim.cpp" "$STAGING_DIR/antgame_sdk/src/native_sim.cpp"
 cp -R "${GAME1_ROOT}/Ant-Game/game/include/." "$STAGING_DIR/Ant-Game/game/include/"
@@ -58,6 +64,13 @@ find "$STAGING_DIR/antgame_sdk" -maxdepth 1 -type f -name '*.hpp' -exec perl -0p
   's/#include "antgame_sdk\/([^"]+)"/#include "$1"/g' {} +
 perl -0pi -e 's/#include "antgame_sdk\/native_sim\.hpp"/#include "..\/native_sim.hpp"/g' \
   "$STAGING_DIR/antgame_sdk/src/native_sim.cpp"
+
+if [[ "$TARGET" == "cpp_lure_v4" ]]; then
+  perl -0pi -e 's/#include <iostream>/#include <cstdlib>\n#include <iostream>/' "$STAGING_DIR/main.cpp"
+  perl -0pi -e \
+    's/std::cin\.tie\(nullptr\);\n/std::cin.tie(nullptr);\n\n    if (std::getenv("ANTGAME_CPP_BASELINE_DEBUG") == nullptr) {\n        setenv("ANTGAME_CPP_BASELINE_DEBUG", "summary", 0);\n    }\n/' \
+    "$STAGING_DIR/main.cpp"
+fi
 
 cat >"$STAGING_DIR/Makefile" <<'MAKEFILE'
 CXX ?= g++

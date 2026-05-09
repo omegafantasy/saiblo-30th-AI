@@ -46,6 +46,8 @@ class CrawlConfig:
     max_list_pages: int = 50
     gap_probe_per_cycle: int = 50
     max_detail_per_cycle: int = 30
+    pending_state_limit: int = 100
+    pending_state_max_pages: int = 20
     request_delay: float = 0.35
     loop_interval: float = 60.0
     detail_poll_min: float = 20.0
@@ -72,7 +74,7 @@ class CrawlConfig:
     supplement_max_outstanding: int = 80
     supplement_pair_cap: int = 4
     supplement_request_timeout: float = 60.0
-    supplement_excluded_usernames: tuple[str, ...] = ("theend",)
+    supplement_excluded_usernames: tuple[str, ...] = ("theend", "thebeginning")
 
 
 def now_iso() -> str:
@@ -752,6 +754,111 @@ def scan_match_list(conn: sqlite3.Connection, cfg: CrawlConfig, token: str) -> d
     return out
 
 
+def scan_remote_pending_states(conn: sqlite3.Connection, cfg: CrawlConfig, token: str) -> dict[str, Any]:
+    states = ["准备中", "评测中", "队列中", "等待中"]
+    active_ids: set[int] = set()
+    counts: dict[str, int] = {}
+    fetched_by_state: dict[str, int] = {}
+    pages_by_state: dict[str, int] = {}
+    complete_by_state: dict[str, bool] = {}
+    errors: list[dict[str, Any]] = []
+    total_count = 0
+    limit = max(1, int(cfg.pending_state_limit))
+    max_pages = max(1, int(cfg.pending_state_max_pages))
+
+    for state in states:
+        fetched = 0
+        complete = False
+        pages = 0
+        try:
+            for page in range(max_pages):
+                params = {
+                    "game": int(cfg.game_id),
+                    "state": state,
+                    "limit": limit,
+                    "offset": page * limit,
+                }
+                q = urllib.parse.urlencode(params)
+                data = api_request("GET", f"/api/matches/?{q}", token=token, timeout=cfg.request_timeout)
+                if isinstance(data, dict) and data.get("count") is not None:
+                    counts[state] = as_int(data.get("count"), 0)
+                rows = data.get("results", []) if isinstance(data, dict) else []
+                if not isinstance(rows, list) or not rows:
+                    complete = True
+                    break
+                pages += 1
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    match_id = as_int(row.get("id"), 0)
+                    if match_id <= 0:
+                        continue
+                    active_ids.add(match_id)
+                    fetched += 1
+                    if match_id >= int(cfg.start_match_id):
+                        upsert_match_shell(conn, row, cfg, detail_status="list")
+                conn.commit()
+                if isinstance(data, dict) and not data.get("next"):
+                    complete = True
+                    break
+                sleep_delay(cfg)
+        except Exception as exc:
+            if is_auth_error(exc):
+                raise
+            errors.append({"state": state, "error": compact_error(exc)})
+        fetched_by_state[state] = fetched
+        pages_by_state[state] = pages
+        if state not in counts:
+            counts[state] = fetched
+        total_count += int(counts[state])
+        complete_by_state[state] = complete
+
+    complete_all = all(complete_by_state.values()) and not errors
+    stale_queued = 0
+    if complete_all:
+        active_list = sorted(active_ids)
+        if active_list:
+            placeholders = ",".join("?" for _ in active_list)
+            params: list[Any] = [int(cfg.start_match_id), *active_list]
+            stale_queued = conn.execute(
+                f"""
+                UPDATE matches
+                SET next_poll_at=0
+                WHERE ignored=0
+                  AND terminal=0
+                  AND match_id >= ?
+                  AND match_id NOT IN ({placeholders})
+                """,
+                params,
+            ).rowcount
+        else:
+            stale_queued = conn.execute(
+                """
+                UPDATE matches
+                SET next_poll_at=0
+                WHERE ignored=0 AND terminal=0 AND match_id >= ?
+                """,
+                (int(cfg.start_match_id),),
+            ).rowcount
+        conn.commit()
+
+    out = {
+        "ok": not errors,
+        "complete": complete_all,
+        "states": counts,
+        "fetched_by_state": fetched_by_state,
+        "pages_by_state": pages_by_state,
+        "complete_by_state": complete_by_state,
+        "active_ids_seen": len(active_ids),
+        "total": total_count,
+        "stale_queued": stale_queued,
+        "errors": errors,
+        "updated_at": now_iso(),
+    }
+    set_state(conn, "remote_pending", out)
+    return out
+
+
 def row_exists(conn: sqlite3.Connection, match_id: int) -> bool:
     return conn.execute("SELECT 1 FROM matches WHERE match_id=?", (int(match_id),)).fetchone() is not None
 
@@ -932,6 +1039,18 @@ def mark_poll_error(conn: sqlite3.Connection, cfg: CrawlConfig, match_id: int, e
     )
 
 
+def mark_missing_or_forbidden(conn: sqlite3.Connection, match_id: int, exc: BaseException) -> None:
+    conn.execute(
+        """
+        UPDATE matches
+        SET state='missing_or_forbidden', terminal=1, success=0, detail_status='missing',
+            last_error=?, next_poll_at=0, retry_count=retry_count+1
+        WHERE match_id=?
+        """,
+        (compact_error(exc), int(match_id)),
+    )
+
+
 def select_matches_to_poll(conn: sqlite3.Connection, cfg: CrawlConfig) -> list[int]:
     now = time.time()
     rows = conn.execute(
@@ -947,16 +1066,16 @@ def select_matches_to_poll(conn: sqlite3.Connection, cfg: CrawlConfig) -> list[i
           )
         ORDER BY
           CASE
-            WHEN success=1 AND (rounds IS NULL OR final_hp0 IS NULL OR final_hp1 IS NULL) THEN 0
+            WHEN terminal=0 AND next_poll_at <= ? THEN 0
             WHEN detail_status != 'ok' THEN 1
-            WHEN terminal=0 THEN 2
+            WHEN success=1 AND (rounds IS NULL OR final_hp0 IS NULL OR final_hp1 IS NULL) THEN 2
             ELSE 3
           END,
           CASE WHEN detail_status='ok' THEN 1 ELSE 0 END,
           match_id DESC
         LIMIT ?
         """,
-        (int(cfg.start_match_id), now, now, int(cfg.max_detail_per_cycle)),
+        (int(cfg.start_match_id), now, now, now, int(cfg.max_detail_per_cycle)),
     ).fetchall()
     return [int(row["match_id"]) for row in rows]
 
@@ -981,7 +1100,11 @@ def poll_match_details(conn: sqlite3.Connection, cfg: CrawlConfig, token: str) -
             conn.commit()
         except Exception as exc:
             errors += 1
-            mark_poll_error(conn, cfg, match_id, exc)
+            text = str(exc)
+            if "HTTP 404" in text or "HTTP 403" in text:
+                mark_missing_or_forbidden(conn, match_id, exc)
+            else:
+                mark_poll_error(conn, cfg, match_id, exc)
             conn.commit()
             if is_auth_error(exc):
                 raise
@@ -1116,6 +1239,49 @@ def load_self_play_stats(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str
     }
 
 
+def load_excluded_version_codes(conn: sqlite3.Connection, cfg: CrawlConfig) -> set[str]:
+    excluded = excluded_supplement_usernames(cfg)
+    if not excluded:
+        return set()
+    placeholders = ",".join("?" for _ in excluded)
+    rows = conn.execute(
+        f"""
+        SELECT code_id
+        FROM versions
+        WHERE code_id != ''
+          AND lower(username) IN ({placeholders})
+        """,
+        tuple(sorted(excluded)),
+    ).fetchall()
+    return {str(row["code_id"]) for row in rows if str(row["code_id"] or "")}
+
+
+def load_recent_match_stats(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str, dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+            p.code_id AS code_id,
+            MAX(m.match_id) AS last_any_match_id,
+            MAX(COALESCE(NULLIF(m.create_time, ''), NULLIF(m.last_seen_at, ''), NULLIF(m.first_seen_at, ''))) AS last_any_seen_at
+        FROM match_players p
+        JOIN matches m ON m.match_id=p.match_id
+        WHERE m.ignored=0
+          AND m.match_id >= ?
+          AND p.code_id != ''
+        GROUP BY p.code_id
+        """,
+        (int(cfg.start_match_id),),
+    ).fetchall()
+    return {
+        str(row["code_id"]): {
+            "last_any_match_id": as_int(row["last_any_match_id"], 0),
+            "last_any_seen_at": str(row["last_any_seen_at"] or ""),
+        }
+        for row in rows
+        if str(row["code_id"] or "")
+    }
+
+
 def elo_rows(conn: sqlite3.Connection, cfg: CrawlConfig) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = conn.execute(
         """
@@ -1192,18 +1358,22 @@ def elo_rows(conn: sqlite3.Connection, cfg: CrawlConfig) -> tuple[list[dict[str,
 
     versions = load_versions(conn)
     self_play_stats = load_self_play_stats(conn, cfg)
+    excluded_version_codes = load_excluded_version_codes(conn, cfg)
+    recent_match_stats = load_recent_match_stats(conn, cfg)
     rating_rows: list[dict[str, Any]] = []
-    code_ids = set(ratings.keys()) | set(stats.keys()) | set(self_play_stats.keys())
+    code_ids = set(ratings.keys()) | set(stats.keys()) | set(self_play_stats.keys()) | excluded_version_codes
     for code_id in code_ids:
         rating = ratings.get(code_id, float(cfg.base_rating))
         s = stats[code_id]
         games = int(s["games"])
         self_play_games = as_int(self_play_stats.get(code_id, {}).get("self_play_games"), 0)
         last_self_play_match_id = as_int(self_play_stats.get(code_id, {}).get("last_self_play_match_id"), 0)
+        last_any_match_id = as_int(recent_match_stats.get(code_id, {}).get("last_any_match_id"), 0)
+        last_any_seen_at = str(recent_match_stats.get(code_id, {}).get("last_any_seen_at") or "")
         reliability = min(1.0, math.sqrt(games / max(1.0, float(cfg.reliability_games)))) if games > 0 else 0.0
         stable_elo = float(cfg.base_rating) + (float(rating) - float(cfg.base_rating)) * reliability
         meta = versions.get(code_id, {})
-        rating_source = "rated" if games > 0 else ("default_self_play" if self_play_games > 0 else "default")
+        rating_source = "rated" if games > 0 else ("default_self_play" if self_play_games > 0 else ("default_excluded" if code_id in excluded_version_codes else "default"))
         rating_rows.append(
             {
                 "code_id": code_id,
@@ -1221,8 +1391,8 @@ def elo_rows(conn: sqlite3.Connection, cfg: CrawlConfig) -> tuple[list[dict[str,
                 "score_rate": round(float(s["score"]) / games, 4) if games else 0.0,
                 "avg_hp_diff": round(float(s["hp_diff_sum"]) / games, 3) if games else 0.0,
                 "avg_rounds": round(float(s["rounds_sum"]) / games, 1) if games else 0.0,
-                "last_match_id": int(s["last_match_id"]) or last_self_play_match_id,
-                "last_seen_at": s["last_seen_at"],
+                "last_match_id": int(s["last_match_id"]) or last_self_play_match_id or last_any_match_id,
+                "last_seen_at": s["last_seen_at"] or last_any_seen_at,
                 "username": str(meta.get("username") or ""),
                 "user_id": meta.get("user_id"),
                 "entity": str(meta.get("entity") or ""),
@@ -1246,6 +1416,7 @@ def elo_rows(conn: sqlite3.Connection, cfg: CrawlConfig) -> tuple[list[dict[str,
         "default_versions": default_versions,
         "self_play_versions": sum(1 for item in rating_rows if int(item.get("self_play_games") or 0) > 0),
         "self_play_matches": sum(int(item.get("self_play_games") or 0) for item in rating_rows),
+        "excluded_default_versions": sum(1 for item in rating_rows if item.get("rating_source") == "default_excluded"),
     }
 
 
@@ -1767,6 +1938,12 @@ def queue_rows(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]
 def build_latest(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str, Any]:
     ratings, elo_meta = elo_rows(conn, cfg)
     state = get_state_map(conn)
+    local_pending = db_scalar(conn, "SELECT COUNT(*) FROM matches WHERE ignored=0 AND terminal=0 AND match_id >= ?", (cfg.start_match_id,))
+    remote_pending = state.get("remote_pending", {}) if isinstance(state.get("remote_pending", {}), dict) else {}
+    remote_pending_epoch = parse_time_to_epoch(remote_pending.get("updated_at")) if remote_pending else 0.0
+    remote_pending_fresh = remote_pending_epoch > 0 and time.time() - remote_pending_epoch <= 1800.0
+    remote_pending_ok = bool(remote_pending.get("ok")) and bool(remote_pending.get("complete")) and remote_pending_fresh
+    pending_count = as_int(remote_pending.get("total"), local_pending) if remote_pending_ok else local_pending
     matches_summary = {
         "stored": db_scalar(conn, "SELECT COUNT(*) FROM matches WHERE match_id >= ?", (cfg.start_match_id,)),
         "ignored": db_scalar(conn, "SELECT COUNT(*) FROM matches WHERE ignored=1 AND match_id >= ?", (cfg.start_match_id,)),
@@ -1776,7 +1953,10 @@ def build_latest(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str, Any]:
             "SELECT COUNT(*) FROM matches WHERE ignored=0 AND success=1 AND rounds IS NOT NULL AND final_hp0 IS NOT NULL AND final_hp1 IS NOT NULL AND match_id >= ?",
             (cfg.start_match_id,),
         ),
-        "pending": db_scalar(conn, "SELECT COUNT(*) FROM matches WHERE ignored=0 AND terminal=0 AND match_id >= ?", (cfg.start_match_id,)),
+        "pending": pending_count,
+        "local_pending": local_pending,
+        "remote_pending": as_int(remote_pending.get("total"), 0) if remote_pending else None,
+        "pending_source": "remote_state_scan" if remote_pending_ok else "local_db",
         "failed": db_scalar(conn, "SELECT COUNT(*) FROM matches WHERE ignored=0 AND terminal=1 AND success=0 AND match_id >= ?", (cfg.start_match_id,)),
         "min_match_id": db_scalar(conn, "SELECT MIN(match_id) FROM matches WHERE ignored=0 AND match_id >= ?", (cfg.start_match_id,)),
         "max_match_id": db_scalar(conn, "SELECT MAX(match_id) FROM matches WHERE ignored=0 AND match_id >= ?", (cfg.start_match_id,)),
@@ -1793,6 +1973,8 @@ def build_latest(conn: sqlite3.Connection, cfg: CrawlConfig) -> dict[str, Any]:
             "max_list_pages": int(cfg.max_list_pages),
             "gap_probe_per_cycle": int(cfg.gap_probe_per_cycle),
             "max_detail_per_cycle": int(cfg.max_detail_per_cycle),
+            "pending_state_limit": int(cfg.pending_state_limit),
+            "pending_state_max_pages": int(cfg.pending_state_max_pages),
             "replay_concurrency": int(cfg.replay_concurrency),
             "base_rating": float(cfg.base_rating),
             "max_k": float(cfg.max_k),
@@ -1860,11 +2042,13 @@ def crawl_once(cfg: CrawlConfig) -> dict[str, Any]:
             return payload
 
         match_list = None
+        remote_pending = None
         gap_probe = None
         detail_poll = None
         supplement = None
         try:
             match_list = scan_match_list(conn, cfg, token)
+            remote_pending = scan_remote_pending_states(conn, cfg, token)
             gap_probe = gap_probe_matches(conn, cfg, token, as_int(match_list.get("max_id"), 0) if isinstance(match_list, dict) else None)
             cleanup_ignored_game_rows(conn)
             conn.commit()
@@ -1881,7 +2065,7 @@ def crawl_once(cfg: CrawlConfig) -> dict[str, Any]:
         set_state(conn, "last_cycle_finished_at", now_iso())
         conn.commit()
         payload = build_latest(conn, cfg)
-        payload["last_cycle"] = {"ladder": ladder, "match_list": match_list, "gap_probe": gap_probe, "detail_poll": detail_poll, "supplement": supplement}
+        payload["last_cycle"] = {"ladder": ladder, "match_list": match_list, "remote_pending": remote_pending, "gap_probe": gap_probe, "detail_poll": detail_poll, "supplement": supplement}
         write_json(cfg.latest_path, payload)
         return payload
 
@@ -1955,6 +2139,8 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--max-list-pages", type=int, default=50)
     p.add_argument("--gap-probe-per-cycle", type=int, default=50, help="sequential match-id gap probes per cycle")
     p.add_argument("--max-detail-per-cycle", type=int, default=30)
+    p.add_argument("--pending-state-limit", type=int, default=100)
+    p.add_argument("--pending-state-max-pages", type=int, default=20)
     p.add_argument("--request-delay", type=float, default=0.35)
     p.add_argument("--request-timeout", type=float, default=20.0)
     p.add_argument("--replay-timeout", type=float, default=60.0)
@@ -1980,7 +2166,7 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--supplement-max-outstanding", type=int, default=80)
     p.add_argument("--supplement-pair-cap", type=int, default=4)
     p.add_argument("--supplement-request-timeout", type=float, default=60.0)
-    p.add_argument("--supplement-exclude-user", action="append", default=["theend"], help="username excluded from automatic supplement matches; can be repeated")
+    p.add_argument("--supplement-exclude-user", action="append", default=["theend", "thebeginning"], help="username excluded from automatic supplement matches; can be repeated")
 
 
 def config_from_args(args: argparse.Namespace) -> CrawlConfig:
@@ -2000,6 +2186,8 @@ def config_from_args(args: argparse.Namespace) -> CrawlConfig:
         max_list_pages=int(args.max_list_pages),
         gap_probe_per_cycle=int(args.gap_probe_per_cycle),
         max_detail_per_cycle=int(args.max_detail_per_cycle),
+        pending_state_limit=int(args.pending_state_limit),
+        pending_state_max_pages=int(args.pending_state_max_pages),
         request_delay=float(args.request_delay),
         loop_interval=float(getattr(args, "interval", 60.0)),
         detail_poll_min=float(args.detail_poll_min),
