@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -131,17 +132,19 @@ def score_from_detail(detail: dict[str, Any], code_id: str) -> int | float | Non
     return None
 
 
-def resolve_latest_entity_code(entity_name: str, token: str) -> str:
-    username = str(get_profile(token).get('user', {}).get('username', '')).strip()
-    if not username:
-        raise RuntimeError('cannot resolve username')
-    data = get_user_entities(username, GAME_ID, token)
-    entities = data.get('entities', []) if isinstance(data, dict) else []
-    entity_id = 0
-    for entity in entities:
-        if isinstance(entity, dict) and str(entity.get('name', '')).strip() == entity_name:
-            entity_id = int(entity.get('id', 0) or 0)
-            break
+def resolve_latest_entity_code(entity_name: str, token: str, username: str = '', entity_id: int = 0) -> str:
+    if entity_id <= 0:
+        username = str(username or os.environ.get('SAIBLO_USERNAME', '')).strip()
+        if not username:
+            username = str(get_profile(token).get('user', {}).get('username', '')).strip()
+        if not username:
+            raise RuntimeError('cannot resolve username')
+        data = get_user_entities(username, GAME_ID, token)
+        entities = data.get('entities', []) if isinstance(data, dict) else []
+        for entity in entities:
+            if isinstance(entity, dict) and str(entity.get('name', '')).strip() == entity_name:
+                entity_id = int(entity.get('id', 0) or 0)
+                break
     if not entity_id:
         raise RuntimeError(f'entity not found: {entity_name}')
     codes = [c for c in get_entity_codes(entity_id, token) if isinstance(c, dict)]
@@ -179,11 +182,19 @@ def main() -> int:
     parser.add_argument('--timeout', type=float, default=420.0)
     parser.add_argument('--poll-interval', type=float, default=2.0)
     parser.add_argument('--request-timeout', type=float, default=60.0)
+    parser.add_argument('--username', default='', help='known Saiblo username; skips /api/profile/ lookup when possible')
+    parser.add_argument('--entity-id', type=int, default=0, help='known entity id; skips profile/entity listing when resolving latest code')
     args = parser.parse_args()
 
+    os.environ.setdefault('SAIBLO_API_TIMEOUT', str(float(args.request_timeout)))
     token, _ = resolve_token('')
     token = require_token(token, 'game2-room-eval')
-    code_id = normalized_code_id(args.code_id) if args.code_id else resolve_latest_entity_code(args.entity_name, token)
+    code_id = normalized_code_id(args.code_id) if args.code_id else resolve_latest_entity_code(
+        args.entity_name,
+        token,
+        username=args.username,
+        entity_id=int(args.entity_id or 0),
+    )
     label = args.label or args.entity_name or code_id[:8]
 
     ts = time.strftime('%Y%m%d_%H%M%S', time.gmtime())

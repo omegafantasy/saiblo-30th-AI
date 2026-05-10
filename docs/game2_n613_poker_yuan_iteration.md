@@ -180,3 +180,30 @@ Updated direction after n618:
 
 - Poker should stop trying broad post-`606` paraphrases. The next useful isolation is structural: identify whether `605/607/608` are unreachable because the current script never advances beyond Poker stage3, because a hidden holder is not being asked, or because the answer/accusation fields rather than chat evidence trigger the branch.
 - Yuan should stop assuming `707` automatically trades into `708`. The next useful isolation is to compare the exact read-only `sk548e0910qar/qas` `708` path against n618c/d and preserve any ordering/source differences, especially whether the exchange needs the contact holder first, the exchange target first, specific identity proof, or a different "memory recovery" phrasing.
+
+## n619-n620 Follow-up
+
+Current token check before the n620 evaluation returned `thebeginning` (`id=2646`), not `theend`. The already uploaded n620 code ids were evaluated directly by single-player room only; no ladder activation was performed.
+
+n619 direct room evaluations:
+
+| label | matches | scores | relevant evidence |
+| --- | --- | --- | --- |
+| `n619a` | `8143520`, `8143665`, `8143687` | `2757`, `2717`, `2757` | Yuan contact route: `707` appeared in 2/3 samples; no `708+`. Poker stayed around `401/402`. |
+| `n619b` | `8143521`, `8143668`, `8143703` | `2757`, `2757`, `2757` | One sample reached Poker `502/503/504` plus Yuan `707`; no `606`, no `605/607/608`, no `708+`. |
+| `n619c` | `8143519`, `8143664`, `8143686` | `2797`, `2757`, `2717` | One low sample reached Poker `501/502/503/504/505/601-604/606` and Yuan `707`; still no `605/607/608` and no `708+`. |
+
+n620 direct room evaluations tested whether changing the final answer after `606` can trigger hidden scoring or evidence:
+
+| label | code | matches | scores | relevant evidence |
+| --- | --- | --- | --- | --- |
+| `n620a` | `28ac14cefef24a8a8b9c7ec2ee77fa87` | `8143953`, `8144001` | `2617`, `2557` | Second sample reached `501/502/503/504/505/601-604/606`, but the answer branch collapsed score and did not unlock `605/607/608`. |
+| `n620b` | `74e5d43ac4754ba28d51483fcf99f1ed` | `8144075`, `8144079` | `2657`, `2757` | No late Poker/Yuan gain; best sample only showed `401/402`. |
+| `n620c` | `f01937bac03e4aa3a2329452cf373193` | `8144198`, `8144201` | `2617`, `2557` | No late Poker/Yuan gain; samples only reached `703` or `401/402`. |
+
+Interpretation after n620:
+
+- The "post-`606` final answer attribution" hypothesis is now weak. Even when `606` appeared, changing murderer attribution to explicit/Club5/Red-Q styles did not register `605/607/608` and reduced score.
+- n619 confirms Yuan `707` can be reproduced under the current route, but `707` still does not become `708` by simply asking for the exchange or memory recovery. The target/source/order gate remains unresolved.
+- Server-side `KeyError: '8'` and NPC JSON parse retries still appear in late Z/F stages. These are noise for isolated low rows, but they do not explain the consistent absence of `605/607/608/708+`.
+- Next useful work should return to structural gate discovery: Poker should chase the actual holder/source of `605` or final dossiers after `606`; Yuan should reproduce the exact `707 -> 708` source ordering from successful traces instead of adding final-answer variants.
