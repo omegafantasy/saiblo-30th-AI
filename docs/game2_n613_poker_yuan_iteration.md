@@ -149,3 +149,34 @@ Current conclusion:
 - Poker is not merely missing wording for `606 -> 605/607/608`. The gate likely needs a different state condition: correct holder, police/final-dossier authorization, final accusation, or a hidden source that is not the current speaker.
 - Yuan has at least two separate late routes: `704 -> 706` through lost-and-found/U-disk/admin records, and `707 -> 708` through contact exchange. These are not yet reliably coalesced, and neither has opened Yuan stage `2`.
 - The next useful work should stop broad all-NPC sweeps. For Poker, isolate the post-`606` authorization/final-accusation condition. For Yuan, import the validated `707 -> 708` exchange mechanism into the current line, then immediately pursue post-`708` employer email, email/IP/payment, bathtub location, gloves/knife, and possible `709` or stage-2 trigger.
+
+## n618 Candidates And Results
+
+Uploaded on `thebeginning`, not activated and not laddered:
+
+- `n618a`: entity `21727`, code `ba23bc375f094b30b92c7757a9036740`, remark `r`, compile success.
+- `n618b`: entity `21729`, code `1e412bb581824e849b9f4c1efb764dbb`, remark `r`, compile success.
+- `n618c`: entity `21728`, code `f19d45893115447bb7b07c6b429b5688`, remark `r`, compile success.
+- `n618d`: entity `21730`, code `baef997e544f4c35ab949af3c4ff6b35`, remark `r`, compile success.
+
+Direct room evaluations, three samples each:
+
+| label | matches | scores | relevant evidence |
+| --- | --- | --- | --- |
+| `n618a` | `8142948`, `8142958`, `8143002` | `2517`, `2797`, `2797` | Poker final-accusation branch. `606` reproduced in 2/3 samples together with `501-505,601-604`; still no `605/607/608`. |
+| `n618b` | `8142947`, `8142959`, `8142976` | `2757`, `2757`, `2797` | Poker authorization branch. It reached Poker stage3 but did not reproduce `606`; no `605/607/608`. |
+| `n618c` | `8142950`, `8142965`, `8143162` | `2657`, `2717`, `2797` | Yuan contact-exchange import. `707` reproduced in 3/3 samples; no `708/709`, no Yuan stage2. |
+| `n618d` | `8142949`, `8142961`, `8143068` | `2617`, `2757`, `2717` | Yuan U-disk-priority plus contact exchange. `707` reproduced in 2/3 samples; no `706/708/709`, no Yuan stage2. |
+
+Score-factor interpretation:
+
+- `n618a`: Poker `606` is real and reproducible, but the stronger final accusation wording still does not open `605/607/608`. This weakens the hypothesis that the missing piece is just "say the final accusation after 606".
+- `n618b`: explicitly asking for public authorization/签字链 made the run less useful and often lost `606`, so this wording is not a productive branch.
+- `n618c/d`: importing the visible `707 -> 708` exchange wording was insufficient. `707` itself is stable, but the exchange target either refuses/does not register the trade, or the missing gate is not the contact text alone.
+- All 12 n618 samples remain in the known lattice. The highest `2797` rows have Rose stage6 at index `28`, Poker stage `3`, two Z/F `KeyError(8)` records, and Yuan stage `1`; no n618 row reaches the known best `2837`.
+- Several n618 late rows still show server-side instability around high Z/F stage (`KeyError: '8'`, NPC API parse retries, and embedding timeouts). Treat isolated low samples as noisy, but the absence of `605/607/608/708/709` across all samples is meaningful.
+
+Updated direction after n618:
+
+- Poker should stop trying broad post-`606` paraphrases. The next useful isolation is structural: identify whether `605/607/608` are unreachable because the current script never advances beyond Poker stage3, because a hidden holder is not being asked, or because the answer/accusation fields rather than chat evidence trigger the branch.
+- Yuan should stop assuming `707` automatically trades into `708`. The next useful isolation is to compare the exact read-only `sk548e0910qar/qas` `708` path against n618c/d and preserve any ordering/source differences, especially whether the exchange needs the contact holder first, the exchange target first, specific identity proof, or a different "memory recovery" phrasing.
