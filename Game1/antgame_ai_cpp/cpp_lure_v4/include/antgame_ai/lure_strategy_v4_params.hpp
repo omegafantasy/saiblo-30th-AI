@@ -37,11 +37,11 @@ struct V4LureStrategyTuning {
     // plan_heuristic =
     //   base_heuristic + lure_heuristic + lightning_heuristic
     // - operation_penalty - followup_plan_penalty(if the plan depends on future-turn followup).
-    double hold_bonus = 60.0;
+    double hold_bonus = 80.0;
     double followup_plan_penalty = 0.0;
 
-    double c1_build_bonus = 50.0;
-    double c1_heavy_bonus = 60.0;
+    double c1_build_bonus = 0.0;
+    double c1_heavy_bonus = 0.0;
     double c1_heavy_side_trans_bonus = 0.0;
     double c1_quick_trans_bonus = 100.0;
     double c1_sniper_trans_bonus = 400.0;
@@ -67,7 +67,7 @@ struct V4LureStrategyTuning {
     double tower_value_weight = 10.0;
     double money_weight = 10.0;
     double money_decay_threshold = 400.0;
-    double money_weight_above_threshold = 6.0;
+    double money_weight_above_threshold = 8.0;
 
     // worker_threat = sum(worker_threat_unit * hp / max_hp / max(1, distance_to_own_base)).
     double worker_threat_unit = 160.0;
@@ -104,16 +104,16 @@ struct V4LureStrategyTuning {
     double lightning_tower_value_ratio = 0.5;
 
     int offensive_evasion_min_enemy_lightning_cd = 5;
-    int offensive_evasion_min_post_action_coins = 30;
+    int offensive_evasion_min_post_action_coins = 100;
     int offensive_evasion_min_worker_count = 4;
 
     int offensive_emp_combat_to_top_tower_distance = 2;
-    int offensive_surplus_emp_min_remaining_coins = 100;
+    int offensive_surplus_emp_min_remaining_coins = 1000;
     int offensive_surplus_emp_min_frontline_ants = 4;
     int offensive_surplus_emp_frontline_base_distance = 6;
 
     int offensive_ant_upgrade_latest_round = 420;
-    double offensive_ant_upgrade_min_equivalent_money = 350.0;
+    double offensive_ant_upgrade_min_equivalent_money = 1000.0;
 };
 
 inline constexpr V4LureStrategyTuning kV4LureStrategyTuning{};
