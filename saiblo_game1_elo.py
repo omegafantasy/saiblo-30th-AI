@@ -74,7 +74,7 @@ class CrawlConfig:
     supplement_max_outstanding: int = 80
     supplement_pair_cap: int = 4
     supplement_request_timeout: float = 60.0
-    supplement_excluded_usernames: tuple[str, ...] = ("theend", "thebeginning")
+    supplement_excluded_usernames: tuple[str, ...] = ("theend",)
 
 
 def now_iso() -> str:
@@ -1080,15 +1080,28 @@ def select_matches_to_poll(conn: sqlite3.Connection, cfg: CrawlConfig) -> list[i
     return [int(row["match_id"]) for row in rows]
 
 
-def poll_match_details(conn: sqlite3.Connection, cfg: CrawlConfig, token: str) -> dict[str, Any]:
-    ids = select_matches_to_poll(conn, cfg)
+def poll_match_details_for_ids(
+    conn: sqlite3.Connection,
+    cfg: CrawlConfig,
+    token: str,
+    ids: list[int],
+    fetch_detail_always: bool = True,
+) -> dict[str, Any]:
     details = 0
+    detail_skipped = 0
     replays = 0
     replay_errors = 0
     errors = 0
     replay_ids: list[int] = []
     for match_id in ids:
         try:
+            if not fetch_detail_always:
+                row = conn.execute("SELECT detail_status, success, rounds, final_hp0, final_hp1 FROM matches WHERE match_id=?", (match_id,)).fetchone()
+                if row and str(row["detail_status"] or "") == "ok":
+                    detail_skipped += 1
+                    if int(row["success"] or 0) == 1 and (row["rounds"] is None or row["final_hp0"] is None or row["final_hp1"] is None):
+                        replay_ids.append(match_id)
+                    continue
             detail = api_request("GET", f"/api/matches/{int(match_id)}/", token=token, timeout=cfg.request_timeout)
             if not isinstance(detail, dict):
                 raise RuntimeError("invalid detail response")
@@ -1150,6 +1163,7 @@ def poll_match_details(conn: sqlite3.Connection, cfg: CrawlConfig, token: str) -
         "ok": True,
         "selected": len(ids),
         "details": details,
+        "detail_skipped": detail_skipped,
         "replay_selected": len(replay_ids),
         "replay_concurrency": workers,
         "replays": replays,
@@ -1160,6 +1174,115 @@ def poll_match_details(conn: sqlite3.Connection, cfg: CrawlConfig, token: str) -
     set_state(conn, "detail_poll", out)
     conn.commit()
     return out
+
+
+def poll_match_details(conn: sqlite3.Connection, cfg: CrawlConfig, token: str) -> dict[str, Any]:
+    return poll_match_details_for_ids(conn, cfg, token, select_matches_to_poll(conn, cfg))
+
+
+def select_history_backfill_matches(
+    conn: sqlite3.Connection,
+    cfg: CrawlConfig,
+    usernames: list[str],
+    code_ids: list[str],
+    limit: int,
+) -> list[int]:
+    filters: list[str] = []
+    params: list[Any] = [int(cfg.start_match_id), time.time()]
+    if usernames:
+        placeholders = ",".join("?" for _ in usernames)
+        filters.append(f"lower(p.username) IN ({placeholders})")
+        params.extend(sorted(usernames))
+    if code_ids:
+        placeholders = ",".join("?" for _ in code_ids)
+        filters.append(f"p.code_id IN ({placeholders})")
+        params.extend(sorted(code_ids))
+    if not filters:
+        return []
+    where_user = " OR ".join(filters)
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT m.match_id
+        FROM matches m
+        JOIN match_players p ON p.match_id=m.match_id
+        WHERE m.ignored=0
+          AND m.match_id >= ?
+          AND m.success=1
+          AND (m.rounds IS NULL OR m.final_hp0 IS NULL OR m.final_hp1 IS NULL)
+          AND m.next_poll_at <= ?
+          AND ({where_user})
+        ORDER BY m.match_id ASC
+        LIMIT ?
+        """,
+        (*params, int(limit)),
+    ).fetchall()
+    return [int(row["match_id"]) for row in rows]
+
+
+def run_history_backfill(
+    conn: sqlite3.Connection,
+    cfg: CrawlConfig,
+    token: str,
+    usernames: list[str],
+    code_ids: list[str],
+    limit: int,
+) -> dict[str, Any]:
+    usernames = [normalize_username(item) for item in usernames if normalize_username(item)]
+    code_ids = [normalize_code_id(item) for item in code_ids if normalize_code_id(item)]
+    total = {
+        "selected": 0,
+        "details": 0,
+        "replay_selected": 0,
+        "detail_skipped": 0,
+        "replays": 0,
+        "replay_errors": 0,
+        "errors": 0,
+        "batches": 0,
+    }
+    if not usernames and not code_ids:
+        total.update({"ok": False, "reason": "no_filter", "updated_at": now_iso()})
+        set_state(conn, "backfill", total)
+        conn.commit()
+        return total
+
+    while True:
+        ids = select_history_backfill_matches(conn, cfg, usernames, code_ids, limit)
+        if not ids:
+            break
+        batch = poll_match_details_for_ids(conn, cfg, token, ids, fetch_detail_always=False)
+        total["selected"] += int(batch.get("selected", 0))
+        total["details"] += int(batch.get("details", 0))
+        total["detail_skipped"] += int(batch.get("detail_skipped", 0))
+        total["replay_selected"] += int(batch.get("replay_selected", 0))
+        total["replays"] += int(batch.get("replays", 0))
+        total["replay_errors"] += int(batch.get("replay_errors", 0))
+        total["errors"] += int(batch.get("errors", 0))
+        total["batches"] += 1
+        set_state(
+            conn,
+            "backfill",
+            {
+                **total,
+                "last_batch": batch,
+                "usernames": usernames,
+                "code_ids": code_ids,
+                "limit": int(limit),
+                "updated_at": now_iso(),
+            },
+        )
+        conn.commit()
+        sleep_delay(cfg)
+
+    total.update({
+        "ok": True,
+        "usernames": usernames,
+        "code_ids": code_ids,
+        "limit": int(limit),
+        "updated_at": now_iso(),
+    })
+    set_state(conn, "backfill", total)
+    conn.commit()
+    return total
 
 
 def expected_score(ra: float, rb: float) -> float:
@@ -2109,6 +2232,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "latest": str(cfg.latest_path),
         "status": status,
         "supplement": payload.get("crawl_state", {}).get("supplement", {}),
+        "backfill": payload.get("crawl_state", {}).get("backfill", {}),
         "matches": payload.get("matches", {}),
         "elo": {
             k: payload.get("elo", {}).get(k)
@@ -2126,6 +2250,48 @@ def cmd_status(args: argparse.Namespace) -> int:
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
+
+
+def cmd_backfill(args: argparse.Namespace) -> int:
+    cfg = config_from_args(args)
+    usernames = [str(item) for item in (args.username or []) if str(item).strip()]
+    code_ids = [str(item) for item in (args.code_id or []) if str(item).strip()]
+    limit = max(1, int(args.limit))
+    if not usernames and not code_ids:
+        print("backfill requires at least one --username or --code-id", file=sys.stderr)
+        return 2
+
+    try:
+        load_config.cache_clear()
+    except Exception:
+        pass
+    token, source = resolve_token(cfg.token)
+    with connect(cfg.db_path) as conn:
+        init_db(conn)
+        set_state(conn, "token_source", source or "")
+        if not token:
+            out = {"ok": False, "reason": "no_token", "updated_at": now_iso()}
+            set_state(conn, "backfill", out)
+            payload = build_latest(conn, cfg)
+            write_json(cfg.latest_path, payload)
+            print(json.dumps({"latest": str(cfg.latest_path), "backfill": out}, ensure_ascii=False, indent=2))
+            return 1
+        out = run_history_backfill(conn, cfg, token, usernames, code_ids, limit)
+        payload = build_latest(conn, cfg)
+        write_json(cfg.latest_path, payload)
+    print(
+        json.dumps(
+            {
+                "latest": str(cfg.latest_path),
+                "backfill": out,
+                "summary": payload.get("matches", {}),
+                "elo": {k: payload.get("elo", {}).get(k) for k in ("matches_used", "rated_versions")},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if out.get("ok") else 1
 
 
 def add_common_args(p: argparse.ArgumentParser) -> None:
@@ -2166,7 +2332,7 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--supplement-max-outstanding", type=int, default=80)
     p.add_argument("--supplement-pair-cap", type=int, default=4)
     p.add_argument("--supplement-request-timeout", type=float, default=60.0)
-    p.add_argument("--supplement-exclude-user", action="append", default=["theend", "thebeginning"], help="username excluded from automatic supplement matches; can be repeated")
+    p.add_argument("--supplement-exclude-user", action="append", default=["theend"], help="username excluded from automatic supplement matches; can be repeated")
 
 
 def config_from_args(args: argparse.Namespace) -> CrawlConfig:
@@ -2235,6 +2401,13 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="print current crawler/Elo status")
     add_common_args(status)
     status.set_defaults(func=cmd_status)
+
+    backfill = sub.add_parser("backfill", help="backfill replay metadata for historical successful matches")
+    add_common_args(backfill)
+    backfill.add_argument("--username", action="append", default=[], help="username whose historical matches should be backfilled; can be repeated")
+    backfill.add_argument("--code-id", action="append", default=[], help="code_id whose historical matches should be backfilled; can be repeated")
+    backfill.add_argument("--limit", type=int, default=500, help="maximum candidate matches processed per backfill batch")
+    backfill.set_defaults(func=cmd_backfill)
     return p
 
 

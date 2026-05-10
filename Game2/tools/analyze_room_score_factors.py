@@ -57,6 +57,16 @@ def label_from_path(path: Path, player: dict[str, Any]) -> str:
     return room.rsplit('_room', 1)[0].split('_', 2)[-1]
 
 
+def room_label_from_path(path: Path) -> str:
+    room = path.parents[2].name
+    return room.rsplit('_room', 1)[0].split('_', 2)[-1]
+
+
+def is_other_thread_room(path: Path) -> bool:
+    label = room_label_from_path(path)
+    return label.startswith('sk') or label.startswith('skeptic')
+
+
 def find_answer_result(obj: Any) -> dict[str, bool] | None:
     if isinstance(obj, dict):
         value = obj.get('answer_result')
@@ -180,6 +190,9 @@ def count_err8(records: list[Any], stderr: str) -> int:
 
 
 def analyze_match(path: Path) -> dict[str, Any] | None:
+    if is_other_thread_room(path):
+        return None
+
     data = load_json(path)
     player = first_player(data)
     score = player.get('score')
@@ -207,6 +220,7 @@ def analyze_match(path: Path) -> dict[str, Any] | None:
     row = {
         'score': score,
         'label': label,
+        'room_label': room_label_from_path(path),
         'base_label': base_label(label),
         'match_id': str(path.parent.name),
         'path': str(path.relative_to(ROOT)),

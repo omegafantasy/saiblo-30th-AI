@@ -49,6 +49,10 @@ def base_label(label: str) -> str:
     return match.group(1) if match else label
 
 
+def is_other_thread_label(label: str) -> bool:
+    return label.startswith('sk') or label.startswith('skeptic')
+
+
 def empty_item(label: str) -> dict[str, Any]:
     return {
         'label': label,
@@ -92,6 +96,8 @@ def summarize() -> dict[str, Any]:
     for room in sorted(ROOM_DIR.glob('*_room')):
         summary = load_json(room / 'summary.json')
         label = label_from_dir(room, summary)
+        if is_other_thread_label(label):
+            continue
         base = base_label(label)
         items = [labels.setdefault(label, empty_item(label)), bases.setdefault(base, empty_item(base))]
         for item in items:

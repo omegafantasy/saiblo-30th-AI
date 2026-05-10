@@ -72,8 +72,10 @@ def is_timeout_error(exc: BaseException) -> bool:
     return "timed out" in msg or "timeout" in msg
 
 
-def api_request(method: str, path: str, token: str | None = None, payload: dict | None = None, timeout: float = 20.0) -> Any:
+def api_request(method: str, path: str, token: str | None = None, payload: dict | None = None, timeout: float | None = None) -> Any:
     url = f"{API_BASE}{path}"
+    if timeout is None:
+        timeout = float(os.environ.get("SAIBLO_API_TIMEOUT", "60"))
     data = None
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -101,8 +103,10 @@ def api_request(method: str, path: str, token: str | None = None, payload: dict 
             raise RuntimeError(f"Request timed out: {url} ({e})") from e
 
 
-def api_download(path: str, token: str | None = None, timeout: float = 60.0) -> Tuple[bytes, Dict[str, str]]:
+def api_download(path: str, token: str | None = None, timeout: float | None = None) -> Tuple[bytes, Dict[str, str]]:
     url = f"{API_BASE}{path}"
+    if timeout is None:
+        timeout = float(os.environ.get("SAIBLO_API_TIMEOUT", "60"))
     h = {
         "Accept": "*/*",
         "User-Agent": "antgame-root-tools/1.0",
@@ -131,10 +135,18 @@ def api_download(path: str, token: str | None = None, timeout: float = 60.0) -> 
             raise RuntimeError(f"Request timed out: {url} ({e})") from e
 
 
-def api_multipart_post(path: str, token: str, data: Dict[str, str], files: Dict[str, tuple[str, bytes, str]], timeout: float = 60.0) -> Any:
+def api_multipart_post(
+    path: str,
+    token: str,
+    data: Dict[str, str],
+    files: Dict[str, tuple[str, bytes, str]],
+    timeout: float | None = None,
+) -> Any:
     if requests is None:
         raise RuntimeError("python package 'requests' is required for multipart upload")
     url = f"{API_BASE}{path}"
+    if timeout is None:
+        timeout = float(os.environ.get("SAIBLO_API_TIMEOUT", "60"))
     h = {
         "Accept": "application/json, text/plain, */*",
         "User-Agent": "antgame-root-tools/1.0",
@@ -649,18 +661,38 @@ def cmd_upload_ai(args: argparse.Namespace) -> int:
     if not source.is_file():
         raise RuntimeError(f"source file not found: {source}")
 
-    profile = get_profile(token)
-    user = str(profile.get("user", {}).get("username", "")).strip()
+    user = str(getattr(args, "username", "") or os.environ.get("SAIBLO_USERNAME", "")).strip()
+    if not user:
+        profile = get_profile(token)
+        user = str(profile.get("user", {}).get("username", "")).strip()
     if not user:
         raise RuntimeError("cannot resolve username from /api/profile/")
 
-    data = get_user_entities(user, args.game_id, token)
-    entities = data.get("entities", []) if isinstance(data, dict) else []
-    if not isinstance(entities, list):
-        entities = []
-
     entity_id = int(args.entity_id) if int(args.entity_id) > 0 else 0
     entity_name = str(args.entity_name or "").strip()
+
+    listing_error = ""
+    skip_entity_list = (
+        bool(getattr(args, "skip_entity_list", False))
+        or os.environ.get("SAIBLO_SKIP_ENTITY_LIST", "").strip().lower() in {"1", "true", "yes"}
+    )
+    if skip_entity_list and entity_id > 0:
+        listing_error = "skipped by SAIBLO_SKIP_ENTITY_LIST"
+        entities = [{"id": entity_id, "name": entity_name or str(entity_id)}]
+    elif skip_entity_list and args.create_if_missing and entity_name and entity_id <= 0:
+        listing_error = "skipped by SAIBLO_SKIP_ENTITY_LIST"
+        entities = []
+    else:
+        try:
+            data = get_user_entities(user, args.game_id, token)
+            entities = data.get("entities", []) if isinstance(data, dict) else []
+            if not isinstance(entities, list):
+                entities = []
+        except Exception as exc:
+            if not (args.create_if_missing and entity_name and entity_id <= 0):
+                raise
+            listing_error = str(exc)
+            entities = []
 
     selected_entity: Dict[str, Any] | None = None
     if entity_id > 0:
@@ -737,6 +769,7 @@ def cmd_upload_ai(args: argparse.Namespace) -> int:
         "game_id": int(args.game_id),
         "source": str(source),
         "entity_created": created,
+        "entity_listing_error": listing_error,
         "entity_id": entity_id,
         "entity_name": selected_entity.get("name"),
         "uploaded_code_id": code_id,
@@ -834,6 +867,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_upload.add_argument("--language", default="cpp", help="language for entity creation, e.g. cpp/python/remote")
     sp_upload.add_argument("--source", required=True, help="source file path to upload")
     sp_upload.add_argument("--remark", default="uploaded via saiblo_tools upload-ai")
+    sp_upload.add_argument("--username", default="", help="known Saiblo username; skips /api/profile/ lookup when set")
+    sp_upload.add_argument("--skip-entity-list", action="store_true", help="create --entity-name directly instead of listing existing entities first")
     sp_upload.add_argument("--wait-compile", action="store_true", help="poll compile status after upload")
     sp_upload.add_argument("--poll-interval", type=float, default=2.0)
     sp_upload.add_argument("--poll-max", type=int, default=30)

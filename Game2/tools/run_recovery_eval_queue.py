@@ -25,6 +25,12 @@ def utc_stamp() -> str:
     return time.strftime('%Y%m%d_%H%M%S', time.gmtime())
 
 
+def safe_label_suffix(labels: list[str]) -> str:
+    raw = '-'.join(str(label).strip() for label in labels if str(label).strip())
+    safe = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in raw)
+    return safe[:80] or 'queue'
+
+
 def log(message: str) -> None:
     print(f'[recovery-queue] {message}', file=sys.stderr, flush=True)
 
@@ -85,6 +91,8 @@ def upload_label(label: str, args: argparse.Namespace) -> dict[str, Any]:
         str(source.relative_to(ROOT)),
         '--remark',
         'r',
+        '--username',
+        str(args.upload_username or ''),
         '--wait-compile',
         '--poll-interval',
         str(args.upload_poll_interval),
@@ -152,6 +160,7 @@ def main() -> int:
     parser.add_argument('--eval-poll-interval', type=float, default=2.0)
     parser.add_argument('--upload-poll-interval', type=float, default=10.0)
     parser.add_argument('--upload-poll-max', type=int, default=30)
+    parser.add_argument('--upload-username', default=os.environ.get('SAIBLO_USERNAME', ''))
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--continue-on-error', action='store_true')
     parser.add_argument(
@@ -166,7 +175,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    out_dir = OUT_DIR / utc_stamp()
+    out_dir = OUT_DIR / f'{utc_stamp()}_{safe_label_suffix(args.labels)}'
     username_check = verify_expected_username(args.expected_username)
     rows: list[dict[str, Any]] = []
     for label in args.labels:
